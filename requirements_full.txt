@@ -1,0 +1,4 @@
+-r requirements.txt
+akshare>=1.14.0
+pandas>=2.0.0
+ftfy>=6.2.0

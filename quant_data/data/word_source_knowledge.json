@@ -1,0 +1,782 @@
+{
+  "version": "v16.4-word-source-grounded",
+  "doc_sources": {
+    "message": {
+      "file_name": "炒股-消息面分析.docx",
+      "paragraph_count": 145,
+      "table_count": 0,
+      "char_count": 5364,
+      "txt_path": "quant_data/data/source_docs/message.txt",
+      "first_headings": [
+        "炒股-消息面分析",
+        "1、汇总",
+        "2、消息面分析",
+        "宏观经济消息",
+        "行业消息",
+        "公司消息",
+        "市场资金面消息",
+        "国际消息",
+        "3、信息获取渠道",
+        "4、信息获取渠道1",
+        "1.**官方渠道**",
+        "2.**财经媒体**",
+        "3.**证券公司研究报告**",
+        "4.**上市公司公告**",
+        "5.**社交媒体与论坛**",
+        "6.**专业数据平台**",
+        "7.**行业与协会网站**",
+        "8.**政府政策发布平台**"
+      ]
+    },
+    "technical": {
+      "file_name": "炒股-技术面分析.docx",
+      "paragraph_count": 421,
+      "table_count": 17,
+      "char_count": 27091,
+      "txt_path": "quant_data/data/source_docs/technical.txt",
+      "first_headings": [
+        "炒股-技术面分析(技术指标)",
+        "1、量价时空 (共振)",
+        "2、技术指标分类",
+        "1.**趋势类指标**",
+        "2.**动量类指标**",
+        "3.**波动率类指标**",
+        "4.**成交量类指标**",
+        "5.**市场强度类指标**",
+        "6.**反转类指标**",
+        "7.**趋势跟随类指标**",
+        "8.**超买超卖型指标**",
+        "9.**能量型指标**",
+        "10.**市场情绪指标**",
+        "11.**支撑与阻力指标**",
+        "12.**其他综合指标**",
+        "3、技术指标(划分大类) 按功能分类",
+        "按适用范围分类",
+        "按计算方式分类"
+      ]
+    },
+    "style": {
+      "file_name": "炒股-风格与分析.docx",
+      "paragraph_count": 643,
+      "table_count": 6,
+      "char_count": 36520,
+      "txt_path": "quant_data/data/source_docs/style.txt",
+      "first_headings": [
+        "炒股/股票",
+        "0、股票交易",
+        "**一、基础概念**",
+        "**二、交易流程**",
+        "**三、核心策略**",
+        "**四、交易规则**",
+        "**五、交易形式**",
+        "**六、交易概念**",
+        "**七、风险管理**",
+        "**八、费用与税务**",
+        "**九、新手建议**",
+        "1、要点汇总",
+        "股票： (入门核心)",
+        "期货： (稍微了解)",
+        "炒币： (稍微了解)",
+        "2、股票分析(大盘分析)",
+        "三面分析",
+        "价格趋势分析"
+      ]
+    },
+    "quant": {
+      "file_name": "炒股-量化相关.docx",
+      "paragraph_count": 740,
+      "table_count": 11,
+      "char_count": 31049,
+      "txt_path": "quant_data/data/source_docs/quant.txt",
+      "first_headings": [
+        "量化交易",
+        "1、基本概念",
+        "2、数据获取和处理",
+        "(1) 金融数据获取",
+        "(2) 数据处理",
+        "3、量化交易策略",
+        "4、**回测与优化**",
+        "(1) 回测要素",
+        "(2) 实现工具",
+        "(3)回测与优化过程",
+        "**一、回 测**",
+        "**二、优化**",
+        "5、**风险管理**",
+        "6、**交易执行**",
+        "7、**量化生态与平台**",
+        "股票量化交易平台",
+        "期货量化交易平台",
+        "币圈量化交易平台"
+      ]
+    }
+  },
+  "image_sources": {
+    "0.jpg": {
+      "observed_content": "TraderCore三通道候选：换手率榜TOP50、成交量榜TOP20、技术初筛；技术初筛条件包括量比>=1.3、MA20偏离±3%、近5日振幅<8%；三层评分外层20%、中层45%、底层35%。",
+      "implemented_as": [
+        "candidate_channels",
+        "tradercore_scoring_layers",
+        "technical_gate_reference"
+      ]
+    },
+    "1.jpg": {
+      "observed_content": "个股诊断样例包含股票摘要、脚本判定vs人工判断表格、评分、信号、涨因、资金、交易逻辑、技术面结论。",
+      "implemented_as": [
+        "script_vs_manual_diagnosis",
+        "diagnosis_rows",
+        "trading_logic"
+      ]
+    }
+  },
+  "message_framework": {
+    "analysis_dimensions": [
+      "宏观经济消息",
+      "政策面",
+      "行业消息",
+      "公司消息",
+      "市场资金面消息",
+      "国际消息",
+      "市场情绪"
+    ],
+    "source_channels": [
+      "官方渠道",
+      "财经媒体",
+      "证券公司研究报告",
+      "上市公司公告",
+      "社交媒体与论坛",
+      "专业数据平台",
+      "行业与协会网站",
+      "政府政策发布平台",
+      "国际新闻与市场动态",
+      "移动应用与推送",
+      "财经新闻网站和平台",
+      "证券公司平台和APP",
+      "金融信息终端",
+      "官方媒体与政府公告",
+      "社交媒体与投资者社区",
+      "公司公告与财报",
+      "行业研究与分析报告",
+      "国际新闻与财经资讯",
+      "技术分析工具与数据平台",
+      "经济论坛与投资者大会"
+    ],
+    "collector_policy": "按P0官方事实源、P1专业实时源、P2财经门户补充源、P3舆情源分层；禁止把搜索结果页、栏目页、菜单页当新闻证据。"
+  },
+  "technical_framework": {
+    "core_model": "量价时空共振：量=成交量/资金活跃度；价=K线/均线/动量；时=周期/均线/TD/斐波时间；空=波动空间/支撑阻力/回撤幅度。",
+    "categories": [
+      "趋势类指标",
+      "动量类指标",
+      "波动率类指标",
+      "成交量类指标",
+      "市场强度类指标",
+      "反转类指标",
+      "趋势跟随类指标",
+      "超买超卖型指标",
+      "能量型指标",
+      "市场情绪指标",
+      "支撑与阻力指标",
+      "其他综合指标"
+    ],
+    "normalized_indicator_count": 55,
+    "normalized_indicators": [
+      "移动平均线 MA",
+      "指数移动平均线 EMA",
+      "相对强弱指数 RSI",
+      "布林带 BOLL",
+      "MACD 平滑异同",
+      "随机指标 KDJ/Stochastic",
+      "成交量 Volume",
+      "成交量加权均价 VWAP",
+      "平均真实波幅 ATR",
+      "乖离率 BIAS",
+      "威廉指标 W%R",
+      "动量指标 MOM",
+      "平均趋向指数 ADX",
+      "趋向指标 DMI",
+      "抛物线 SAR",
+      "成交量变异率 VR",
+      "资金流量指数 MFI",
+      "相对波动指数 RVI",
+      "价格动量振荡器 PMO",
+      "商品通道指数 CCI",
+      "价格振荡器 PPO",
+      "价格通道 Price Channel",
+      "成交量加权 MACD",
+      "价格动量指标 PMI",
+      "成交量动量指标 VMI",
+      "价格波动率 Volatility",
+      "成交量波动率 Volume Volatility",
+      "OBV 能量潮",
+      "A/D Line 累积派发线",
+      "Volatility Index 波动率指数",
+      "Volume Volatility Index 成交量波动率指数",
+      "成交量振荡器 VO",
+      "支撑/阻力位",
+      "斐波那契回调",
+      "斐波那契时间序列",
+      "江恩时间法则",
+      "TD序列",
+      "Pivot Points 枢轴点",
+      "ZigZag 指标",
+      "Ichimoku 一目均衡表",
+      "PSY 心理线",
+      "BRAR 情绪指标",
+      "CYR 市场强弱",
+      "ADR 涨跌比率",
+      "Put/Call Ratio",
+      "VIX 恐慌指数",
+      "价格形态",
+      "波浪理论",
+      "筹码/成本分布",
+      "量比 Volume Ratio",
+      "成交量均线 VMA",
+      "TWAP 时间加权均价",
+      "Beta 系数",
+      "Sharpe 夏普比率",
+      "VaR 风险价值"
+    ],
+    "word_table_rows_extracted": [
+      {
+        "no": "1",
+        "name": "移动平均线 (MA)",
+        "description": "通过计算一定 周期内的平均 价格来平滑价 格波动，反映 趋势方向。",
+        "formula_principle": "",
+        "parameters": "P;:第1天的 价格，n:周 期数",
+        "judgment": "短期MA上穿 长期MA为买 入信号，下穿 为卖出信号。",
+        "application": "趋势跟 踪、支 撑阻力 位判断"
+      },
+      {
+        "no": "2",
+        "name": "指数移动平均 线(EMA)",
+        "description": "对近期价格赋 予更高权重， 反应更快。",
+        "formula_principle": "EMAt=(Pt×a)+ (EMAt-1×(1-a)",
+        "parameters": "Pt:当前价 格 ， , n : 周 期 数",
+        "judgment": "与MA类似， 但对近期价格 更敏感。",
+        "application": "短期趋 势判断"
+      },
+      {
+        "no": "3",
+        "name": "相对强弱指数 (RSI)",
+        "description": "衡量价格变动 速度和幅度， 判断超买超 卖。",
+        "formula_principle": "",
+        "parameters": "周期通常为14 天",
+        "judgment": "RSI>70为超 买，RSI<30 为超卖。",
+        "application": "超买超 卖判 断、趋 势反转 预警"
+      },
+      {
+        "no": "4",
+        "name": "布林带 (Bollinger Bands)",
+        "description": "由中轨 ( M A ) 、 上 轨和下轨组 成，衡量价格 波动范围。",
+        "formula_principle": "中轨：MA,上轨：MA+2σ,下 轨：MA-2σ",
+        "parameters": "0:标准差， 周期通常为20 天",
+        "judgment": "价格触及上轨 为超买，下轨 为超卖。",
+        "application": "波动性 分 析 、 趋势反 转预警"
+      },
+      {
+        "no": "5",
+        "name": "MACD(指数平 滑异同移动平 均线)",
+        "description": "通过两条 EMA的差值 和信号线判断 趋势和动量。",
+        "formula_principle": "MACD=EMA₁₂-EMA26, 信号线：EMA(MACD,9)",
+        "parameters": "12、26、9为 常用周期",
+        "judgment": "MAC D上穿信 号线为买入， 下穿为卖出。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "6",
+        "name": "随机指标 (Stochastic Oscillator)",
+        "description": "衡量收盘价在 一定周期内的 相对位置，判 断超买超卖。",
+        "formula_principle": "SMA(%K,3)",
+        "parameters": "C:当前收盘 价，Ln:周期 内最低价，Hn :周期内最高 价",
+        "judgment": "% K > 8 0 为 超 买 ， % K < 20为超卖。",
+        "application": "超买超 卖判 断、趋 势反转 预警"
+      },
+      {
+        "no": "7",
+        "name": "成交量 (Volume)",
+        "description": "衡量股票交易 活跃度，反映 市场情绪。",
+        "formula_principle": "无公式",
+        "parameters": "无参数",
+        "judgment": "成交量放大伴 随价格上涨为 买入信号，下 跌为卖出信 号。",
+        "application": "趋势确 认、突 破验证"
+      },
+      {
+        "no": "8",
+        "name": "成交量加权平 均价(VWAP)",
+        "description": "反映成交量加 权的平均价 格，常用于日 内交易。",
+        "formula_principle": "",
+        "parameters": "Pi:价格，V; :成交量",
+        "judgment": "价格高于 VW AP为强 势，低于 VW AP为弱 势。",
+        "application": "日内交 易、趋 势判断"
+      },
+      {
+        "no": "9",
+        "name": "平均真实波幅 (ATR)",
+        "description": "衡量价格波动 性，反映市场 波动程度。",
+        "formula_principle": "\\max(H-L,",
+        "parameters": "H-C_p",
+        "judgment": ",",
+        "application": "L-C p"
+      },
+      {
+        "no": "10",
+        "name": "乖离率(BIAS)",
+        "description": "衡量价格与移 动平均线的偏 离程度，判断 超买超卖。",
+        "formula_principle": "",
+        "parameters": "P:当前价 格 ， M A : 移 动平均线",
+        "judgment": "BIAS>0为超 买，BIAS<0 为超卖。",
+        "application": "趋势反 转预警"
+      },
+      {
+        "no": "11",
+        "name": "威廉指标 (W%R)",
+        "description": "衡量收盘价在 一定周期内的 相对位置，判 断超买超卖。",
+        "formula_principle": "",
+        "parameters": "Hn:周期内最 高价，Ln:周 期内最低价， C:当前收盘 价",
+        "judgment": "W%R>-20 为超买， W%R<-80 为超卖。",
+        "application": "超买超 卖判 断、趋 势反转 预警"
+      },
+      {
+        "no": "12",
+        "name": "动量指标 (Momentum)",
+        "description": "衡量价格变动 的速度和幅 度，反映趋势 强度。",
+        "formula_principle": "Momentum=Pt-Pt-n",
+        "parameters": "Pt:当前价 格，Pt-n:n 天前的价格",
+        "judgment": "Momentum> 0为上涨趋 势 ， Momentum< 0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "13",
+        "name": "平均趋向指数 (ADX)",
+        "description": "衡量趋势强 度 ，无论趋势 方向。",
+        "formula_principle": "\\frac{",
+        "parameters": "+DI--DI",
+        "judgment": "}+DI+-DI} \\times 100$",
+        "application": "+DI: 正向趋 向指 标 ， -DI: 负向趋 向指 标，n: 周期数"
+      },
+      {
+        "no": "14",
+        "name": "趋向指标 (DMI)",
+        "description": "衡量趋势方 向，包括+DI 和-Dl。",
+        "formula_principle": "",
+        "parameters": "+DM:正向趋 向移动，-DM :负向趋向移 动",
+        "judgment": "+DI>-DI为上 涨趋势，-DI> +DI为下跌趋 势。",
+        "application": "趋势方 向判断"
+      },
+      {
+        "no": "15",
+        "name": "抛物线指标 (SAR)",
+        "description": "通过抛物线形 状的止损和反 转点判断趋势 反转。",
+        "formula_principle": "SARt+1=SARt+AF×(EP- SARt)",
+        "parameters": "AF:加速因 子，EP:极值 点",
+        "judgment": "价格上穿SAR 为买入信号， 下穿为卖出信 号。",
+        "application": "趋势反 转预 警、止 损设置"
+      },
+      {
+        "no": "16",
+        "name": "成交量变异率 (VR)",
+        "description": "衡量成交量变 化，反映市场 情绪。",
+        "formula_principle": "",
+        "parameters": "UV:上涨成 交量，DV: 下跌成交量， M V : 平 盘 成 交量",
+        "judgment": "VR>450为超 买，VR<70 为超卖。",
+        "application": "市场情 绪判 断、趋 势反转 预警"
+      },
+      {
+        "no": "17",
+        "name": "资金流量指数 (MFI)",
+        "description": "结合价格和成 交量，衡量资 金流入流出情 况。",
+        "formula_principle": "",
+        "parameters": "正资金流：价 格上涨时的成 交量，负资金 流 ：价格下跌 时的成交量",
+        "judgment": "MFI>80为超 买，MFI<20 为超卖。",
+        "application": "资金流 向判 断、超 买超卖 预警"
+      },
+      {
+        "no": "18",
+        "name": "相对波动指数 (RVI)",
+        "description": "衡量价格波动 的相对强度， 反映市场波动 性。",
+        "formula_principle": "",
+        "parameters": "Oup:上涨波 动标准差， Odown:下跌 波动标准差",
+        "judgment": "RVI>100为 上涨波动强， RVI<100为 下跌波动强。",
+        "application": "波动性 分 析 、 趋势判 断"
+      },
+      {
+        "no": "19",
+        "name": "价格动量振荡 器(PMO)",
+        "description": "通过价格动量 变化判断趋势 和动量 。",
+        "formula_principle": "PMO=EMA(ROC,n)",
+        "parameters": "ROC:价格变 动率，n:周 期数",
+        "judgment": "P M O > 0 为 上 涨趋势，PMO <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "20",
+        "name": "成交量振荡器 (VO)",
+        "description": "衡量成交量变 化，反映市场 情绪。",
+        "formula_principle": "VO=",
+        "parameters": "Vup:上涨成 交量，Vdown :下跌成交 量，n:周期 数",
+        "judgment": "VO>0为资金 流入，VO<0 为资金流出。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "21",
+        "name": "价格振荡器 (PPO)",
+        "description": "衡量价格变动 的相对强度， 反映趋势和动 量。",
+        "formula_principle": "",
+        "parameters": "EMAshort: 短期EMA, EM Along:长 期 E M A",
+        "judgment": "P P O > 0 为 上 涨趋势，PPO <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "22",
+        "name": "价格通道 (Price Channel)",
+        "description": "通过最高价和 最低价形成的 通道判断趋势 和支撑阻力 位。",
+        "formula_principle": "上轨：周期内最高价，下轨：周期 内最低价",
+        "parameters": "周期数",
+        "judgment": "价格触及上轨 为阻力，下轨 为支撑。",
+        "application": "趋势判 断、支 撑阻力 位分析"
+      },
+      {
+        "no": "23",
+        "name": "成交量加权 MACD(VW- MACD)",
+        "description": "结合成交量和 MAC D,反映 资金流入流出 的动量。",
+        "formula_principle": "VW-MACD=MACD×V",
+        "parameters": "V:成交量",
+        "judgment": "VW-MACD>0 为资金流入， VW-MACD<0 为资金流出。",
+        "application": "资金流 向判 断、动 量分析"
+      },
+      {
+        "no": "24",
+        "name": "价格动量指标 (PMI)",
+        "description": "衡量价格变动 的速度和幅 度，反映趋势 强度。",
+        "formula_principle": "",
+        "parameters": "Pt:当前价 格，Pt-n:n 天前的价格",
+        "judgment": "P MI>0为上 涨趋势，PMI <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "25",
+        "name": "成交量动量指 标(VMI)",
+        "description": "衡量成交量变 动的速度和幅 度，反映市场 情绪。",
+        "formula_principle": "",
+        "parameters": "Vt:当前成交 量，Vt-n:n 天前的成交量",
+        "judgment": "V MI>0为资 金流入，VMI <0为资金流 出 。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "26",
+        "name": "价格波动率 (Volatility)",
+        "description": "衡量价格波动 的幅度，反映 市场波动性。",
+        "formula_principle": "",
+        "parameters": "σ:标准差， M A : 移 动 平 均线",
+        "judgment": "波动率越高， 市场波动性越 大。",
+        "application": "波动性 分 析 、 风险管 理"
+      },
+      {
+        "no": "27",
+        "name": "成交量波动率 (Volume Volatility)",
+        "description": "衡量成交量波 动的幅度，反 映市场情绪。",
+        "formula_principle": "100",
+        "parameters": "Ov:成交量标 准 差 ， M A v :成交量移动 平均线",
+        "judgment": "波动率越高， 市场情绪波动 越大。",
+        "application": "市场情 绪判 断、风 险管理"
+      },
+      {
+        "no": "28",
+        "name": "价格动量指数 (PMI)",
+        "description": "衡量价格变动 的速度和幅 度，反映趋势 强度。",
+        "formula_principle": "",
+        "parameters": "Pt:当前价 格，Pt-n:n 天前的价格",
+        "judgment": "P MI>0为上 涨趋势，PMI <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "29",
+        "name": "成交量动量指 数(VMI)",
+        "description": "衡量成交量变 动的速度和幅 度，反映市场 情绪。",
+        "formula_principle": "",
+        "parameters": "Vt:当前成交 量，Vt-n:n 天前的成交量",
+        "judgment": "V MI>0为资 金流入，VMI <0为资金流 出 。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "30",
+        "name": "价格波动率指 数(Volatility Index)",
+        "description": "衡量价格波动 的幅度，反映 市场波动性。",
+        "formula_principle": "",
+        "parameters": "0:标准差， M A : 移 动 平 均线",
+        "judgment": "波动率越高， 市场波动性越 大。",
+        "application": "波动性 分 析 、 风险管 理"
+      },
+      {
+        "no": "31",
+        "name": "成交量波动率 指数(Volume Volatility Index)",
+        "description": "衡量成交量波 动的幅度，反 映市场情绪。",
+        "formula_principle": "VolumeVolatilitylndex=",
+        "parameters": "Ov:成交量标 准差， MA v :成交量移动 平均线",
+        "judgment": "波动率越高， 市场情绪波动 越大。",
+        "application": "市场情 绪判 断、风 险管理"
+      },
+      {
+        "no": "32",
+        "name": "价格动量振荡 器(PMO)",
+        "description": "通过价格动量 变化判断趋势 和动量。",
+        "formula_principle": "PMO=EMA(ROC,n)",
+        "parameters": "R O C : 价 格 变 动率，n:周 期数",
+        "judgment": "P M O > 0 为 上 涨趋势，PMO <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "33",
+        "name": "成交量振荡器 (VO)",
+        "description": "衡量成交量变 化，反映市场 情绪。",
+        "formula_principle": "l/O-",
+        "parameters": "Vup:上涨成 交量，Vdown :下跌成交 量，n:周期 数",
+        "judgment": "V O > 0 为 资 金 流入，VO<0 为资金流出。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "34",
+        "name": "价格振荡器 (PPO)",
+        "description": "衡量价格变动 的相对强度， 反映趋势和动 量。",
+        "formula_principle": "",
+        "parameters": "EMAshort: 短期EMA, EM Along:长 期 E M A",
+        "judgment": "P P O > 0 为 上 涨趋势，PPO <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "35",
+        "name": "价格通道 (Price Channel)",
+        "description": "通过最高价和 最低价形成的 通道判断趋势 和支撑阻力 位。",
+        "formula_principle": "上轨：周期内最高价，下轨：周期 内最低价",
+        "parameters": "周期数",
+        "judgment": "价格触及上轨 为阻力，下轨 为支撑。",
+        "application": "趋势判 断、支 撑阻力 位分析"
+      },
+      {
+        "no": "36",
+        "name": "成交量加权 MACD (VW- MACD)",
+        "description": "结合成交量和 MAC D,反映 资金流入流出 的动量。",
+        "formula_principle": "VW-MACD=MACD×V",
+        "parameters": "V:成交量",
+        "judgment": "VW-MACD>0 为资金流入， VW-MACD<0 为资金流出。",
+        "application": "资金流 向判 断、动 量分析"
+      },
+      {
+        "no": "37",
+        "name": "价格动量指标 (PMI)",
+        "description": "衡量价格变动 的速度和幅 度，反映趋势 强度。",
+        "formula_principle": "",
+        "parameters": "Pt:当前价 格，Pt-n:n 天前的价格",
+        "judgment": "P MI>0为上 涨趋势，PMI <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "38",
+        "name": "成交量动量指 标(VMI)",
+        "description": "衡量成交量变 动的速度和幅 度，反映市场 情绪。",
+        "formula_principle": "",
+        "parameters": "Vt:当前成交 量，Vt-n:n 天前的成交量",
+        "judgment": "V MI>0为资 金流入，VMI <0为资金流 出 。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "39",
+        "name": "价格波动率 (Volatility)",
+        "description": "衡量价格波动 的幅度，反映 市场波动性。",
+        "formula_principle": "",
+        "parameters": "σ:标准差， M A : 移 动 平 均线",
+        "judgment": "波动率越高， 市场波动性越 大。",
+        "application": "波动性 分 析 、 风险管 理"
+      },
+      {
+        "no": "40",
+        "name": "成交量波动率 (Volume Volatility)",
+        "description": "衡量成交量波 动的幅度，反 映市场情绪。",
+        "formula_principle": "100",
+        "parameters": "σv:成交量标 准 差 ， M A v :成交量移动 平均线",
+        "judgment": "波动率越高， 市场情绪波动 越大。",
+        "application": "市场情 绪判 断、风 险管理"
+      },
+      {
+        "no": "41",
+        "name": "价格动量指数 (PMI)",
+        "description": "衡量价格变动 的速度和幅 度，反映趋势 强度。",
+        "formula_principle": "",
+        "parameters": "Pt:当前价 格，Pt-n:n 天前的价格",
+        "judgment": "P MI>0为上 涨趋势，PMI <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "42",
+        "name": "成交量动量指 数(VMI)",
+        "description": "衡量成交量变 动的速度和幅 度，反映市场 情绪。",
+        "formula_principle": "",
+        "parameters": "Vt:当前成交 量，Vt-n:n 天前的成交量",
+        "judgment": "V M I > 0 为 资 金流入，VMI <0为资金流 出 。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "43",
+        "name": "价格波动率指 数(Volatility Index)",
+        "description": "衡量价格波动 的幅度，反映 市场波动性。",
+        "formula_principle": "",
+        "parameters": "σ:标准差， M A : 移 动 平 均线",
+        "judgment": "波动率越高， 市场波动性越 大。",
+        "application": "波动性 分 析 、 风险管 理"
+      },
+      {
+        "no": "44",
+        "name": "成交量波动率 指数(Volume Volatility Index)",
+        "description": "衡量成交量波 动的幅度，反 映市场情绪。",
+        "formula_principle": "VolumeVolatilitylndex=",
+        "parameters": "σv:成交量标 准 差 ， M A v :成交量移动 平均线",
+        "judgment": "波动率越高， 市场情绪波动 越大。",
+        "application": "市场情 绪判 断、风 险管理"
+      },
+      {
+        "no": "45",
+        "name": "价格动量振荡 器(PMO)",
+        "description": "通过价格动量 变化判断趋势 和动量。",
+        "formula_principle": "PMO=EMA(ROC,n)",
+        "parameters": "R O C : 价 格 变 动率，n:周 期数",
+        "judgment": "P M O > 0 为 上 涨趋势，PMO <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "46",
+        "name": "成交量振荡器 (VO)",
+        "description": "衡量成交量变 化，反映市场 情绪。",
+        "formula_principle": "VO=",
+        "parameters": "Vup:上涨成 交量，Vdown :下跌成交 量，n:周期 数",
+        "judgment": "VO>0为资金 流入，VO<0 为资金流出。",
+        "application": "市场情 绪判 断、资 金流向 分析"
+      },
+      {
+        "no": "47",
+        "name": "价格振荡器 (PPO)",
+        "description": "衡量价格变动 的相对强度， 反映趋势和动 量。",
+        "formula_principle": "",
+        "parameters": "EMAshort: 短 期 E M A , EM Along:长 期 E M A",
+        "judgment": "P P O > 0 为 上 涨趋势，PPO <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      },
+      {
+        "no": "48",
+        "name": "价格通道 (Price",
+        "description": "通过最高价和 最低价形成的",
+        "formula_principle": "上轨：周期内最高价，下轨：周期 内最低价",
+        "parameters": "周期数",
+        "judgment": "价格触及上轨 为阻力，下轨",
+        "application": "趋势判 断、支"
+      },
+      {
+        "no": "49",
+        "name": "成交量加权 MACD (VW- MACD)",
+        "description": "结合成交量和 MAC D,反映 资金流入流出 的动量。",
+        "formula_principle": "VW-MACD=MACD×V",
+        "parameters": "V:成交量",
+        "judgment": "VW-MACD>0 为资金流入， VW-MACD<0 为资金流出。",
+        "application": "资金流 向判 断、动 量分析"
+      },
+      {
+        "no": "50",
+        "name": "价格动量指标 (PMI)",
+        "description": "衡量价格变动 的速度和幅 度，反映趋势 强度。",
+        "formula_principle": "",
+        "parameters": "Pt:当前价 格，Pt-n:n 天前的价格",
+        "judgment": "P MI>0为上 涨趋势，PMI <0为下跌趋 势。",
+        "application": "趋势判 断、动 量分析"
+      }
+    ]
+  },
+  "style_framework": {
+    "analysis_blocks": [
+      "股票交易规则",
+      "三面分析",
+      "价格趋势分析",
+      "压力支撑位分析",
+      "题材/板块分析",
+      "流通盘/市值分析",
+      "大盘分析",
+      "资金与情绪",
+      "风险管理"
+    ],
+    "trading_styles": [
+      "价值投资",
+      "成长股投资",
+      "趋势交易",
+      "CAN SLIM",
+      "技术分析",
+      "宏观对冲",
+      "风险平价",
+      "量化模型",
+      "指数/被动投资",
+      "周期/逆向投资",
+      "激进投资/事件驱动"
+    ],
+    "risk_rules": [
+      "仓位控制",
+      "止损纪律",
+      "分散投资",
+      "情绪管理",
+      "交易成本和税费校验",
+      "T+1/T+0规则识别"
+    ]
+  },
+  "quant_framework": {
+    "pipeline": [
+      "数据获取",
+      "数据清洗",
+      "特征工程",
+      "策略开发",
+      "回测与优化",
+      "风险管理",
+      "交易执行",
+      "部署与实盘",
+      "AI/机器学习"
+    ],
+    "strategy_families": [
+      "趋势跟踪",
+      "均值回归",
+      "动量交易",
+      "套利策略",
+      "对冲策略",
+      "高频交易",
+      "波动率策略",
+      "事件驱动",
+      "机器学习策略",
+      "网格交易",
+      "多因子选股"
+    ],
+    "risk_metrics": [
+      "累计收益率",
+      "年化收益率",
+      "波动率",
+      "最大回撤",
+      "夏普比率",
+      "索提诺比率",
+      "VaR",
+      "CVaR",
+      "滑点",
+      "手续费",
+      "仓位敞口"
+    ],
+    "tech_stack": [
+      "Python",
+      "pandas",
+      "numpy",
+      "SQL",
+      "TA-Lib/pandas_ta",
+      "Backtrader",
+      "Zipline",
+      "scikit-learn",
+      "XGBoost/LightGBM",
+      "TensorFlow/PyTorch",
+      "FastAPI",
+      "Redis",
+      "Celery",
+      "Kafka",
+      "Docker"
+    ]
+  }
+}

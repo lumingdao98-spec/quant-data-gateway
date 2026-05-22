@@ -1,0 +1,14 @@
+{
+  "CN": {
+    "holidays": [],
+    "extra_trading_days": []
+  },
+  "HK": {
+    "holidays": [],
+    "extra_trading_days": []
+  },
+  "US": {
+    "holidays": [],
+    "extra_trading_days": []
+  }
+}
