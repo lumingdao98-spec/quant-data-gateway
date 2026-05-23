@@ -8,7 +8,7 @@ from typing import Iterable
 
 from quant_data.cache import MarketCache
 from quant_data.config import DAILY_KLINE_CACHE_SECONDS, MINUTE_KLINE_CACHE_SECONDS, QUOTE_CACHE_SECONDS
-from quant_data.models import Asset, Bar, IntradayPoint, Quote, OrderBook
+from quant_data.models import Asset, AssetType, Bar, IntradayPoint, Quote, OrderBook
 from quant_data.providers.provider_manager import ProviderManager
 from quant_data.utils import normalize_symbol
 
@@ -88,6 +88,104 @@ class MarketDataService:
                 source="bar_snapshot",
             )
         raise RuntimeError(f"无法获取行情: {symbol}")
+
+    def enrich_quote_metrics(self, quote: Quote, force_refresh: bool = False, bars: list[Bar] | None = None) -> Quote:
+        """统一补齐筛选主流程需要的实时行情/估值/市值字段。
+
+        custom_input、榜单池、技术初筛和 ETF 观察池都会走这里。公开源仍可能缺字段，
+        所以返回值同时携带 metric_missing_reasons，前端可以展示明确缺失来源。
+        """
+        if quote is None:
+            return quote
+
+        def num(value):
+            try:
+                if value is None:
+                    return None
+                v = float(value)
+                return v if v == v else None
+            except Exception:
+                return None
+
+        q = quote
+        missing_core = any(
+            getattr(q, field, None) is None
+            for field in ["turnover", "volume_ratio", "pe_dynamic", "pb", "total_market_cap", "float_market_cap"]
+        )
+        if missing_core or force_refresh:
+            try:
+                fresh = self.providers.get_quote(q.symbol)
+                merged = {}
+                for field in [
+                    "name", "last", "pre_close", "open", "high", "low", "volume", "amount",
+                    "change", "change_pct", "turnover", "amplitude", "pe_dynamic", "pb",
+                    "volume_ratio", "total_market_cap", "float_market_cap", "asset_type",
+                    "market", "source",
+                ]:
+                    value = getattr(fresh, field, None)
+                    current = getattr(q, field, None)
+                    if value not in (None, "", 0) or current in (None, "", 0):
+                        merged[field] = value
+                q = replace(q, **merged)
+            except Exception:
+                pass
+
+        bars = bars or []
+        if q.amount in (None, 0) and bars:
+            amount = num(bars[-1].amount)
+            if amount:
+                q = replace(q, amount=amount)
+        if q.turnover is None and bars:
+            turnover = next((num(b.turnover) for b in reversed(bars) if num(b.turnover) is not None), None)
+            if turnover is not None:
+                q = replace(q, turnover=turnover)
+        if q.volume_ratio is None and bars and len(bars) >= 21:
+            vols = [num(b.volume) or 0.0 for b in bars]
+            ma20 = sum(vols[-21:-1]) / 20 if len(vols) >= 21 else 0.0
+            if ma20 > 0:
+                q = replace(q, volume_ratio=(num(q.volume) or vols[-1]) / ma20)
+
+        last = num(q.last)
+        total_cap = num(q.total_market_cap)
+        float_cap = num(q.float_market_cap)
+        circulating_cap = num(q.circulating_market_cap) or float_cap
+        total_share = num(q.total_share)
+        float_share = num(q.float_share)
+        if last and last > 0:
+            if total_cap and not total_share:
+                total_share = total_cap / last
+            if float_cap and not float_share:
+                float_share = float_cap / last
+        reasons: list[str] = []
+        is_etf = q.asset_type == AssetType.ETF or str(q.symbol).startswith(("15", "51", "56", "58"))
+        if is_etf:
+            if q.pe_dynamic is None:
+                reasons.append("ETF不适用 PE")
+            if q.pb is None:
+                reasons.append("ETF不适用 PB")
+        else:
+            if q.pe_dynamic is None:
+                reasons.append("行情源缺失 PE")
+            if q.pb is None:
+                reasons.append("行情源缺失 PB")
+        if q.turnover is None:
+            reasons.append("行情源缺失换手率")
+        if q.volume_ratio is None:
+            reasons.append("行情源缺失量比")
+        if q.amount in (None, 0):
+            reasons.append("行情源缺失成交额")
+        if total_cap is None:
+            reasons.append("东方财富 push2 未返回总市值")
+        if float_cap is None:
+            reasons.append("东方财富 push2 未返回流通市值")
+
+        return replace(
+            q,
+            circulating_market_cap=circulating_cap,
+            total_share=total_share,
+            float_share=float_share,
+            metric_missing_reasons=list(dict.fromkeys(reasons)),
+        )
 
     def get_kline(self, symbol: str, frame: str = "1d", limit: int = 240, adjust: str = "qfq", force_refresh: bool = False) -> list[Bar]:
         symbol = normalize_symbol(symbol)

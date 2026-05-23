@@ -92,6 +92,10 @@ class Quote:
     volume_ratio: float | None = None      # 量比
     total_market_cap: float | None = None  # 总市值，元
     float_market_cap: float | None = None  # 流通市值，元
+    circulating_market_cap: float | None = None  # 流通市值别名，兼容前端/量化字段
+    total_share: float | None = None       # 总股本，股
+    float_share: float | None = None       # 流通股本，股
+    metric_missing_reasons: list[str] | None = None
     order_ratio: float | None = None       # 委比，当前公开源可能为空
     order_diff: float | None = None        # 委差，当前公开源可能为空
     market: str = "CN"

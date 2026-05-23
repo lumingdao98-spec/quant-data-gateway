@@ -88,7 +88,7 @@ class WordSourceSystemService:
         strategies = self.strategy.generate(q, bars, info_score=info_score)
         source_plan = self.sources.plan_for_target(120)
         report = {
-            "version": "3.16-wordsource-v1-complete",
+            "version": "3.18-wordsource-closedloop-cache",
             "symbol": q.symbol,
             "name": q.name,
             "source_system": {

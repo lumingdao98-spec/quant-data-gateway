@@ -47,8 +47,11 @@ from quant_data.indicators import (
     zigzag_points,
 )
 from quant_data.services.technical_indicator_library import TechnicalIndicatorLibraryService
+from quant_data.services.technical_factor_engine import TechnicalFactorEngine
+from quant_data.services.market_behavior_engine import MarketBehaviorEngine
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot, build_tradercore_diagnosis
 from quant_data.services.wordsource_system_service import WordSourceSystemService
+from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.models import AssetType, Bar, Quote
 from quant_data.services.market_data_service import MarketDataService
 from quant_data.utils import normalize_symbol
@@ -88,6 +91,10 @@ class ScreenerResult:
     pb: float | None
     total_market_cap: float | None
     float_market_cap: float | None
+    circulating_market_cap: float | None
+    total_share: float | None
+    float_share: float | None
+    metric_missing_reasons: list[str]
     ma5: float | None
     ma10: float | None
     ma20: float | None
@@ -96,6 +103,7 @@ class ScreenerResult:
     macd_dif: float | None
     macd_dea: float | None
     macd_hist: float | None
+    pos20: float | None
     pos60: float | None
     pos120: float | None
     pos250: float | None
@@ -170,6 +178,35 @@ class ScreenerResult:
     indicator50_snapshot: dict
     tradercore_diagnosis: dict
     wordsource_report: dict
+    technical_factor_details: list[dict]
+    technical_signal_summary: str
+    technical_factor_score: float
+    technical_factor_risk: float
+    candidate_channels: list[str]
+    candidate_channel_reason: str
+    candidate_rank_score: float
+    ma20_deviation_pct: float | None
+    amplitude_5d_pct: float | None
+    capital_signal: str
+    theme_stage: str
+    theme_strength: float | None
+    theme_labels: list[str]
+    market_cap_style: str
+    support_resistance_distance: dict
+    chase_high_risk: str
+    behavior_tags: list[str]
+    behavior_score: float
+    behavior_confidence: str
+    behavior_evidence: list[str]
+    manipulation_risk_label: str
+    need_level2_confirm: bool
+    kline_markers: list[dict]
+    comprehensive_diagnosis: str
+    script_score: float
+    manual_review_score: float
+    upgrade_reasons: list[str]
+    downgrade_reasons: list[str]
+    missing_data_hints: list[str]
     low_score: float
     trend_score: float
     momentum_score: float
@@ -205,6 +242,10 @@ class ScreenerService:
     def __init__(self, market_data: MarketDataService) -> None:
         self.market_data = market_data
         self.wordsource_system = WordSourceSystemService()
+        self.technical_factor_engine = TechnicalFactorEngine()
+        self.market_behavior_engine = MarketBehaviorEngine()
+        self.candidate_pool_service = CandidatePoolService()
+        self._candidate_meta_by_symbol: dict[str, dict] = {}
 
     def run(self, config: ScreenerConfig) -> dict:
         started = datetime.now()
@@ -229,6 +270,7 @@ class ScreenerService:
                 if len(bars) < 60:
                     errors.append({"symbol": q.symbol, "name": q.name, "error": "K线数量不足，无法稳定评分"})
                     continue
+                q = self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes, bars=bars)
                 result = self.analyze(q, bars, mode=config.mode, strategies=config.strategies or [], kline_adjust=config.kline_adjust)
                 analyzed.append(result)
                 if result.total_score >= config.min_score:
@@ -257,12 +299,25 @@ class ScreenerService:
 
     def _load_universe(self, config: ScreenerConfig) -> list[Quote]:
         universe = (config.universe or "custom").lower()
+        self._candidate_meta_by_symbol = {}
         quotes: list[Quote] = []
         if universe in {"custom", "watch", "watchlist"}:
             symbols = [normalize_symbol(s) for s in (config.symbols or []) if str(s).strip()]
             # 去重但保序
             symbols = list(dict.fromkeys(symbols))
-            return self.market_data.get_quotes(symbols[: config.max_items], force_refresh=config.force_quotes)
+            custom_quotes = self.market_data.get_quotes(symbols[: config.max_items], force_refresh=config.force_quotes)
+            custom_quotes = [self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes) for q in custom_quotes]
+            self._candidate_meta_by_symbol = {
+                q.symbol: {
+                    "symbol": q.symbol,
+                    "name": q.name,
+                    "channels": ["custom_input"],
+                    "reason": "自定义/自选池输入",
+                    "rank_score": 0.0,
+                }
+                for q in custom_quotes
+            }
+            return custom_quotes
 
         for page in range(1, config.max_pages + 1):
             page_quotes = self.market_data.get_market_snapshot(page=page, page_size=config.page_size)
@@ -282,9 +337,25 @@ class ScreenerService:
             if universe == "etf" and q.asset_type != AssetType.ETF:
                 continue
             filtered.append(q)
-        # V16.3 三通道候选池：换手率/成交额/技术初筛互补，避免只盯单一涨幅榜或换手榜。
+        filtered = [self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes) for q in filtered]
+        # V3.17 三通道候选池：换手率 TOP50、成交额 TOP20、技术初筛互补，避免只盯单一榜单。
         if universe in {"market", "stocks", "all", "custom_market"}:
-            filtered = self._three_channel_candidates(filtered, config.max_items)
+            pool = self.candidate_pool_service.build(filtered, max_items=max(config.max_items, 120))
+            self._candidate_meta_by_symbol = {m["symbol"]: m for m in pool.get("candidates", [])}
+            by_quote = {q.symbol: q for q in filtered}
+            ordered = [by_quote[s] for s in pool.get("selected_symbols", []) if s in by_quote]
+            filtered = ordered or self._three_channel_candidates(filtered, config.max_items)
+        else:
+            self._candidate_meta_by_symbol = {
+                q.symbol: {
+                    "symbol": q.symbol,
+                    "name": q.name,
+                    "channels": ["snapshot"],
+                    "reason": "实时行情快照输入",
+                    "rank_score": 0.0,
+                }
+                for q in filtered
+            }
         # 去重但保序
         by_symbol: dict[str, Quote] = {}
         for q in filtered:
@@ -359,6 +430,7 @@ class ScreenerService:
         b_lower = boll.get("lower")
         b_width = boll.get("width_pct")
         b_pos = boll.get("position")
+        pos20 = price_position(closes[-20:], last)
         pos60 = price_position(closes[-60:], last)
         pos120 = price_position(closes[-120:], last)
         pos250 = price_position(closes[-250:], last)
@@ -460,6 +532,7 @@ class ScreenerService:
         pattern_signal = pattern.get("signal")
         zigs = zigzag_points(closes, threshold_pct=5.0)
         fib_time = fibonacci_time_window(len(closes))
+        technical_detail_report = self.technical_factor_engine.analyze(q, bars)
         indicator_matrix = {
             "trend": {"MA5": ma5, "MA10": ma10, "MA20": ma20, "MA60": ma60, "MACD_DIF": dif, "MACD_DEA": dea, "ADX14": adx14, "+DI": plus_di, "-DI": minus_di, "SAR": sar_value, "SAR信号": sar_signal, "PPO": ppo_val, "Ichimoku": ichimoku_signal},
             "momentum": {"RSI14": rsi14, "KDJ_K": kdj_k, "KDJ_D": kdj_d, "KDJ_J": kdj_j, "WR14": wr14, "CCI20": cci20, "ROC12": roc12, "MOM10": momentum10, "PMO10": pmo10, "PMI10": pmi10, "BIAS20": bias20},
@@ -486,6 +559,22 @@ class ScreenerService:
         risk_flags += momentum_risks + volatility_risks + strength_risks + time_risks + pattern_risks
         indicator_signals = self._build_indicator_signals(indicator_matrix)
         indicator50_snapshot = compute_indicator50_snapshot(opens, highs, lows, closes, volumes, amounts)
+        behavior_analysis = self.market_behavior_engine.analyze(
+            q,
+            bars,
+            technical_context={
+                "support": support60,
+                "resistance": resistance60,
+                "vwap20": vwap20,
+                "pos20": pos20,
+                "ma20": ma20,
+            },
+        )
+        behavior_tags = list(behavior_analysis.get("behavior_tags") or [])
+        behavior_risk = float(behavior_analysis.get("risk_penalty_contribution") or 0.0)
+        if behavior_risk:
+            risk_penalty += behavior_risk
+        risk_flags += [t for t in behavior_tags if t in getattr(self.market_behavior_engine, "high_risk_tags", set())]
 
         total = self._weighted_total(
             mode,
@@ -571,7 +660,7 @@ class ScreenerService:
                 total += 1.2; strategy_tags.append("策略:情绪温度正常")
 
         total_score = round(clamp(total, 0, 100), 2)
-        tags = low_tags + trend_tags + momentum_tags + volume_tags + volatility_tags + strength_tags + tape_tags + time_tags + pattern_tags + value_tags + strategy_tags
+        tags = low_tags + trend_tags + momentum_tags + volume_tags + volatility_tags + strength_tags + tape_tags + time_tags + pattern_tags + value_tags + strategy_tags + behavior_tags
         risk_flags = risk_flags + volume_risks + tape_risks + value_risks + strategy_risks
         tags = self._prioritize_tags(tags, risk_flags)
         risk_flags = list(dict.fromkeys(risk_flags))
@@ -605,6 +694,94 @@ class ScreenerService:
             risk_flags=risk_flags,
             news_items=[],
         )
+        candidate_meta = self._candidate_meta_by_symbol.get(q.symbol, {
+            "channels": ["direct_analyze"],
+            "reason": "直接分析接口输入",
+            "rank_score": 0.0,
+        })
+        style_info = wordsource_report.get("style") or {}
+        theme_info = wordsource_report.get("theme") or {}
+        diagnosis_info = wordsource_report.get("diagnosis") or {}
+        capital_info = wordsource_report.get("capital") or {}
+        theme_labels = list(theme_info.get("themes") or [])
+        style_labels = list(style_info.get("style_labels") or [])
+        cap_style_candidates = {"微小盘", "小盘", "中盘", "大盘", "超大盘", "ETF"}
+        market_cap_style = next((x for x in style_labels if x in cap_style_candidates), style_labels[0] if style_labels else "未知")
+        if market_cap_style == "未知":
+            cap_for_style = q.float_market_cap or q.total_market_cap
+            if q.asset_type == AssetType.ETF:
+                market_cap_style = "ETF"
+            elif cap_for_style:
+                yi = float(cap_for_style) / 100_000_000
+                if yi < 50:
+                    market_cap_style = "微盘"
+                elif yi < 200:
+                    market_cap_style = "小盘"
+                elif yi < 800:
+                    market_cap_style = "中盘"
+                elif yi < 3000:
+                    market_cap_style = "大盘"
+                else:
+                    market_cap_style = "超大盘"
+        capital_level = str(capital_info.get("capital_level") or "")
+        if capital_level == "强" or strength_score >= 10:
+            capital_signal = "资金面偏强"
+        elif capital_level == "弱" or strength_score <= 4:
+            capital_signal = "资金面偏弱"
+        else:
+            capital_signal = "资金面中性"
+        if (pos250 is not None and pos250 >= 88) or (b_pos is not None and b_pos >= 95) or (rsi14 is not None and rsi14 >= 78):
+            chase_high_risk = "高"
+        elif (pos250 is not None and pos250 >= 75) or (rsi14 is not None and rsi14 >= 70):
+            chase_high_risk = "中"
+        else:
+            chase_high_risk = "低"
+        high_behavior_tags = set(behavior_tags) & getattr(self.market_behavior_engine, "high_risk_tags", set())
+        if high_behavior_tags and chase_high_risk == "低":
+            chase_high_risk = "中"
+        if len(high_behavior_tags) >= 2:
+            chase_high_risk = "高"
+        missing_data_hints = []
+        missing_data_hints.extend(technical_detail_report.get("missing_data_hints") or [])
+        missing_data_hints.extend(getattr(q, "metric_missing_reasons", None) or [])
+        for field_name, value in [
+            ("换手率", q.turnover),
+            ("量比", q.volume_ratio),
+            ("PE", q.pe_dynamic),
+            ("PB", q.pb),
+            ("总市值", q.total_market_cap),
+            ("流通市值", q.float_market_cap),
+        ]:
+            if value is None:
+                missing_data_hints.append(f"{field_name}缺失")
+        kline_quality = (wordsource_report.get("data_quality") or {}).get("kline") or {}
+        missing_data_hints.extend(kline_quality.get("missing_fields") or [])
+        missing_data_hints.extend(diagnosis_info.get("missing_evidence") or [])
+        missing_data_hints = list(dict.fromkeys([str(x) for x in missing_data_hints if x]))
+        script_score = float(diagnosis_info.get("script_score", total_score) or total_score)
+        manual_review_score = float(diagnosis_info.get("review_score", total_score) or total_score)
+        upgrade_reasons = list(diagnosis_info.get("upgrade_reasons") or [])
+        downgrade_reasons = list(diagnosis_info.get("downgrade_reasons") or [])
+        technical_summary_text = self._grade_aware_technical_summary(
+            grade,
+            str(technical_detail_report.get("summary") or ""),
+            tags,
+            risk_flags,
+            behavior_tags,
+            last,
+            ma20,
+            ma60,
+            vwap20,
+        )
+        risk_prefix = ""
+        if grade.startswith("D") or high_behavior_tags:
+            headline = "、".join(list(dict.fromkeys(risk_flags + behavior_tags))[:3]) or "技术结构偏弱"
+            risk_prefix = f"风险优先：{headline}；"
+        comprehensive_diagnosis = (
+            f"{risk_prefix}{grade}，{capital_signal}，"
+            f"板块阶段={theme_info.get('theme_stage', '待确认')}，"
+            f"市值风格={market_cap_style}，追高风险={chase_high_risk}；{reason}"
+        )
         rf = lambda x, d=2: round(x, d) if x is not None else None
         return ScreenerResult(
             symbol=q.symbol,
@@ -619,6 +796,10 @@ class ScreenerService:
             pb=q.pb,
             total_market_cap=q.total_market_cap,
             float_market_cap=q.float_market_cap,
+            circulating_market_cap=q.circulating_market_cap,
+            total_share=q.total_share,
+            float_share=q.float_share,
+            metric_missing_reasons=list(getattr(q, "metric_missing_reasons", None) or []),
             ma5=rf(ma5, 4),
             ma10=rf(ma10, 4),
             ma20=rf(ma20, 4),
@@ -627,6 +808,7 @@ class ScreenerService:
             macd_dif=rf(dif, 4),
             macd_dea=rf(dea, 4),
             macd_hist=rf(hist, 4),
+            pos20=rf(pos20, 2),
             pos60=rf(pos60, 2),
             pos120=rf(pos120, 2),
             pos250=rf(pos250, 2),
@@ -700,6 +882,42 @@ class ScreenerService:
             indicator50_snapshot=indicator50_snapshot,
             tradercore_diagnosis=tradercore_diagnosis,
             wordsource_report=wordsource_report,
+            technical_factor_details=technical_detail_report.get("factors", []),
+            technical_signal_summary=technical_summary_text,
+            technical_factor_score=round(float(technical_detail_report.get("score_total") or 0), 2),
+            technical_factor_risk=round(float(technical_detail_report.get("risk_total") or 0), 2),
+            candidate_channels=list(candidate_meta.get("channels") or []),
+            candidate_channel_reason=str(candidate_meta.get("reason") or ""),
+            candidate_rank_score=round(float(candidate_meta.get("rank_score") or 0), 2),
+            ma20_deviation_pct=rf(ma20_dev_pct, 3),
+            amplitude_5d_pct=rf(amp5_pct, 3),
+            capital_signal=capital_signal,
+            theme_stage=str(theme_info.get("theme_stage") or "待确认"),
+            theme_strength=rf(theme_info.get("theme_score"), 2) if isinstance(theme_info.get("theme_score"), (int, float)) else None,
+            theme_labels=theme_labels,
+            market_cap_style=market_cap_style,
+            support_resistance_distance={
+                "support_dist_pct": rf(support_dist_pct, 2),
+                "resistance_dist_pct": rf(resistance_dist_pct, 2),
+                "support_status": sr.get("support_status"),
+                "resistance_status": sr.get("resistance_status"),
+                "support_price": rf(support60, 4),
+                "resistance_price": rf(resistance60, 4),
+            },
+            chase_high_risk=chase_high_risk,
+            behavior_tags=behavior_tags,
+            behavior_score=round(float(behavior_analysis.get("behavior_score") or 0), 2),
+            behavior_confidence=str(behavior_analysis.get("behavior_confidence") or "low"),
+            behavior_evidence=list(behavior_analysis.get("behavior_evidence") or []),
+            manipulation_risk_label=str(behavior_analysis.get("manipulation_risk_label") or "观察"),
+            need_level2_confirm=bool(behavior_analysis.get("need_level2_confirm")),
+            kline_markers=list(behavior_analysis.get("kline_markers") or []),
+            comprehensive_diagnosis=comprehensive_diagnosis,
+            script_score=round(script_score, 2),
+            manual_review_score=round(manual_review_score, 2),
+            upgrade_reasons=upgrade_reasons,
+            downgrade_reasons=downgrade_reasons,
+            missing_data_hints=missing_data_hints,
             low_score=round(low_score, 2),
             trend_score=round(trend_score, 2),
             momentum_score=round(momentum_score, 2),
@@ -719,6 +937,43 @@ class ScreenerService:
             exright_adjusted=(kline_adjust in {"qfq", "hfq"}),
             updated_at=datetime.now().isoformat(timespec="seconds"),
         )
+
+    def _grade_aware_technical_summary(
+        self,
+        grade: str,
+        base_summary: str,
+        tags: list[str],
+        risk_flags: list[str],
+        behavior_tags: list[str],
+        last: float,
+        ma20: float | None,
+        ma60: float | None,
+        vwap20: float | None,
+    ) -> str:
+        optimistic = ["低位修复动量改善", "量能配合", "空间结构较好", "时间窗口观察"]
+        clean = str(base_summary or "").strip()
+        for phrase in optimistic:
+            clean = clean.replace(phrase, "").strip("；; ，,")
+        risks = list(dict.fromkeys([x for x in (risk_flags or []) + (behavior_tags or []) if x]))[:4]
+        positives = [x for x in tags or [] if x not in risks][:4]
+        ma_bits = []
+        if ma20 and last < ma20:
+            ma_bits.append("价格低于MA20")
+        if ma60 and last < ma60:
+            ma_bits.append("价格低于MA60")
+        if vwap20 and last < vwap20:
+            ma_bits.append("VWAP承压")
+        if grade.startswith("D"):
+            risk_text = "、".join(risks or ma_bits or ["趋势确认不足"])
+            observe = "、".join(positives[:2]) if positives else "低位指标有修复迹象"
+            return f"技术面偏弱：{risk_text}；{observe}，但尚未形成趋势确认。"
+        if grade.startswith("C"):
+            split = "、".join(risks[:2] or ["趋势与量价信号不一致"])
+            edge = "、".join(positives[:3] or [clean or "仍有观察点"])
+            return f"技术面分化：{split}；观察点为{edge}。"
+        edge = "、".join(positives[:4] or [clean or "趋势和量价结构较好"])
+        risk_tail = f"；需跟踪{'、'.join(risks[:2])}" if risks else ""
+        return f"技术面优势：{edge}{risk_tail}。"
 
     def _weighted_total(self, mode: str, scores: dict[str, float], risk_penalty: float) -> float:
         """把各维度分数按上限归一后加权，避免“想给几分就给几分”。"""
@@ -925,8 +1180,10 @@ class ScreenerService:
             if 25 <= channel_position <= 78:
                 score += 2; tags.append("箱体位置适中")
             elif channel_position >= 85:
-                if resistance_dist_pct is not None and resistance_dist_pct >= -2:
+                if resistance_dist_pct is not None and resistance_dist_pct < 0:
                     score += 1.5; tags.append("箱体上沿突破观察")
+                elif resistance_dist_pct is not None and resistance_dist_pct <= 3:
+                    risks.append("贴近箱体压力")
                 else:
                     risks.append("接近箱体高位")
             elif channel_position <= 15:

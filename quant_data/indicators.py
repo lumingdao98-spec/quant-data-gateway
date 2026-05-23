@@ -305,10 +305,10 @@ def adx(highs: list[float], lows: list[float], closes: list[float], period: int 
     }
 
 
-def support_resistance(highs: list[float], lows: list[float], closes: list[float], period: int = 60) -> dict[str, float | None]:
+def support_resistance(highs: list[float], lows: list[float], closes: list[float], period: int = 60) -> dict[str, object]:
     n = min(len(highs), len(lows), len(closes))
     if n < 5:
-        return {"support": None, "resistance": None, "support_dist_pct": None, "resistance_dist_pct": None, "channel_pos": None}
+        return {"support": None, "resistance": None, "support_dist_pct": None, "resistance_dist_pct": None, "channel_pos": None, "support_status": "样本不足", "resistance_status": "样本不足"}
     p = min(period, n)
     hs = highs[n - p : n]
     ls = lows[n - p : n]
@@ -316,14 +316,18 @@ def support_resistance(highs: list[float], lows: list[float], closes: list[float
     resistance = max(hs)
     last = closes[n - 1]
     support_dist = (last / support - 1) * 100 if support else None
-    resistance_dist = (last / resistance - 1) * 100 if resistance else None
+    resistance_dist = (resistance / last - 1) * 100 if resistance and last else None
     channel_pos = (last - support) / (resistance - support) * 100 if resistance > support else 50.0
+    support_status = "已跌破支撑" if support and last < support else "支撑上方"
+    resistance_status = "已突破压力" if resistance and last > resistance else "压力上方空间"
     return {
         "support": support,
         "resistance": resistance,
         "support_dist_pct": support_dist,
         "resistance_dist_pct": resistance_dist,
         "channel_pos": channel_pos,
+        "support_status": support_status,
+        "resistance_status": resistance_status,
     }
 
 

@@ -5,6 +5,7 @@ import html as html_lib
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -149,13 +150,30 @@ class NewsAnalysisService:
         self._source_status: list[dict[str, Any]] = []
         self._global_news_cache: dict[str, Any] | None = None
         self._global_news_cache_ts: float = 0.0
+        self.source_timeout_seconds = 3.0
+        self.detail_timeout_seconds = 5.0
+        self.detail_workers = 6
+        self.announcement_first_limit = 16
+        self.finance_media_limit = 80
+        self.community_limit = 30
+        self._source_failures: dict[str, int] = {}
+        self._source_circuit_opened_at: dict[str, float] = {}
+        self._content_cache: dict[str, tuple[float, str]] = {}
+        self._round_started_at: float = 0.0
+        self._round_budget_seconds: float | None = None
+        self._current_mode: str = "light"
+        self._budget_exhausted_recorded: bool = False
 
-    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False) -> dict[str, Any]:
+    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "light", budget_seconds: float | None = None) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
         name = (name or symbol).strip()
         limit = max(30, min(int(limit or 120), 500))
-        key = f"cn_v315_v16_3:{symbol}:{name}:{limit}"
-        self._log_progress(f"开始信息面分析 {name}({symbol})，目标抓取上限={limit}，force={force}")
+        mode_raw = str(mode or "light").lower()
+        mode = "deep" if mode_raw in {"deep", "deep_refresh", "full"} else "normal" if mode_raw in {"normal", "detail"} else "light"
+        if budget_seconds is None:
+            budget_seconds = 8.0 if mode == "deep" else 5.0 if mode == "normal" else 4.0
+        key = f"cn_v318_{mode}:{symbol}:{name}:{limit}"
+        self._log_progress(f"开始信息面分析 {name}({symbol})，抓取上限={limit}，mode={mode}，force={force}")
         if not force:
             cached = self.store.read_analysis(symbol, key, self.cache_ttl_seconds) or self._read_cache(key)
             if cached:
@@ -164,17 +182,28 @@ class NewsAnalysisService:
                 return cached
 
         self._source_status = []
+        self._source_failures = {}
+        self._source_circuit_opened_at = {}
+        self._current_mode = mode
+        self._round_started_at = time.monotonic()
+        self._round_budget_seconds = float(budget_seconds) if budget_seconds else None
+        self._budget_exhausted_recorded = False
         query = f"{name} {symbol}"
         # 先读持久化库中的历史信息，避免每次全量爬取，也用于识别历史大雷。
         stored_rows = self.store.list_items(symbol, limit=max(limit * 3, 220), include_history_days=3650)
         stored_items = [self._item_from_dict(x) for x in stored_rows]
         self._log_progress(f"历史信息库读取 {len(stored_items)} 条，开始多源抓取")
-        items = self._search_all(query=query, symbol=symbol, name=name, limit=limit)
+        stored_valid = self._valid_count_estimate(stored_items, symbol=symbol, name=name)
+        items: list[NewsItem] = []
+        if mode == "light" and stored_valid >= 80:
+            self._record_source("light mode历史库复用", stored_valid, "历史高质量证据已足够，筛选页停止补源")
+        else:
+            items = self._search_all(query=query, symbol=symbol, name=name, limit=limit, mode=mode)
         self._log_progress(f"多源抓取完成：新抓取 {len(items)} 条，开始正文/公告补充")
-        items = self._enrich_announcement_content(items, max_items=16)
+        items = self._enrich_announcement_content(items, max_items=8 if mode == "light" else 12 if mode == "normal" else 16)
         # V16.2：新浪/同花顺等股票专页在抓取入口已做候选链接准入+详情页正文准入；
         # 这里继续作为兜底补强，不再依赖“先抓一堆再清洗”的后置策略。
-        items = self._enrich_link_content(items, symbol=symbol, name=name, max_items=20)
+        items = self._enrich_link_content(items, symbol=symbol, name=name, max_items=4 if mode == "light" else 12 if mode == "normal" else 20)
         merged_items = self._filter_valid_items(stored_items + items, symbol=symbol, name=name)
         before_dedup = len(stored_items) + len(items)
         dropped_invalid = before_dedup - len(merged_items)
@@ -199,6 +228,8 @@ class NewsAnalysisService:
             "sources_status": self._source_status,
             "source_policy": self.message_source_policy(),
             "cache_info": {"hit": False, "store": "sqlite+json", "ttl_seconds": self.cache_ttl_seconds, "reuse_policy": "分析结果默认缓存约30分钟；新闻条目长期写入 data/news_store.sqlite 复用；force=true 将重新抓取并重算标签。"},
+            "crawl_mode": mode,
+            "crawl_budget_seconds": budget_seconds,
             "note": "中文公开信息源轻量抓取；新闻/公告持久化保存并可复用；结果受公开接口可用性影响，仅作筛选辅助，关键结论需人工核验公告和财报。",
         }
         self._write_cache(key, result)
@@ -343,9 +374,6 @@ class NewsAnalysisService:
                 status.append({"source": source_name, "count": len(rows), "status": "ok" if rows else "无有效JSON条目"})
             except Exception as exc:
                 status.append({"source": source_name, "count": 0, "status": str(exc)[:160]})
-
-        if not raw_rows:
-            status.append({"source": "搜索引擎兜底", "count": 0, "status": "已禁用：搜索页不是可采信信息源，避免关键词搜索结果污染全球要闻"})
 
         items: list[NewsItem] = []
         for r in raw_rows:
@@ -696,7 +724,7 @@ class NewsAnalysisService:
             relation_note=str(d.get("relation_note") or ""),
         )
 
-    def _search_all(self, query: str, symbol: str, name: str, limit: int) -> list[NewsItem]:
+    def _search_all(self, query: str, symbol: str, name: str, limit: int, mode: str = "light") -> list[NewsItem]:
         """多中文源、多关键词、按“有效证据数”扩展抓取。
 
         V16.3 不再用“原始抓到多少条”决定是否停止，而是先估算有效证据数。
@@ -705,7 +733,9 @@ class NewsAnalysisService:
         """
         items: list[NewsItem] = []
         limit = max(30, min(int(limit or 120), 500))
-        target_valid = min(limit, max(70, int(limit * 0.68)))
+        mode_raw = str(mode or "light").lower()
+        mode = "deep" if mode_raw in {"deep", "deep_refresh", "full"} else "normal" if mode_raw in {"normal", "detail"} else "light"
+        target_valid = 80 if mode == "light" else min(limit, max(70, int(limit * 0.68))) if mode == "deep" else min(limit, 90)
         per_source = max(30, min(90, int(limit * 0.45)))
         industry_queries = self._industry_queries(symbol, name)
         queries = list(dict.fromkeys([
@@ -719,27 +749,38 @@ class NewsAnalysisService:
         ]))
 
         factual_sources = [
-            ("东方财富F10资讯公告", self._search_eastmoney_hsf10, (symbol, name, max(50, per_source))),
             ("东方财富公告接口", self._search_eastmoney_ann, (symbol, name, max(60, per_source))),
             ("巨潮公告全文检索", self._search_cninfo_fulltext, (symbol, name, max(70, per_source))),
-            ("新浪个股新闻页", self._search_sina_stock_news, (symbol, name, max(35, min(80, per_source)))),
-            ("同花顺个股资讯页", self._search_10jqka_stock_news, (symbol, name, max(35, min(80, per_source)))),
+            ("东方财富F10资讯公告", self._search_eastmoney_hsf10, (symbol, name, max(50, per_source))),
         ]
+        if mode in {"normal", "deep"}:
+            factual_sources.extend([
+                ("新浪个股新闻页", self._search_sina_stock_news, (symbol, name, max(35, min(80, per_source)))),
+                ("同花顺个股资讯页", self._search_10jqka_stock_news, (symbol, name, max(35, min(80, per_source)))),
+            ])
         for source_name, fn, args in factual_sources:
-            try:
-                got = fn(*args)
-                items.extend(got)
-                self._record_source(source_name, len(got), "ok" if got else "无有效条目/页面结构可能变化")
-            except Exception as exc:
-                self._record_source(source_name, 0, str(exc)[:180])
-
-        self._record_source("搜索引擎页", 0, "彻底禁用：搜索结果页不是新闻证据，不抓取、不计分、不展示")
+            if self._budget_exhausted():
+                self._record_budget_exhausted()
+                break
+            got = self._run_source_call(source_name, fn, args)
+            items.extend(got)
+            if got:
+                self._record_source(source_name, len(got), "ok")
+            elif not self._source_circuit_open(source_name):
+                self._record_source(source_name, 0, "无有效条目/页面结构可能变化")
 
         valid_est = self._valid_count_estimate(items, symbol=symbol, name=name)
         self._record_source("有效证据预估", valid_est, f"目标有效证据≈{target_valid}；按清洗准入后条目而不是原始条目判断是否继续补充")
+        if mode == "light" and valid_est >= 80:
+            self._record_source("light mode停止补源", valid_est, "公告/F10/巨潮有效证据已达80，筛选页立即停止补源")
+            return items[: max(limit * 3, limit)]
 
         # 专业财经媒体/站内源补充：只有当“有效条目”不足才启用；每个源仍走 URL/正文准入，不把搜索页当新闻证据。
-        if valid_est < target_valid:
+        if mode == "light":
+            self._record_source("light mode站内搜索关闭", valid_est, "筛选页不运行东方财富/新浪/同花顺/专业财经门户关键词矩阵", skipped_reason="light mode禁用关键词矩阵")
+        elif mode == "normal":
+            self._record_source("normal mode关键词矩阵关闭", valid_est, "普通详情刷新只使用官方源和常规个股新闻页，不运行关键词矩阵", skipped_reason="normal mode禁用关键词矩阵")
+        elif valid_est < target_valid:
             self._record_source("专业媒体补充", 0, f"有效证据不足 {valid_est}/{target_valid}，继续抓取财经门户/研报/行业线索")
             fallback_queries = list(dict.fromkeys([query, f"{name} 公告", f"{name} 业绩", f"{name} 研报", f"{name} 行业 政策", f"{name} 风险", *industry_queries]))[:8]
             search_fns = [
@@ -748,33 +789,39 @@ class NewsAnalysisService:
                 ("同花顺站内搜索", self._search_10jqka_page),
                 ("专业财经门户", self._search_professional_portals),
             ]
+            finance_media_count = 0
             for q in fallback_queries:
-                if self._valid_count_estimate(items, symbol=symbol, name=name) >= target_valid or len(items) >= limit * 3:
+                if self._budget_exhausted():
+                    self._record_budget_exhausted()
+                    break
+                if self._valid_count_estimate(items, symbol=symbol, name=name) >= target_valid or len(items) >= limit * 3 or finance_media_count >= self.finance_media_limit:
                     break
                 for source_name, fn in search_fns:
-                    if self._valid_count_estimate(items, symbol=symbol, name=name) >= target_valid or len(items) >= limit * 3:
+                    if self._budget_exhausted():
+                        self._record_budget_exhausted()
                         break
-                    try:
-                        got = fn(q, symbol, name, max(8, min(24, per_source // 3)))
-                        items.extend(got)
-                        self._record_source(f"{source_name}:{q[:16]}", len(got), "ok" if got else "无有效新闻链接")
-                    except Exception as exc:
-                        self._record_source(f"{source_name}:{q[:16]}", 0, str(exc)[:180])
+                    if self._valid_count_estimate(items, symbol=symbol, name=name) >= target_valid or len(items) >= limit * 3 or finance_media_count >= self.finance_media_limit:
+                        break
+                    per_call = max(8, min(24, per_source // 3, self.finance_media_limit - finance_media_count))
+                    got = self._run_source_call(f"{source_name}:{q[:16]}", fn, (q, symbol, name, per_call))
+                    items.extend(got)
+                    finance_media_count += len(got)
+                    self._record_source(f"{source_name}:{q[:16]}", len(got), "ok" if got else "无有效新闻链接")
         else:
             self._record_source("站内/门户补充", 0, f"已跳过：结构化源有效证据已达 {valid_est}/{target_valid}")
 
         # 社区舆情单独补充，按舆情统计和传闻风险处理，不作为公司事实。
         community_sources = [
-            ("东方财富股吧", self._search_eastmoney_guba, (symbol, name, max(20, min(45, limit // 4)))),
-            ("雪球/社区", self._search_xueqiu_page, (query, symbol, name, max(12, min(30, limit // 5)))),
+            ("东方财富股吧", self._search_eastmoney_guba, (symbol, name, max(8, min(self.community_limit, 45, limit // 4)))),
+            ("雪球/社区", self._search_xueqiu_page, (query, symbol, name, max(8, min(self.community_limit, 30, limit // 5)))),
         ]
         for source_name, fn, args in community_sources:
-            try:
-                got = fn(*args)
-                items.extend(got)
-                self._record_source(source_name, len(got), "ok")
-            except Exception as exc:
-                self._record_source(source_name, 0, str(exc)[:180])
+            if self._budget_exhausted():
+                self._record_budget_exhausted()
+                break
+            got = self._run_source_call(source_name, fn, args)
+            items.extend(got[: self.community_limit])
+            self._record_source(source_name, min(len(got), self.community_limit), "ok" if got else "无有效舆情条目")
 
         return items[: max(limit * 3, limit)]
 
@@ -873,11 +920,88 @@ class NewsAnalysisService:
         except Exception:
             pass
 
-    def _record_source(self, source: str, count: int, status: str) -> None:
-        self._source_status.append({"source": source, "count": int(count), "status": status})
+    def _record_source(self, source: str, count: int, status: str, *, elapsed_ms: float | None = None, skipped_reason: str | None = None) -> None:
+        text = f"{source} {status}"
+        if any(k in text for k in ["搜索引擎", "搜索结果页", "搜索页", "百度搜索", "360搜索", "搜狗搜索"]):
+            return
+        self._source_status.append({
+            "source": source,
+            "count": int(count),
+            "status": status,
+            "elapsed_ms": round(float(elapsed_ms), 2) if elapsed_ms is not None else None,
+            "skipped_reason": skipped_reason,
+            "mode": self._current_mode,
+        })
         # 控制台展示抓取进度，方便判断是不是卡在某个新闻源。
         if len(self._source_status) <= 80:
             self._log_progress(f"源[{source}] 返回 {int(count)} 条，状态={status}")
+
+    def _source_key(self, source: str) -> str:
+        return str(source or "").split(":", 1)[0].strip() or str(source or "")
+
+    def _budget_remaining(self) -> float | None:
+        if not self._round_budget_seconds or not self._round_started_at:
+            return None
+        return max(0.0, self._round_budget_seconds - (time.monotonic() - self._round_started_at))
+
+    def _budget_exhausted(self) -> bool:
+        remaining = self._budget_remaining()
+        return remaining is not None and remaining <= 0.05
+
+    def _record_budget_exhausted(self) -> None:
+        if self._budget_exhausted_recorded:
+            return
+        self._budget_exhausted_recorded = True
+        self._record_source("总预算耗尽", 0, "总预算耗尽，停止后续任务队列", skipped_reason="budget_exhausted")
+
+    def _source_circuit_open(self, source: str) -> bool:
+        opened = self._source_circuit_opened_at.get(self._source_key(source))
+        if not opened:
+            return False
+        return (time.time() - opened) < 120
+
+    def _mark_source_failure(self, source: str) -> None:
+        key = self._source_key(source)
+        self._source_failures[key] = self._source_failures.get(key, 0) + 1
+        if self._source_failures[key] >= 1:
+            self._source_circuit_opened_at[key] = time.time()
+
+    def _mark_source_success(self, source: str) -> None:
+        key = self._source_key(source)
+        self._source_failures.pop(key, None)
+        self._source_circuit_opened_at.pop(key, None)
+
+    def _run_source_call(self, source_name: str, fn, args: tuple) -> list[NewsItem]:
+        if self._source_circuit_open(source_name):
+            self._record_source(source_name, 0, "熔断中，跳过本轮", skipped_reason="source_circuit_open")
+            return []
+        if self._budget_exhausted():
+            self._record_budget_exhausted()
+            return []
+        timeout = self.source_timeout_seconds
+        remaining = self._budget_remaining()
+        if remaining is not None:
+            timeout = max(0.1, min(timeout, remaining))
+        executor = ThreadPoolExecutor(max_workers=1)
+        started = time.monotonic()
+        future = executor.submit(fn, *args)
+        try:
+            got = future.result(timeout=timeout)
+            self._mark_source_success(source_name)
+            elapsed = (time.monotonic() - started) * 1000
+            if self._budget_exhausted():
+                self._record_budget_exhausted()
+            return list(got or [])
+        except TimeoutError:
+            self._mark_source_failure(source_name)
+            self._record_source(source_name, 0, f"源级超时>{timeout:.1f}s", elapsed_ms=(time.monotonic() - started) * 1000, skipped_reason="timeout")
+            return []
+        except Exception as exc:
+            self._mark_source_failure(source_name)
+            self._record_source(source_name, 0, str(exc)[:180], elapsed_ms=(time.monotonic() - started) * 1000, skipped_reason="error")
+            return []
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _em_code(self, symbol: str) -> str:
         ex = infer_exchange(symbol)
@@ -2102,30 +2226,44 @@ class NewsAnalysisService:
 
         解决“看似进入了页面，但实际只把栏目菜单/表格导航当新闻”的问题。
         """
-        out: list[NewsItem] = []
-        loaded = 0
-        for item in items:
+        out: list[NewsItem] = list(items)
+        targets: list[tuple[int, NewsItem]] = []
+        for idx, item in enumerate(items):
             need = (
                 item.url and item.source_type in {"news", "research", "forum"}
                 and ("新浪" in item.source or "同花顺" in item.source or "研报" in item.title or "研究报告" in item.title or item.published_at_norm is None)
                 and not self._is_non_article_link(item.url, item.title)
             )
-            if loaded < max_items and need:
+            if need:
+                targets.append((idx, item))
+            if len(targets) >= max_items:
+                break
+
+        if not targets:
+            return out
+
+        def load(pair: tuple[int, NewsItem]) -> tuple[int, NewsItem | None]:
+            idx, item = pair
+            detail = self._fetch_article_detail(item.url, max_chars=1800, symbol=symbol, name=name)
+            detail_title = detail.get("title") or ""
+            detail_text = detail.get("text") or ""
+            new_title = detail_title if detail_title and not is_menu_or_table_fragment(detail_title, detail_text) else item.title
+            new_summary = detail_text if len(detail_text) > len(item.summary or "") else item.summary
+            ok, _reason = self.valid_news_item(new_title, new_summary, source=item.source, url=item.url, symbol=symbol, name=name, source_type=item.source_type, base_relevant=item.relevance_score >= 20)
+            if ok and new_summary and self._is_article_detail_text(new_title, new_summary, source=item.source, symbol=symbol, name=name, source_type=item.source_type) and len(new_summary) > len(item.summary or ""):
+                rescored = self._score_item(new_title, item.url, item.source, item.published_at, new_summary, symbol, name, source_type=item.source_type)
+                return idx, NewsItem(**{**rescored.to_dict(), "content_loaded": True})
+            return idx, None
+
+        with ThreadPoolExecutor(max_workers=max(1, min(self.detail_workers, len(targets)))) as executor:
+            futures = [executor.submit(load, pair) for pair in targets]
+            for future in as_completed(futures):
                 try:
-                    detail = self._fetch_article_detail(item.url, max_chars=1800, symbol=symbol, name=name)
-                    detail_title = detail.get("title") or ""
-                    detail_text = detail.get("text") or ""
-                    new_title = detail_title if detail_title and not is_menu_or_table_fragment(detail_title, detail_text) else item.title
-                    new_summary = detail_text if len(detail_text) > len(item.summary or "") else item.summary
-                    ok, _reason = self.valid_news_item(new_title, new_summary, source=item.source, url=item.url, symbol=symbol, name=name, source_type=item.source_type, base_relevant=item.relevance_score >= 20)
-                    if ok and new_summary and self._is_article_detail_text(new_title, new_summary, source=item.source, symbol=symbol, name=name, source_type=item.source_type) and len(new_summary) > len(item.summary or ""):
-                        # 用详情正文重新跑评分、事件、时间和舆情判断。
-                        rescored = self._score_item(new_title, item.url, item.source, item.published_at, new_summary, symbol, name, source_type=item.source_type)
-                        item = NewsItem(**{**rescored.to_dict(), "content_loaded": True})
-                        loaded += 1
+                    idx, new_item = future.result(timeout=0)
+                    if new_item is not None:
+                        out[idx] = new_item
                 except Exception:
-                    pass
-            out.append(item)
+                    continue
         return out
 
     def _enrich_announcement_content(self, items: list[NewsItem], max_items: int = 5) -> list[NewsItem]:
@@ -2133,30 +2271,46 @@ class NewsAnalysisService:
 
         不登录、不绕过验证码；只尝试公开 URL。失败时保留标题级判断。
         """
-        out: list[NewsItem] = []
-        loaded = 0
-        for item in items:
-            if loaded < max_items and item.url and (item.source_type == "announcement" or item.credibility_score >= 85):
+        out: list[NewsItem] = list(items)
+        ordered_targets = [
+            (idx, item) for idx, item in enumerate(items)
+            if item.url and (item.source_type == "announcement" or item.credibility_score >= 85)
+        ][:max_items]
+        if not ordered_targets:
+            return out
+
+        def load(pair: tuple[int, NewsItem]) -> tuple[int, NewsItem | None]:
+            idx, item = pair
+            text = self._fetch_text_excerpt(item.url, max_chars=1200)
+            if text and len(text) > len(item.summary or ""):
+                summary = self._clean_text(text)[:500]
+                score, ev = self._adjust_sentiment_by_evidence(item.sentiment_score, item.title + " " + summary, item.source_type)
+                return idx, NewsItem(**{**item.to_dict(), "summary": summary, "sentiment_score": round(score, 2), "evidence": list(dict.fromkeys((item.evidence or []) + ev)), "content_loaded": True})
+            return idx, None
+
+        with ThreadPoolExecutor(max_workers=max(1, min(self.detail_workers, len(ordered_targets)))) as executor:
+            futures = [executor.submit(load, pair) for pair in ordered_targets]
+            for future in as_completed(futures):
                 try:
-                    text = self._fetch_text_excerpt(item.url, max_chars=1200)
-                    if text and len(text) > len(item.summary or ""):
-                        summary = self._clean_text(text)[:500]
-                        score, ev = self._adjust_sentiment_by_evidence(item.sentiment_score, item.title + " " + summary, item.source_type)
-                        item = NewsItem(**{**item.to_dict(), "summary": summary, "sentiment_score": round(score,2), "evidence": list(dict.fromkeys((item.evidence or []) + ev)), "content_loaded": True})
-                        loaded += 1
+                    idx, new_item = future.result(timeout=0)
+                    if new_item is not None:
+                        out[idx] = new_item
                 except Exception:
-                    pass
-            out.append(item)
+                    continue
         return out
 
     def _fetch_text_excerpt(self, url: str, max_chars: int = 1200) -> str:
         if not url or not str(url).startswith("http"):
             return ""
+        cached = self._content_cache.get(url)
+        if cached and time.time() - cached[0] < self.cache_ttl_seconds:
+            return cached[1]
         resp = self.http.get(url, headers={"Referer": "https://www.eastmoney.com/"})
         ctype = (resp.headers.get("Content-Type") or "").lower()
         raw = resp.content or b""
         # 公告 PDF / 附件二进制不做 HTML 文本解码，避免前端出现大量乱码。
         if "pdf" in ctype or url.lower().split("?")[0].endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx")) or raw[:5] == b"%PDF-":
+            self._content_cache[url] = (time.time(), "")
             return ""
         try:
             if not resp.encoding or resp.encoding.lower() in {"iso-8859-1", "latin-1"}:
@@ -2166,12 +2320,15 @@ class NewsAnalysisService:
         text = resp.text or ""
         text = self._clean_text(text)
         if self._looks_garbled(text):
+            self._content_cache[url] = (time.time(), "")
             return ""
         # 截取和业务/风险/财报相关的段落附近。
         keys = list(self.FINANCE_WORDS | self.RISK_WORDS | self.OPERATION_WORDS | self.POLICY_WORDS)
         pos = min([text.find(k) for k in keys if k in text] or [0])
         start = max(0, pos - 120)
-        return text[start:start+max_chars]
+        excerpt = text[start:start+max_chars]
+        self._content_cache[url] = (time.time(), excerpt)
+        return excerpt
 
     def _parse_item_date(self, value: str | None) -> datetime | None:
         if not value:

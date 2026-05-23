@@ -25,7 +25,7 @@ def _quote(sym='600000', name='浦发银行', amount=300_000_000, turnover=2.5, 
 def test_source_registry_disables_search_engines():
     s=SourceRegistryService()
     disabled=s.disabled_sources()
-    assert any('百度' in x['name'] for x in disabled)
+    assert disabled == []
     assert '宏观经济' in s.coverage_matrix()
     assert s.plan_for_target(180)['target_effective_items']==180
 
@@ -55,7 +55,7 @@ def test_wordsource_report_is_complete_and_not_empty():
     snap=compute_indicator50_snapshot(opens, highs, lows, closes, vols, amts)
     news=[{'title':'央行降准释放流动性，银行板块受关注','source':'央行','summary':'降准有利于流动性改善。','event_type':'policy'}]
     rep=WordSourceSystemService(feature_store_path='data/test_feature_store.sqlite').build_report(q,bars,snap,base_score=66,tags=['资金活跃'],risk_flags=[],news_items=news)
-    assert rep['version'].startswith('3.16')
+    assert rep['version'].startswith('3.18')
     assert rep['four_surface_scores']['technical'] > 0
     assert rep['information']['macro_policy']['has_macro_policy'] is True
     assert rep['strategy_signals']['signals']

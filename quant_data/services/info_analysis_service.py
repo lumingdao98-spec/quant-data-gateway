@@ -8,6 +8,7 @@ from quant_data.services.market_data_service import MarketDataService
 from quant_data.services.news_service import NewsAnalysisService
 from quant_data.services.fundamental_library_service import FundamentalLibraryService
 from quant_data.services.company_profile_service import CompanyProfileService
+from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.utils import normalize_symbol, safe_float
 
 
@@ -23,21 +24,35 @@ class InfoAnalysisService:
         self.news_service = news_service
         self.fundamental_library = FundamentalLibraryService()
         self.company_profile_service = CompanyProfileService()
+        self.global_mapper = GlobalIndustryMapper()
 
-    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False) -> dict[str, Any]:
+    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "normal", deep_refresh: bool = False) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
+        mode_raw = str(mode or "normal").lower()
+        mode = "deep" if deep_refresh or mode_raw in {"deep", "deep_refresh", "full"} else "light" if mode_raw == "light" else "normal"
         quote: Quote | None = None
         try:
             quote = self.market_data.get_quote(symbol, force_refresh=force)
         except Exception:
             quote = None
         qname = name or (quote.name if quote else symbol)
-        news = self.news_service.analyze(symbol, name=qname, limit=limit, force=force)
+        news = self.news_service.analyze(symbol, name=qname, limit=limit, force=force or deep_refresh, mode=mode, budget_seconds=8.0 if mode == "deep" else 5.0 if mode == "normal" else 4.0)
         # 公司画像只在 force=true 或本地缓存过期时主动刷新；全球/国内要闻按短缓存自动刷新。
         profile = self.company_profile_service.get_profile(symbol, force=force)
-        global_news = self._safe_global_news(force=False)
+        global_news = self._safe_global_news(force=False) if mode in {"normal", "deep"} else {"items": [], "cache_info": {"skipped": "light_mode"}}
+        global_mapping = self.global_mapper.map_items((global_news or {}).get("items", []), symbol, name=qname, profile=profile)
         finance = self._finance_snapshot(symbol, quote)
         policy = self._policy_summary(news, qname, symbol, global_news=global_news, profile=profile)
+        policy["industry_mapped_items"] = global_mapping.get("industry_mapped_items", [])
+        policy["mapped_industries"] = global_mapping.get("mapped_industries", [])
+        policy["mapped_concepts"] = global_mapping.get("mapped_concepts", [])
+        policy["mapped_symbols"] = global_mapping.get("mapped_symbols", [])
+        policy["company_exposure"] = global_mapping.get("company_exposure", {})
+        policy["policy_clue_count"] = int(policy.get("policy_clue_count") or 0) + int(global_mapping.get("related_count") or 0)
+        related_mapped = [x for x in policy["industry_mapped_items"] if x.get("score_included")]
+        if related_mapped:
+            adjust = sum(1.5 if x.get("impact_direction") == "positive" else -1.8 if x.get("impact_direction") == "negative" else 0.4 for x in related_mapped[:10])
+            policy["policy_score"] = round(max(0, min(100, safe_float(policy.get("policy_score"), 50) + adjust)), 2)
         evidence_counts = self._evidence_counts(news, finance, policy)
         info_score = self._info_score(news, finance, policy)
         data_quality = dict(news.get("data_quality") or {})
@@ -62,18 +77,28 @@ class InfoAnalysisService:
             "company_profile": profile,
             "global_news_used": {
                 "count": len((global_news or {}).get("items", [])),
-                "related_count": len(policy.get("macro_event_maps") or []),
+                "related_count": int(global_mapping.get("related_count") or 0),
                 "updated_at": (global_news or {}).get("updated_at"),
                 "sources_used": (global_news or {}).get("sources_used", []),
                 "domestic_count": (global_news or {}).get("domestic_count", 0),
                 "global_count": (global_news or {}).get("global_count", 0),
                 "commodity_count": (global_news or {}).get("commodity_count", 0),
+                "mapped_industries": global_mapping.get("mapped_industries", []),
+                "mapped_concepts": global_mapping.get("mapped_concepts", []),
+                "mapped_symbols": global_mapping.get("mapped_symbols", []),
                 "note": "全球要闻自动短缓存刷新；只有与公司画像/行业暴露匹配时才进入信息面映射分。",
             },
+            "global_items": (global_news or {}).get("items", []),
+            "industry_mapped_items": global_mapping.get("industry_mapped_items", []),
+            "mapped_industries": global_mapping.get("mapped_industries", []),
+            "mapped_concepts": global_mapping.get("mapped_concepts", []),
+            "mapped_symbols": global_mapping.get("mapped_symbols", []),
             "evidence_counts": evidence_counts,
             "policy_clue_count": policy.get("policy_clue_count", 0),
             "data_quality": data_quality,
             "cache_info": news.get("cache_info") or {},
+            "crawl_mode": mode,
+            "deep_refresh": bool(deep_refresh),
             "breakdown": [
                 {"name": "公司/公告事件", "score": news.get("news_score", 50), "weight": 0.30},
                 {"name": "来源可信度", "score": news.get("avg_credibility") or 50, "weight": 0.10},

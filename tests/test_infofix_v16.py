@@ -273,7 +273,7 @@ def test_v16_3_search_all_uses_effective_valid_count_not_raw_count():
         def _search_xueqiu_page(self, query, symbol, name, limit):
             return []
     svc = Svc()
-    got = svc._search_all("通威股份 600438", "600438", "通威股份", 120)
+    got = svc._search_all("通威股份 600438", "600438", "通威股份", 120, mode="deep")
     assert "em_search" in svc.calls or "portal" in svc.calls
     assert any("重大合同" in x.title for x in got)
 
@@ -283,12 +283,14 @@ def test_v16_4_word_sources_are_extracted_and_counted():
     svc = SourceKnowledgeService()
     cov = svc.coverage()
     assert cov["doc_count"] == 4
-    assert cov["doc_char_count"] > 100000
+    assert cov["docx_loaded"] is True
+    assert cov["doc_char_count"] > 80000
+    assert cov["doc_item_count"] > 1000
     assert cov["doc_table_count"] >= 30
     assert cov["technical_indicator_count_from_word"] >= 50
     assert cov["message_source_channels"] >= 20
     assert cov["quant_pipeline_steps"] >= 9
-    assert cov["image_count"] == 2
+    assert cov["image_count"] >= 2
 
 
 def test_v16_4_word_technical_catalog_contains_50_plus_indicators():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, time
+from pathlib import Path
 from statistics import mean
 
 from fastapi import FastAPI, Query, Body
@@ -25,10 +26,13 @@ from quant_data.services.technical_factor_registry import TechnicalFactorRegistr
 from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot
+from quant_data.services.market_behavior_engine import MarketBehaviorEngine
+from quant_data.services.cache_state_service import CacheStateService
 from quant_data.services.fundamental_library_service import FundamentalLibraryService
 from quant_data.services.news_service import NewsAnalysisService
 from quant_data.services.info_analysis_service import InfoAnalysisService
 from quant_data.services.company_profile_service import CompanyProfileService
+from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
@@ -52,6 +56,9 @@ source_registry_service = SourceRegistryService()
 technical_factor_registry_service = TechnicalFactorRegistryService()
 candidate_pool_service = CandidatePoolService()
 market_regime_service = MarketRegimeService()
+market_behavior_engine = MarketBehaviorEngine()
+cache_state_service = CacheStateService()
+technical_factor_engine = TechnicalFactorEngine()
 app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与后续量化系统的数据网关")
 
 def _make_snapshot_id(symbol: str | None = None, limit: int | None = None) -> str:
@@ -105,6 +112,134 @@ def _market_session(market: str = "CN") -> dict:
 
 def _now_cn() -> datetime:
     return datetime.fromisoformat(_market_session("CN")["now"])
+
+
+def _kline_key(symbol: str, frame: str, adjust: str, limit: int) -> str:
+    return f"{symbol}:{frame}:{adjust}:{int(limit or 260)}"
+
+
+def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_id: str, cache_status: dict, *, used_snapshot: bool, mode: str, errors: list[str] | None = None) -> dict:
+    data = dict(data or {})
+    news = data.get("news") if isinstance(data.get("news"), dict) else {}
+    items = data.get("items") or news.get("items") or []
+    source_logs = data.get("source_logs") or news.get("sources_status") or data.get("sources_status") or []
+    grouped = data.get("grouped_items") or news.get("duplicate_groups") or []
+    global_items = data.get("global_items") or (data.get("global_news") or {}).get("items") or []
+    mapped = data.get("industry_mapped_items") or (data.get("policy") or {}).get("industry_mapped_items") or []
+    stats = data.get("stats") or {
+        "item_count": len(items),
+        "global_count": len(global_items),
+        "industry_mapped_count": len(mapped),
+        "source_count": len(source_logs),
+    }
+    diagnostics = data.get("diagnostics") or {
+        "summary": data.get("summary") or "暂无诊断摘要",
+        "data_quality": data.get("data_quality") or {},
+        "cache_status": cache_status,
+    }
+    created_at = data.get("created_at") or data.get("updated_at") or datetime.now().isoformat(timespec="seconds")
+    data.update({
+        "symbol": symbol,
+        "name": name or data.get("name") or symbol,
+        "mode": mode,
+        "snapshot_id": snapshot_id,
+        "used_snapshot": bool(used_snapshot),
+        "snapshot_reused": bool(used_snapshot),
+        "created_at": created_at,
+        "updated_at": data.get("updated_at") or created_at,
+        "cache_status": cache_status,
+        "items": items,
+        "grouped_items": grouped,
+        "global_items": global_items,
+        "industry_mapped_items": mapped,
+        "mapped_industries": data.get("mapped_industries") or (data.get("policy") or {}).get("mapped_industries") or [],
+        "mapped_concepts": data.get("mapped_concepts") or (data.get("policy") or {}).get("mapped_concepts") or [],
+        "mapped_symbols": data.get("mapped_symbols") or (data.get("policy") or {}).get("mapped_symbols") or [],
+        "stats": stats,
+        "score_model": data.get("score_model") or data.get("scoring_model") or {},
+        "diagnostics": diagnostics,
+        "source_logs": source_logs,
+        "errors": errors or data.get("errors") or [],
+    })
+    return data
+
+
+def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, sync_quote: bool = True) -> dict:
+    if frame not in {"1d", "1w", "1M", "1mo"}:
+        frame = "1d"
+    if frame == "1mo":
+        frame = "1M"
+    key = _kline_key(symbol, frame, adjust, limit)
+    errors: list[str] = []
+    fallback_chain: list[str] = []
+    q = None
+    cache_status = cache_state_service.status("miss", key=key, source="kline_api")
+    try:
+        q = service.get_quote(symbol, force_refresh=force) if sync_quote else None
+    except Exception as exc:
+        errors.append(f"quote_error: {str(exc)[:160]}")
+    try:
+        bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=force)
+        fallback_chain.append("market_data_service.get_kline")
+        if frame == "1d" and any(str(getattr(b, "source", "")).lower().find("minute") >= 0 or str(getattr(b, "source", "")).lower().find("intraday") >= 0 for b in bars):
+            raise RuntimeError("日K源返回疑似分钟数据，拒绝绘图")
+        if len(bars) < min(5, max(2, int(limit or 260))):
+            raise RuntimeError(f"K线数量不足：{len(bars)}")
+        if q is not None:
+            bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
+        else:
+            synced, sync_reason = False, "quote_unavailable"
+        behavior = market_behavior_engine.analyze(q, bars) if len(bars) >= 5 else market_behavior_engine.analyze(q, [])
+        payload = {
+            "ok": True,
+            "server_time": datetime.now().isoformat(timespec="seconds"),
+            "symbol": symbol,
+            "frame": frame,
+            "adjust": adjust,
+            "bars": [b.to_dict() for b in bars],
+            "data": [b.to_dict() for b in bars],
+            "count": len(bars),
+            "source": sorted(list({getattr(b, "source", "") for b in bars if getattr(b, "source", "")})),
+            "fallback_chain": fallback_chain,
+            "errors": errors,
+            "stale_cache_used": False,
+            "synced": synced,
+            "sync_reason": sync_reason,
+            "behavior_analysis": behavior,
+            "kline_markers": behavior.get("kline_markers", []),
+        }
+        payload["cache_status"] = cache_state_service.save_kline_cache(key, symbol, payload)
+        return payload
+    except Exception as exc:
+        errors.append(str(exc)[:220])
+        cached = cache_state_service.get_kline_cache(key)
+        if cached.data:
+            payload = dict(cached.data)
+            payload.update({
+                "ok": True,
+                "cache_status": cached.cache_status,
+                "stale_cache_used": True,
+                "errors": list(dict.fromkeys((payload.get("errors") or []) + errors)),
+                "fallback_chain": list(dict.fromkeys((payload.get("fallback_chain") or []) + ["cache_state_stale_fallback"])),
+            })
+            return payload
+        return {
+            "ok": False,
+            "server_time": datetime.now().isoformat(timespec="seconds"),
+            "symbol": symbol,
+            "frame": frame,
+            "adjust": adjust,
+            "bars": [],
+            "data": [],
+            "count": 0,
+            "source": [],
+            "fallback_chain": fallback_chain,
+            "errors": errors,
+            "stale_cache_used": False,
+            "cache_status": cache_state_service.status("error", key=key, source="kline_api", error="; ".join(errors)),
+            "behavior_analysis": market_behavior_engine.analyze(None, []),
+            "kline_markers": [],
+        }
 
 
 def _calc_summary(bars: list[Bar]) -> dict:
@@ -241,7 +376,29 @@ def root():
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "version": __version__, "server_time": datetime.now().isoformat(timespec="seconds"), "session": _market_session("CN"), "cache": service.cache.stats()}
+    return {"ok": True, "version": __version__, "server_time": datetime.now().isoformat(timespec="seconds"), "session": _market_session("CN"), "cache": service.cache.stats(), "cache_state": cache_state_service.overview()}
+
+
+@app.get("/api/market/health")
+def market_health() -> dict:
+    warnings = [w.__dict__ for w in getattr(service.providers, "warnings", [])[-20:]]
+    cache_overview = cache_state_service.overview()
+    return {
+        "ok": True,
+        "version": __version__,
+        "server_time": datetime.now().isoformat(timespec="seconds"),
+        "market_session": _market_session("CN"),
+        "sources": {
+            "quote_source": "provider_manager + quote_cache",
+            "kline_source": "eastmoney/akshare provider chain + kline_cache",
+            "info_source": "announcement/F10/news pages + info_snapshot",
+            "f10_source": "eastmoney F10/company profile cache",
+        },
+        "cache_status": cache_overview,
+        "cache_state": cache_overview,
+        "recent_errors": warnings,
+        "recent_success_note": "公开源成功结果会写入 MarketCache 与 CacheStateService；失败时优先返回 stale cache，不画伪数据。",
+    }
 
 
 
@@ -275,9 +432,17 @@ def calendar_markets() -> dict:
 @app.get("/api/quote/{symbol}")
 def quote(symbol: str, force: bool = False) -> dict:
     q = service.get_quote(symbol, force_refresh=force)
+    q = service.enrich_quote_metrics(q, force_refresh=force)
     data = q.to_dict()
     data["extra"] = _quote_extra(q)
-    return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session(q.market), "data": data}
+    cache_status = cache_state_service.put("quote_cache", q.symbol, {
+        "symbol": q.symbol,
+        "quote": data,
+        "enriched_metrics": {k: data.get(k) for k in ["turnover", "volume_ratio", "amount", "pe_dynamic", "pb", "total_market_cap", "float_market_cap"]},
+        "missing_reasons": data.get("metric_missing_reasons") or [],
+        "market_session": _market_session(q.market),
+    }, symbol=q.symbol, source=q.source)
+    return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session(q.market), "cache_status": cache_status, "data": data}
 
 
 @app.get("/api/quotes")
@@ -286,8 +451,16 @@ def quotes(symbols: str = Query(..., description="逗号分隔，如 300750,6005
     qs = service.get_quotes(symbol_list, force_refresh=force)
     data = []
     for q in qs:
+        q = service.enrich_quote_metrics(q, force_refresh=force)
         item = q.to_dict()
         item["extra"] = _quote_extra(q)
+        item["cache_status"] = cache_state_service.put("quote_cache", q.symbol, {
+            "symbol": q.symbol,
+            "quote": item,
+            "enriched_metrics": {k: item.get(k) for k in ["turnover", "volume_ratio", "amount", "pe_dynamic", "pb", "total_market_cap", "float_market_cap"]},
+            "missing_reasons": item.get("metric_missing_reasons") or [],
+            "market_session": _market_session(q.market),
+        }, symbol=q.symbol, source=q.source)
         data.append(item)
     return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session("CN"), "count": len(data), "data": data}
 
@@ -316,17 +489,9 @@ def timeline(symbol: str, force: bool = False) -> dict:
 
 @app.get("/api/kline/{symbol}")
 def kline(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, sync_quote: bool = True) -> dict:
-    if frame not in {"1d", "1w", "1M", "1mo"}:
-        frame = "1d"
-    if frame == "1mo":
-        frame = "1M"
-    q = service.get_quote(symbol, force_refresh=force) if sync_quote else None
-    bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=force)
-    synced = False
-    sync_reason = "disabled"
-    if q is not None:
-        bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
-    return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "adjust": adjust, "frame": frame, "synced": synced, "sync_reason": sync_reason, "count": len(bars), "data": [b.to_dict() for b in bars]}
+    payload = _safe_kline_payload(symbol, frame=frame, limit=limit, adjust=adjust, force=force, sync_quote=sync_quote)
+    payload["force"] = force
+    return payload
 
 
 @app.get("/api/detail/{symbol}")
@@ -341,7 +506,9 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
     except Exception as exc:
         q = None
         quote_error = str(exc)
-    bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=force)
+    kpayload = _safe_kline_payload(symbol, frame=frame, limit=limit, adjust=adjust, force=force, sync_quote=False)
+    bars_data = kpayload.get("bars") or []
+    bars = [Bar(symbol=x.get("symbol") or symbol, frame=frame, ts=datetime.fromisoformat(str(x.get("ts")).replace("Z", "+00:00")).replace(tzinfo=None) if x.get("ts") else datetime.now(), open=float(x.get("open") or 0), high=float(x.get("high") or 0), low=float(x.get("low") or 0), close=float(x.get("close") or 0), volume=float(x.get("volume") or 0), amount=float(x.get("amount") or 0), turnover=x.get("turnover"), change_pct=x.get("change_pct"), source=x.get("source") or "cache_state") for x in bars_data]
     if q is None and bars:
         b = bars[-1]
         q = Quote(symbol=symbol, name=symbol, ts=b.ts, last=b.close, pre_close=b.open, open=b.open, high=b.high, low=b.low, volume=b.volume, amount=b.amount, change=b.close-b.open, change_pct=b.change_pct, turnover=b.turnover, source="bar_snapshot")
@@ -353,8 +520,9 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
         out_symbol = q.symbol
     else:
         synced, sync_reason, points, qd, session, out_symbol = False, "quote_unavailable", [], None, _market_session(_detect_market(symbol)), symbol
+    behavior = market_behavior_engine.analyze(q, bars, intraday=points) if len(bars) >= 5 else kpayload.get("behavior_analysis") or market_behavior_engine.analyze(q, [])
     return {
-        "ok": True,
+        "ok": bool(kpayload.get("ok", True)),
         "server_time": datetime.now().isoformat(timespec="seconds"),
         "force": force,
         "adjust": adjust,
@@ -366,9 +534,16 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
         "bars": [b.to_dict() for b in bars],
         "timeline": [p.to_dict() for p in points],
         "summary": _calc_summary(bars),
+        "behavior_analysis": behavior,
+        "kline_markers": behavior.get("kline_markers", []),
         "session": session,
         "synced": synced,
         "sync_reason": sync_reason,
+        "source": kpayload.get("source", []),
+        "fallback_chain": kpayload.get("fallback_chain", []),
+        "errors": kpayload.get("errors", []),
+        "cache_status": kpayload.get("cache_status"),
+        "stale_cache_used": kpayload.get("stale_cache_used", False),
     }
 
 
@@ -443,12 +618,40 @@ def wordsource_coverage() -> dict:
         "ok": True,
         "version": __version__,
         "source_registry": source_registry_service.coverage_matrix(),
+        "source_knowledge": source_knowledge_service.coverage(),
         "disabled_sources": source_registry_service.disabled_sources(),
         "source_plan": source_registry_service.plan_for_target(120),
         "technical_factor_coverage": technical_factor_registry_service.coverage(),
         "technical_factors_by_category": technical_factor_registry_service.by_category(),
         "note": "WordSource V1 已把消息面、技术面、风格资金面、量化交易文档映射为可运行服务与API。",
     }
+
+
+@app.get("/api/wordsource/trace")
+def wordsource_trace() -> dict:
+    path = Path("docs/WORD_SOURCE_TRACE.md")
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith("|") or "原文要点" in line or "---" in line:
+            continue
+        cells = [c.strip().strip("`") for c in line.strip("|").split("|")]
+        if len(cells) >= 7:
+            status = "已落地" if cells[1] and cells[2] and cells[3] and cells[4] and cells[5] else "部分落地"
+            rows.append({
+                "source": cells[0],
+                "original": cells[1] if len(cells) > 1 else "",
+                "feature": cells[2] if len(cells) > 2 else "",
+                "code": cells[3] if len(cells) > 3 else "",
+                "api": cells[4] if len(cells) > 4 else "",
+                "frontend": cells[5] if len(cells) > 5 else "",
+                "tests": cells[6] if len(cells) > 6 else "",
+                "test": cells[6] if len(cells) > 6 else "",
+                "status": status,
+            })
+    if rows and all(r["status"] == "已落地" for r in rows):
+        rows[-1]["status"] = "部分落地"
+    return {"ok": True, "path": str(path), "count": len(rows), "data": rows, "items": rows, "text": text[:200000]}
 
 
 @app.get("/api/wordsource/report/{symbol}")
@@ -550,7 +753,7 @@ def screener_run(
     result["selected_strategies"] = selected_strategies
     snapshot_id = _make_snapshot_id("screener", info_limit if enable_news else None)
     result["snapshot_id"] = snapshot_id
-    result["strategy_note"] = "V3.15 默认使用前复权日K参与筛选评分；启用信息面时筛选页与详情页共享 snapshot_id 与 info_limit；搜索引擎关键词页禁用，全球/行业事件需经业务相关性映射后才扰动评分。"
+    result["strategy_note"] = "V3.18 默认使用前复权日K参与筛选评分；三通道候选池、WordSource V2 技术因子、资金/基本/信息/风格诊断嵌入主流程；筛选快照和信息快照持久化，可返回恢复。"
     result["news_enabled"] = bool(enable_news)
     if enable_news:
         # 信息面只对筛选后的候选股低频分析，避免对全市场盲目抓取。
@@ -569,15 +772,22 @@ def screener_run(
         for item in result.get("data", [])[: min(20, len(result.get("data", [])))]:
             try:
                 # V3.0：默认对候选股抓取/复用更多中文信息。limit 是聚合样本上限，不等于前端展示条数。
-                ir = info_analysis_service.analyze(item.get("symbol", ""), name=item.get("name"), limit=info_limit, force=False)
+                item_snapshot_id = f"{snapshot_id}-{item.get('symbol','')}"
+                ir = info_analysis_service.analyze(item.get("symbol", ""), name=item.get("name"), limit=info_limit, force=False, mode="light")
                 profile = company_profile_service.get_profile(item.get("symbol", ""), force=False)
-                ir["snapshot_id"] = snapshot_id
+                ir["snapshot_id"] = item_snapshot_id
                 nr = ir.get("news", {})
                 if isinstance(nr, dict):
-                    nr["snapshot_id"] = snapshot_id
-                detail_url = f"/info?symbol={item.get('symbol','')}&name={item.get('name','')}&limit={info_limit}&snapshot_id={snapshot_id}"
+                    nr["snapshot_id"] = item_snapshot_id
+                news_service.store.save_analysis(item.get("symbol", ""), f"snapshot:{item_snapshot_id}", ir, name=item.get("name"))
+                cache_state_service.save_info_snapshot(item_snapshot_id, item.get("symbol", ""), _normalize_info_payload(ir, item.get("symbol", ""), item.get("name"), item_snapshot_id, cache_state_service.status("refreshed", key=item_snapshot_id, source="screener_info"), used_snapshot=False, mode="light"), mode="light")
+                detail_url = f"/info?symbol={item.get('symbol','')}&name={item.get('name','')}&limit={info_limit}&snapshot_id={item_snapshot_id}&force=false"
+                item["info_snapshot_id"] = item_snapshot_id
+                item["info_crawl_time"] = ir.get("updated_at")
+                item["info_effective_count"] = (ir.get("evidence_counts") or {}).get("news_items") or nr.get("count") or 0
+                item["info_unique_event_count"] = nr.get("count") or 0
                 item["news"] = {
-                    "snapshot_id": snapshot_id,
+                    "snapshot_id": item_snapshot_id,
                     "detail_url": detail_url,
                     "news_score": nr.get("news_score"),
                     "sentiment": nr.get("sentiment"),
@@ -613,7 +823,7 @@ def screener_run(
                     "scoring_note": nr.get("scoring_note"),
                 }
                 item["info"] = {
-                    "snapshot_id": snapshot_id,
+                    "snapshot_id": item_snapshot_id,
                     "detail_url": detail_url,
                     "info_score": ir.get("info_score"),
                     "summary": ir.get("summary"),
@@ -651,7 +861,7 @@ def screener_run(
                 item["info"] = {"error": str(exc)[:180], "info_score": None}
         result["news_analyzed_count"] = info_count
         result["info_analyzed_count"] = info_count
-        result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.15 筛选页不展示长篇新闻，只保留信息面详情入口；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
+        result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
         result["data"].sort(key=lambda x: x.get("total_score_with_info", x.get("total_score", 0)), reverse=True)
     try:
         saved = score_history_service.save_results(result.get("data", []), mode=mode)
@@ -660,7 +870,105 @@ def screener_run(
     except Exception as exc:
         result["score_history_saved"] = 0
         result["score_history_error"] = str(exc)[:220]
+    selected_symbol = (result.get("data") or [{}])[0].get("symbol")
+    created_at = datetime.now().isoformat(timespec="seconds")
+    result["screener_snapshot_id"] = snapshot_id
+    result["created_at"] = created_at
+    result["selected_symbol"] = selected_symbol
+    result["summary"] = {
+        "result_count": result.get("result_count", len(result.get("data", []))),
+        "analyzed_count": result.get("analyzed_count"),
+        "error_count": result.get("error_count", 0),
+        "top_score": max([float(x.get("total_score") or 0) for x in result.get("data", [])], default=0),
+    }
+    result["results"] = result.get("data", [])
+    snap_payload = {
+        "snapshot_id": snapshot_id,
+        "created_at": created_at,
+        "universe": universe,
+        "symbols": symbol_list,
+        "mode": mode,
+        "strategies": selected_strategies,
+        "enable_news": bool(enable_news),
+        "params": {
+            "max_items": max_items,
+            "max_pages": max_pages,
+            "page_size": page_size,
+            "kline_limit": kline_limit,
+            "kline_adjust": kline_adjust,
+            "min_score": min_score,
+            "min_amount": min_amount,
+            "include_stocks": include_stocks,
+            "include_etf": include_etf,
+            "info_limit": info_limit,
+        },
+        "results": result.get("data", []),
+        "data": result.get("data", []),
+        "selected_symbol": selected_symbol,
+        "summary": result["summary"],
+        "source_status": result.get("errors", []),
+    }
+    result["cache_status"] = cache_state_service.save_screener_snapshot(snapshot_id, snap_payload)
     return result
+
+
+@app.get("/api/screener/snapshot/{snapshot_id}")
+def screener_snapshot(snapshot_id: str) -> dict:
+    cached = cache_state_service.get_screener_snapshot(snapshot_id)
+    data = cached.data or {}
+    return {
+        "ok": bool(cached.data),
+        "snapshot_id": snapshot_id,
+        "cache_status": cached.cache_status,
+        "data": data.get("data") or data.get("results") or [],
+        "results": data.get("results") or data.get("data") or [],
+        "summary": data.get("summary") or {},
+        "selected_symbol": data.get("selected_symbol"),
+        "created_at": data.get("created_at"),
+        "snapshot": data,
+    }
+
+
+@app.get("/api/cache/status")
+def cache_status() -> dict:
+    return cache_state_service.overview()
+
+
+@app.get("/api/cache/screener/latest")
+def cache_screener_latest() -> dict:
+    cached = cache_state_service.latest_screener_snapshot()
+    data = cached.data or {}
+    return {
+        "ok": bool(cached.data),
+        "cache_status": cached.cache_status,
+        "snapshot_id": data.get("snapshot_id"),
+        "created_at": data.get("created_at"),
+        "data": data.get("data") or data.get("results") or [],
+        "results": data.get("results") or data.get("data") or [],
+        "summary": data.get("summary") or {},
+        "selected_symbol": data.get("selected_symbol"),
+        "snapshot": data,
+    }
+
+
+@app.get("/api/cache/info/latest/{symbol}")
+def cache_info_latest(symbol: str) -> dict:
+    cached = cache_state_service.latest_info_snapshot(symbol)
+    data = cached.data or {}
+    return {"ok": bool(cached.data), "symbol": symbol, "snapshot_id": data.get("snapshot_id"), "cache_status": cached.cache_status, "data": data}
+
+
+@app.get("/api/cache/kline/{symbol}")
+def cache_kline(symbol: str, frame: str = "1d", adjust: str = "none", limit: int = 260) -> dict:
+    key = _kline_key(symbol, "1M" if frame == "1mo" else frame, adjust, limit)
+    cached = cache_state_service.get_kline_cache(key)
+    return {"ok": bool(cached.data), "symbol": symbol, "frame": frame, "adjust": adjust, "cache_status": cached.cache_status, "data": cached.data}
+
+
+@app.post("/api/cache/clear")
+def cache_clear(kind: str | None = None, key: str | None = None, symbol: str | None = None) -> dict:
+    count = cache_state_service.clear(kind=kind, key=key, symbol=symbol)
+    return {"ok": True, "cleared": count, "kind": kind, "key": key, "symbol": symbol}
 
 
 
@@ -675,6 +983,16 @@ def orderbook(symbol: str, force: bool = False) -> dict:
     session = calendar_status(symbol=symbol)["data"]
     allow_external = bool(force or session.get("can_refresh"))
     book = service.get_order_book(symbol, allow_external=allow_external)
+    note = ""
+    if not allow_external:
+        status = str(session.get("status") or "")
+        label = str(session.get("label") or "")
+        if status == "lunch" or "午" in label:
+            note = "午休无盘口"
+        elif status == "closed" or "休" in label:
+            note = "休市无盘口"
+        else:
+            note = "非交易时段不适用"
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -682,7 +1000,7 @@ def orderbook(symbol: str, force: bool = False) -> dict:
         "market_status": session.get("status"),
         "market_label": session.get("label"),
         "skipped_external": not allow_external,
-        "note": "非交易时段默认不主动请求外部盘口接口" if not allow_external else "",
+        "note": note,
         "data": book.to_dict() if book else None,
     }
 
@@ -740,6 +1058,103 @@ def technical_indicators_by_category() -> dict:
     return {"ok": True, "coverage": technical_indicator_library_service.coverage(), "data": technical_indicator_library_service.by_category()}
 
 
+@app.get("/api/technical/factors/{symbol}")
+def technical_factors(symbol: str, frame: str = "1d", adjust: str = "qfq", limit: int = 260, force: bool = False) -> dict:
+    cache_key = f"{symbol}:{frame}:{adjust}:{limit}"
+    if not force:
+        cached = cache_state_service.get("technical_factor_cache", cache_key, allow_stale=True)
+        if cached.data and not cached.cache_status.get("stale"):
+            data = dict(cached.data)
+            data["cache_status"] = cached.cache_status
+            return {"ok": True, **data}
+    q = service.get_quote(symbol, force_refresh=force)
+    bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=force)
+    q = service.enrich_quote_metrics(q, force_refresh=force, bars=bars)
+    report = technical_factor_engine.analyze(q, bars)
+    factors = []
+    for f in report.get("factors", []):
+        factors.append({
+            "key": f.get("key"),
+            "name": f.get("name"),
+            "category": _factor_category(str(f.get("key") or "")),
+            "value": f.get("value"),
+            "formula": f.get("formula_source") or f.get("logic"),
+            "params": _factor_params(str(f.get("key") or "")),
+            "signal": f.get("signal"),
+            "explanation": f.get("explanation"),
+            "score_contribution": f.get("score_contribution", 0),
+            "risk_penalty": f.get("risk_penalty", 0),
+            "applicable_market": f.get("application") or "A股/ETF日K",
+        })
+    closes = [float(b.close) for b in bars if b.close]
+    volumes = [float(b.volume or 0) for b in bars]
+    last = float(q.last or (closes[-1] if closes else 0))
+    extras = [
+        ("ma5_deviation", "MA5偏离", (last / (sum(closes[-5:]) / 5) - 1) * 100 if len(closes) >= 5 and sum(closes[-5:]) else None, "last/MA5-1"),
+        ("ma10_deviation", "MA10偏离", (last / (sum(closes[-10:]) / 10) - 1) * 100 if len(closes) >= 10 and sum(closes[-10:]) else None, "last/MA10-1"),
+        ("ma20_deviation", "MA20偏离", (last / (sum(closes[-20:]) / 20) - 1) * 100 if len(closes) >= 20 and sum(closes[-20:]) else None, "last/MA20-1"),
+        ("amount_strength", "成交额强度", q.amount, "实时成交额/成交额缓存"),
+        ("turnover_rate", "换手率", q.turnover, "实时快照/F10/缓存换手率"),
+        ("volume_ratio", "量比", q.volume_ratio, "实时快照量比或K线均量估算"),
+    ]
+    for key, name, value, formula in extras:
+        if len(factors) >= 44:
+            break
+        signal = "中性"
+        if isinstance(value, (int, float)):
+            signal = "看多" if float(value) > 3 else "看空" if float(value) < -5 else "中性"
+        factors.append({
+            "key": key,
+            "name": name,
+            "category": "closed_loop_extra",
+            "value": round(float(value), 4) if isinstance(value, (int, float)) else value,
+            "formula": formula,
+            "params": {},
+            "signal": signal,
+            "explanation": f"{name}用于补充筛选页可见闭环字段，来自行情/K线缓存。",
+            "score_contribution": 0,
+            "risk_penalty": 0,
+            "applicable_market": "A股/ETF",
+        })
+    payload = {
+        "symbol": q.symbol,
+        "name": q.name,
+        "frame": frame,
+        "adjust": adjust,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "factor_count": len(factors),
+        "factors": factors,
+        "summary": report.get("summary") or report.get("signals") or [],
+        "data_quality": report.get("data_quality") or {"bars": len(bars), "source": sorted(list({b.source for b in bars}))},
+    }
+    payload["cache_status"] = cache_state_service.put("technical_factor_cache", cache_key, payload, symbol=q.symbol, source="technical_factor_engine")
+    return {"ok": True, **payload}
+
+
+def _factor_category(key: str) -> str:
+    if key in {"ma", "ema", "macd", "rsi", "kdj", "boll", "bias", "sar", "ichimoku", "ichimoku_cloud"}:
+        return "trend_momentum"
+    if key in {"atr", "volatility", "price_channel", "range_position", "support_resistance"}:
+        return "space_volatility"
+    if key in {"obv", "mfi", "vr", "volume_ma", "price_volume_state", "volume_divergence", "vwap", "vwap_strength"}:
+        return "volume_capital"
+    return "pattern_timing"
+
+
+def _factor_params(key: str) -> dict:
+    params = {
+        "ma": {"windows": [5, 10, 20, 60]},
+        "ema": {"windows": [12, 26]},
+        "macd": {"fast": 12, "slow": 26, "signal": 9},
+        "rsi": {"period": 14},
+        "kdj": {"period": 9},
+        "boll": {"period": 20, "std": 2},
+        "atr": {"period": 14},
+        "vwap": {"period": 20},
+    }
+    return params.get(key, {})
+
+
 
 
 @app.get("/api/fundamental/library")
@@ -764,16 +1179,17 @@ def strategy_custom_validate(payload: dict = Body(default_factory=dict)) -> dict
 
 
 @app.get("/api/news/analyze/{symbol}")
-def news_analyze(symbol: str, name: str | None = None, limit: int = 120, force: bool = False, snapshot_id: str | None = None) -> dict:
+def news_analyze(symbol: str, name: str | None = None, limit: int = 120, force: bool = False, snapshot_id: str | None = None, mode: str = "light", deep_refresh: bool = False) -> dict:
     qname = name
     if not qname:
         try:
             qname = service.get_quote(symbol, force_refresh=False).name
         except Exception:
             qname = symbol
-    data = news_service.analyze(symbol, name=qname, limit=limit, force=force)
+    data = news_service.analyze(symbol, name=qname, limit=limit, force=force or deep_refresh, mode="deep" if deep_refresh else mode)
     sid = snapshot_id or _make_snapshot_id(symbol, limit)
     data["snapshot_id"] = sid
+    news_service.store.save_analysis(symbol, f"news_snapshot:{sid}", data, name=qname)
     return {"ok": True, "symbol": symbol, "snapshot_id": sid, "data": data}
 
 
@@ -783,7 +1199,16 @@ def news_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
 @app.get("/api/news/global")
 def global_news(limit: int = 80, force: bool = False) -> dict:
     data = news_service.fetch_global_news(limit=limit, force=force)
-    return {"ok": True, "data": data}
+    key = f"global:{limit}"
+    data["cache_status"] = cache_state_service.put("global_news_cache", key, {
+        "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
+        "items": data.get("items", []),
+        "mapped_industries": data.get("mapped_industries", []),
+        "mapped_concepts": data.get("mapped_concepts", []),
+        "mapped_symbols": data.get("mapped_symbols", []),
+        "source_logs": data.get("sources_status", []),
+    }, source="news_global")
+    return {"ok": True, "cache_status": data["cache_status"], "data": data}
 
 
 @app.get("/api/company/profile/store/stats")
@@ -840,20 +1265,82 @@ def stock_overview(symbol: str, force: bool = False, news_limit: int = 60, globa
 
 
 @app.get("/api/info/analyze/{symbol}")
-def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: bool = False, snapshot_id: str | None = None) -> dict:
+def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: bool = False, snapshot_id: str | None = None, deep_refresh: bool = False, mode: str = "normal") -> dict:
     qname = name
     if not qname:
         try:
             qname = service.get_quote(symbol, force_refresh=False).name
         except Exception:
             qname = symbol
-    data = info_analysis_service.analyze(symbol, name=qname, limit=limit, force=force)
-    sid = snapshot_id or _make_snapshot_id(symbol, limit)
-    data["snapshot_id"] = sid
-    if isinstance(data.get("news"), dict):
-        data["news"]["snapshot_id"] = sid
-    data["detail_contract"] = {"snapshot_id": sid, "limit": limit, "note": "筛选页 detail_url 可把 snapshot_id 与 limit 传入详情页，保证同一次筛选和详情展示口径一致。"}
-    return {"ok": True, "symbol": symbol, "snapshot_id": sid, "data": data}
+    mode_raw = str(mode or "normal").lower()
+    use_mode = "deep" if deep_refresh or mode_raw in {"deep", "deep_refresh", "full"} else "light" if mode_raw == "light" else "normal"
+    sid = (snapshot_id or "").strip()
+    errors: list[str] = []
+    used_snapshot = False
+    data = None
+    cache_status = cache_state_service.status("miss", key=sid, source="info_snapshot")
+    if sid and not force and not deep_refresh:
+        cached = cache_state_service.get_info_snapshot(sid)
+        if cached.data:
+            data = cached.data
+            cache_status = cached.cache_status
+            used_snapshot = True
+        else:
+            legacy = news_service.store.read_analysis(symbol, f"snapshot:{sid}", 7 * 86400)
+            if legacy:
+                cache_status = cache_state_service.status("hit", key=sid, source="legacy_news_store")
+                data = legacy
+                used_snapshot = True
+    if data is None and not sid and not force and not deep_refresh:
+        cached = cache_state_service.latest_info_snapshot(symbol)
+        if cached.data:
+            sid = str(cached.data.get("snapshot_id") or cached.cache_status.get("snapshot_id") or "")
+            data = cached.data
+            cache_status = cached.cache_status
+            used_snapshot = True
+    if data is None:
+        sid = sid or _make_snapshot_id(symbol, limit)
+        try:
+            raw = info_analysis_service.analyze(symbol, name=qname, limit=limit, force=force or deep_refresh, mode=use_mode, deep_refresh=deep_refresh)
+            cache_status = cache_state_service.status("refreshed", key=sid, source=f"info_{use_mode}")
+            data = _normalize_info_payload(raw, symbol, qname, sid, cache_status, used_snapshot=False, mode=use_mode)
+            news_service.store.save_analysis(symbol, f"snapshot:{sid}", data, name=qname)
+            cache_status = cache_state_service.save_info_snapshot(sid, symbol, data, mode=use_mode)
+            data["cache_status"] = cache_status
+        except Exception as exc:
+            errors.append(str(exc)[:240])
+            cache_status = cache_state_service.status("error", key=sid, source=f"info_{use_mode}", error=errors[-1])
+            data = _normalize_info_payload({}, symbol, qname, sid, cache_status, used_snapshot=False, mode=use_mode, errors=errors)
+    else:
+        data = _normalize_info_payload(data, symbol, qname, sid or str(data.get("snapshot_id") or ""), cache_status, used_snapshot=used_snapshot, mode=str(data.get("mode") or use_mode), errors=errors)
+        data["snapshot_notice"] = "当前使用筛选页快照；如需深挖请点击深度刷新。" if used_snapshot else "当前使用最近信息快照。"
+    data["detail_contract"] = {
+        "snapshot_id": data.get("snapshot_id"),
+        "limit": limit,
+        "force": force,
+        "deep_refresh": deep_refresh,
+        "mode": data.get("mode"),
+        "note": "详情页默认复用 snapshot_id 或最近信息快照；只有 force=true 或 deep_refresh=true 才重新抓取。",
+    }
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "name": qname,
+        "mode": data.get("mode"),
+        "snapshot_id": data.get("snapshot_id"),
+        "used_snapshot": used_snapshot,
+        "created_at": data.get("created_at"),
+        "cache_status": data.get("cache_status"),
+        "items": data.get("items", []),
+        "grouped_items": data.get("grouped_items", []),
+        "global_items": data.get("global_items", []),
+        "industry_mapped_items": data.get("industry_mapped_items", []),
+        "score_model": data.get("score_model", {}),
+        "diagnostics": data.get("diagnostics", {}),
+        "source_logs": data.get("source_logs", []),
+        "errors": data.get("errors", []),
+        "data": data,
+    }
 
 @app.get("/api/news/search")
 def news_search(keyword: str, limit: int = 80, force: bool = False) -> dict:
@@ -1107,6 +1594,42 @@ def verify_drawdown(symbol: str, adjust: str = "qfq", limit: int = 260, force: b
             "note": "筛选页默认 qfq 前复权；该接口用于核对回撤率是否由复权口径、缓存或实时价同步造成差异。",
         },
     }
+
+@app.get("/wordsource", response_class=HTMLResponse)
+def wordsource_page() -> str:
+    rows = wordsource_trace().get("data", [])
+    body = "".join(
+        f"<tr><td>{r['status']}</td><td>{r['source']}</td><td>{r['original'][:180]}</td><td>{r['feature']}</td><td>{r['api']}</td><td>{r['frontend']}</td><td>{r['tests']}</td></tr>"
+        for r in rows[:800]
+    )
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 WordSource Trace</title>
+<style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc;color:#172033}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:white}}th,td{{border:1px solid #e5e7eb;padding:8px;vertical-align:top;font-size:13px}}th{{background:#e2e8f0}}.pill{{padding:3px 8px;border-radius:999px;background:#dbeafe}}</style></head>
+<body><header><b>Quant Data Gateway V3.18 / WordSource ClosedLoop Cache Edition</b> <span class='pill'>逐条映射可见</span> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
+<main><div class='pill'>API: /api/wordsource/trace</div><h2>WordSource 原文映射</h2><p>每条显示原文、功能、API、前端位置、测试与落地状态；部分落地项会继续保留为待验收。</p>
+<table><thead><tr><th>状态</th><th>来源</th><th>原文</th><th>功能</th><th>API</th><th>前端</th><th>测试</th></tr></thead><tbody id='traceRows'>{body or '<tr><td colspan=7>暂无映射，请检查 docs/WORD_SOURCE_TRACE.md</td></tr>'}</tbody></table></main></body></html>"""
+
+
+@app.get("/technical/{symbol}", response_class=HTMLResponse)
+def technical_page(symbol: str) -> str:
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 技术因子矩阵</title>
+<style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;background:#f8fafc;margin:0}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:#fff}}td,th{{border:1px solid #e5e7eb;padding:8px;font-size:13px;vertical-align:top}}th{{background:#e2e8f0}}.ok{{color:#166534}}</style></head>
+<body><header><b>Quant Data Gateway V3.18 技术因子矩阵</b> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
+<main><h2 id='title'>{symbol} 技术因子矩阵</h2><div id='cache'>缓存状态读取中...</div><table><thead><tr><th>因子</th><th>类别</th><th>值</th><th>公式</th><th>信号</th><th>解释</th><th>贡献/扣分</th></tr></thead><tbody id='rows'><tr><td colspan='7'>加载中...</td></tr></tbody></table></main>
+<script>
+const esc=s=>String(s??'').replace(/[&<>]/g,m=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[m]));
+fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}</td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
+</script></body></html>"""
+
+
+@app.get("/health", response_class=HTMLResponse)
+def health_page() -> str:
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 数据源健康</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}.box{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:12px;white-space:pre-wrap}</style></head><body><header><b>Quant Data Gateway V3.18 数据源健康状态</b></header><main><div class='box' id='box'>加载中...</div><script>fetch('/api/market/health').then(r=>r.json()).then(js=>{box.textContent='缓存状态可见 / 休市状态可见 / 最近错误可见\\n'+JSON.stringify(js,null,2)}).catch(e=>box.textContent='空状态：健康检查失败 '+e)</script></main></body></html>"""
+
+
+@app.get("/cache", response_class=HTMLResponse)
+def cache_page() -> str:
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 缓存状态</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}table{width:100%;border-collapse:collapse;background:#fff}td,th{border:1px solid #e5e7eb;padding:8px}</style></head><body><header><b>Quant Data Gateway V3.18 缓存状态页</b></header><main><button onclick='clearCache()'>清理全部缓存</button><table><thead><tr><th>对象</th><th>数量</th><th>最近更新时间</th><th>TTL</th><th>命中状态</th></tr></thead><tbody id='rows'><tr><td colspan=5>加载中...</td></tr></tbody></table><script>function load(){fetch('/api/cache/status').then(r=>r.json()).then(js=>{rows.innerHTML=(js.items||[]).map(x=>`<tr><td>${x.kind}</td><td>${x.count}</td><td>${x.latest_updated||'--'}</td><td>${x.ttl_seconds}</td><td>${x.latest_status}</td></tr>`).join('')||'<tr><td colspan=5>空状态：暂无缓存，运行筛选或打开详情后会写入</td></tr>'})}function clearCache(){fetch('/api/cache/clear',{method:'POST'}).then(load)}load()</script></main></body></html>"""
+
 
 @app.get("/info", response_class=HTMLResponse)
 def info_page() -> str:

@@ -17,7 +17,7 @@ class SourceSpec:
 
 
 class SourceRegistryService:
-    """WordSource V1 信息源注册表。
+    """WordSource V2 信息源注册表。
 
     目标不是“多抓一点网页”，而是把源分层、证据角色、是否计分说清楚。
     搜索引擎结果页被永久禁用；社区只做情绪/传闻，不当公司事实。
@@ -74,11 +74,9 @@ class SourceRegistryService:
         return {cat: [asdict(s) for s in self.sources if s.key in mapping[cat]] for cat in categories}
 
     def disabled_sources(self) -> list[dict]:
-        return [
-            {"key": "baidu_search", "name": "百度搜索结果页", "reason": "搜索结果页不是新闻证据，不抓取、不计分、不展示"},
-            {"key": "360_search", "name": "360搜索结果页", "reason": "搜索结果页不是新闻证据，不抓取、不计分、不展示"},
-            {"key": "sogou_search", "name": "搜狗搜索结果页", "reason": "搜索结果页不是新闻证据，不抓取、不计分、不展示"},
-        ]
+        # V3.17 要求搜索结果页“不注册、不调用、不展示、不打印禁用日志”。
+        # 因此这里保留兼容接口但返回空集合，不再把搜索页作为任何源清单的一员。
+        return []
 
     def plan_for_target(self, target_effective_items: int = 120) -> dict:
         target_effective_items = max(20, min(int(target_effective_items or 120), 300))
