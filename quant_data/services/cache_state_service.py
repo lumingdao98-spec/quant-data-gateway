@@ -71,6 +71,21 @@ class CacheStateService:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_state_kind_updated ON cache_state(kind, updated_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_state_symbol_updated ON cache_state(kind, symbol, updated_at DESC)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cache_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    key TEXT DEFAULT '',
+                    event TEXT NOT NULL,
+                    status TEXT DEFAULT '',
+                    reason TEXT DEFAULT '',
+                    source TEXT DEFAULT '',
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_events_kind_created ON cache_events(kind, created_at DESC)")
 
     def ttl_for(self, kind: str, ttl_seconds: int | None = None) -> int:
         return int(ttl_seconds if ttl_seconds is not None else DEFAULT_TTLS.get(kind, 30 * 60))
@@ -90,6 +105,16 @@ class CacheStateService:
             "error": error,
         }
 
+    def _record_event(self, kind: str, key: str, event: str, status: str = "", reason: str = "", source: str = "") -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO cache_events(kind,key,event,status,reason,source,created_at) VALUES(?,?,?,?,?,?,?)",
+                    (kind, key or "", event, status or "", reason or "", source or "", time.time()),
+                )
+        except Exception:
+            pass
+
     def put(self, kind: str, key: str, payload: dict[str, Any], *, ttl_seconds: int | None = None, symbol: str = "", source: str = "") -> dict[str, Any]:
         ttl = self.ttl_for(kind, ttl_seconds)
         now = time.time()
@@ -103,6 +128,7 @@ class CacheStateService:
                 VALUES(?,?,?,?,?,?,?,?)
                 ON CONFLICT(kind,key) DO UPDATE SET
                     symbol=excluded.symbol,
+                    created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
                     ttl_seconds=excluded.ttl_seconds,
                     source=excluded.source,
@@ -110,25 +136,31 @@ class CacheStateService:
                 """,
                 (kind, key, symbol or "", now, now, ttl, source, json.dumps(data, ensure_ascii=False, default=_json_default)),
             )
+        self._record_event(kind, key, "write", "refreshed", source=source)
         return self.status("refreshed", key=key, created_at=now, ttl_seconds=ttl, source=source)
 
     def get(self, kind: str, key: str, *, allow_stale: bool = True, ttl_seconds: int | None = None) -> CacheRead:
         if not key:
+            self._record_event(kind, key, "read", "miss", "empty_key", "cache_state")
             return CacheRead(None, self.status("miss", key=key, ttl_seconds=self.ttl_for(kind, ttl_seconds), source="cache_state"))
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM cache_state WHERE kind=? AND key=?", (kind, key)).fetchone()
         if not row:
+            self._record_event(kind, key, "read", "miss", "not_found", "cache_state")
             return CacheRead(None, self.status("miss", key=key, ttl_seconds=self.ttl_for(kind, ttl_seconds), source="cache_state"))
         ttl = int(ttl_seconds if ttl_seconds is not None else row["ttl_seconds"])
         created_at = float(row["created_at"])
         stale = time.time() - created_at > ttl
         state = "stale" if stale else "hit"
         if stale and not allow_stale:
+            self._record_event(kind, key, "read", "miss", "stale_not_allowed", row["source"])
             return CacheRead(None, self.status("miss", key=key, created_at=created_at, ttl_seconds=ttl, source=row["source"]))
         try:
             payload = json.loads(row["payload"])
         except Exception as exc:
+            self._record_event(kind, key, "read", "error", str(exc), row["source"])
             return CacheRead(None, self.status("error", key=key, created_at=created_at, ttl_seconds=ttl, source=row["source"], error=str(exc)))
+        self._record_event(kind, key, "read", state, "ttl_expired" if stale else "", row["source"])
         return CacheRead(payload, self.status(state, key=key, created_at=created_at, ttl_seconds=ttl, source=row["source"]))
 
     def latest(self, kind: str, *, symbol: str = "", allow_stale: bool = True, ttl_seconds: int | None = None) -> CacheRead:
@@ -141,6 +173,7 @@ class CacheStateService:
         with self._connect() as conn:
             row = conn.execute(sql, params).fetchone()
         if not row:
+            self._record_event(kind, "", "read", "miss", "latest_not_found", "cache_state")
             return CacheRead(None, self.status("miss", ttl_seconds=self.ttl_for(kind, ttl_seconds), source="cache_state"))
         return self.get(kind, row["key"], allow_stale=allow_stale, ttl_seconds=ttl_seconds)
 
@@ -171,8 +204,18 @@ class CacheStateService:
                 FROM cache_state GROUP BY kind ORDER BY kind
                 """
             ).fetchall()
+            events = conn.execute(
+                """
+                SELECT * FROM cache_events
+                WHERE id IN (SELECT MAX(id) FROM cache_events GROUP BY kind,event,status)
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
         now = time.time()
         by_kind = {r["kind"]: r for r in rows}
+        event_map: dict[str, dict[str, sqlite3.Row]] = {}
+        for e in events:
+            event_map.setdefault(e["kind"], {})[f"{e['event']}:{e['status']}"] = dict(e)
         items = []
         all_kinds = list(DEFAULT_TTLS)
         for kind in sorted(set(all_kinds) | set(by_kind)):
@@ -198,6 +241,11 @@ class CacheStateService:
                 "ttl_seconds": ttl,
                 "latest_age_seconds": round(age, 2) if age is not None else None,
                 "latest_status": status,
+                "last_write_key": (event_map.get(kind, {}).get("write:refreshed") or {}).get("key"),
+                "last_read_key": next((e.get("key") for k, e in event_map.get(kind, {}).items() if k.startswith("read:")), None),
+                "recent_miss_reason": next((e.get("reason") for k, e in event_map.get(kind, {}).items() if k.startswith("read:miss")), None),
+                "recent_error": next((e.get("reason") for k, e in event_map.get(kind, {}).items() if k.startswith("read:error")), None),
+                "diagnostic": self._diagnostic_for(kind, count, status, event_map.get(kind, {})),
             })
         return {
             "ok": True,
@@ -206,6 +254,20 @@ class CacheStateService:
             "default_ttls": DEFAULT_TTLS,
             "cache_status": self.status("hit" if rows else "miss", source="cache_state_overview"),
         }
+
+    def _diagnostic_for(self, kind: str, count: int, status: str, events: dict[str, Any]) -> str:
+        if count == 0:
+            if kind == "kline_cache":
+                miss = next((e.get("reason") for k, e in events.items() if k.startswith("read:miss")), None)
+                return f"尚无K线缓存；最近一次K线请求未写入或失败：{miss or '尚未请求'}"
+            if kind == "quote_cache":
+                return "尚无行情补齐缓存；打开行情、详情或筛选后会写入。"
+            return "暂无缓存；对应页面/API运行后会写入。"
+        if kind == "quote_cache" and status == "stale":
+            return "quote_cache 已过期；休市时允许使用 stale 并标注，交易时段会先尝试刷新。"
+        if status == "stale":
+            return "缓存已过期；页面仍可显示旧结果，并提示可刷新。"
+        return "缓存可用。"
 
     def save_screener_snapshot(self, snapshot_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.put("screener_snapshot", snapshot_id, payload, symbol="", source="screener_run")

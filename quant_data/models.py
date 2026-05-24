@@ -96,6 +96,8 @@ class Quote:
     total_share: float | None = None       # 总股本，股
     float_share: float | None = None       # 流通股本，股
     metric_missing_reasons: list[str] | None = None
+    market_cap_style: str | None = None
+    metric_sources: dict | None = None
     order_ratio: float | None = None       # 委比，当前公开源可能为空
     order_diff: float | None = None        # 委差，当前公开源可能为空
     market: str = "CN"

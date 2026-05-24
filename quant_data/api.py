@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from quant_data import __version__
 from quant_data.market_calendar import MarketCalendar
-from quant_data.models import Bar, IntradayPoint, Quote
+from quant_data.models import AssetType, Bar, IntradayPoint, Quote
 from quant_data.services.market_data_service import MarketDataService
 from quant_data.services.screener_service import ScreenerConfig, ScreenerService
 from quant_data.services.watchlist_service import WatchlistService
@@ -114,8 +114,138 @@ def _now_cn() -> datetime:
     return datetime.fromisoformat(_market_session("CN")["now"])
 
 
-def _kline_key(symbol: str, frame: str, adjust: str, limit: int) -> str:
-    return f"{symbol}:{frame}:{adjust}:{int(limit or 260)}"
+def _kline_key(symbol: str, frame: str, adjust: str, limit: int | None = None) -> str:
+    return f"{symbol}:{frame}:{adjust or 'none'}"
+
+
+def _market_cap_style(cap: float | None) -> str | None:
+    value = _safe_float(cap)
+    if value <= 0:
+        return None
+    if value < 5_000_000_000:
+        return "微盘"
+    if value < 20_000_000_000:
+        return "小盘"
+    if value < 100_000_000_000:
+        return "中盘"
+    if value < 500_000_000_000:
+        return "大盘"
+    return "超大盘"
+
+
+def _quote_from_dict(data: dict | None) -> Quote | None:
+    if not isinstance(data, dict) or not data.get("symbol"):
+        return None
+    try:
+        ts_raw = data.get("ts") or datetime.now().isoformat(timespec="seconds")
+        ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        ts = datetime.now()
+    try:
+        asset_type = AssetType(str(data.get("asset_type") or "stock"))
+    except Exception:
+        asset_type = AssetType.UNKNOWN
+    return Quote(
+        symbol=str(data.get("symbol")),
+        name=str(data.get("name") or data.get("symbol")),
+        ts=ts,
+        last=_safe_float(data.get("last")),
+        pre_close=_safe_float(data.get("pre_close")),
+        open=_safe_float(data.get("open")),
+        high=_safe_float(data.get("high")),
+        low=_safe_float(data.get("low")),
+        volume=_safe_float(data.get("volume")),
+        amount=_safe_float(data.get("amount")),
+        change=_safe_float(data.get("change")),
+        change_pct=_safe_float(data.get("change_pct")),
+        turnover=data.get("turnover_rate") if data.get("turnover") is None else data.get("turnover"),
+        amplitude=data.get("amplitude"),
+        pe_dynamic=data.get("pe_ttm") if data.get("pe_dynamic") is None else data.get("pe_dynamic"),
+        pb=data.get("pb"),
+        volume_ratio=data.get("volume_ratio"),
+        total_market_cap=data.get("total_market_cap"),
+        float_market_cap=data.get("float_market_cap"),
+        circulating_market_cap=data.get("circulating_market_cap"),
+        total_share=data.get("total_share"),
+        float_share=data.get("float_share"),
+        metric_missing_reasons=data.get("metric_missing_reasons") or [],
+        market_cap_style=data.get("market_cap_style"),
+        metric_sources=data.get("metric_sources") or {},
+        order_ratio=data.get("order_ratio"),
+        order_diff=data.get("order_diff"),
+        market=str(data.get("market") or "CN"),
+        asset_type=asset_type,
+        source=str(data.get("source") or "quote_cache"),
+    )
+
+
+def _merge_quote_from_cache(q: Quote, cached_q: Quote | None, cache_status: dict | None = None) -> Quote:
+    if cached_q is None:
+        return q
+    fields = [
+        "turnover", "volume_ratio", "amount", "pe_dynamic", "pb", "total_market_cap",
+        "float_market_cap", "circulating_market_cap", "total_share", "float_share",
+        "market_cap_style", "metric_sources",
+    ]
+    updates = {}
+    for field in fields:
+        current = getattr(q, field, None)
+        cached = getattr(cached_q, field, None)
+        if current in (None, 0, "", {}) and cached not in (None, 0, "", {}):
+            updates[field] = cached
+    reasons = list(q.metric_missing_reasons or [])
+    if cache_status and cache_status.get("stale") and updates:
+        reasons.append("quote_cache stale used")
+    if updates or reasons:
+        updates["metric_missing_reasons"] = list(dict.fromkeys(reasons))
+        updates["source"] = f"{q.source}+quote_cache" if updates else q.source
+        return replace(q, **updates)
+    return q
+
+
+def _quote_dict_with_aliases(q: Quote, cache_status: dict | None = None) -> dict:
+    data = q.to_dict()
+    data["turnover_rate"] = data.get("turnover")
+    data["pe_ttm"] = data.get("pe_dynamic")
+    data["circulating_market_cap"] = data.get("circulating_market_cap") or data.get("float_market_cap")
+    data["market_cap_style"] = data.get("market_cap_style") or _market_cap_style(data.get("float_market_cap") or data.get("total_market_cap")) or "未知"
+    sources = dict(data.get("metric_sources") or {})
+    for field in ["turnover_rate", "volume_ratio", "amount", "pe_ttm", "pb", "total_market_cap", "float_market_cap", "total_share", "float_share"]:
+        if data.get(field) not in (None, 0, ""):
+            sources.setdefault(field, q.source or "quote_snapshot")
+    data["metric_sources"] = sources
+    if cache_status:
+        data["quote_cache_status"] = cache_status
+    return data
+
+
+def _enrich_quote_real(symbol: str, *, force: bool = False, quote_obj: Quote | None = None, bars: list[Bar] | None = None) -> tuple[Quote, dict, dict]:
+    q = quote_obj
+    cache_read = cache_state_service.get("quote_cache", symbol, allow_stale=True)
+    cached_q = _quote_from_dict((cache_read.data or {}).get("quote") if cache_read.data else None)
+    if q is None:
+        try:
+            q = service.get_quote(symbol, force_refresh=force)
+        except Exception:
+            if cached_q is None:
+                raise
+            q = cached_q
+    q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status)
+    q = service.enrich_quote_metrics(q, force_refresh=force, bars=bars)
+    q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status)
+    if cached_q is not None and cache_read.cache_status.get("stale"):
+        q = replace(q, metric_missing_reasons=list(dict.fromkeys((q.metric_missing_reasons or []) + ["quote_cache stale used"])))
+    data = _quote_dict_with_aliases(q, cache_read.cache_status if cached_q else None)
+    cache_status = cache_state_service.put("quote_cache", q.symbol, {
+        "symbol": q.symbol,
+        "quote": data,
+        "enriched_metrics": {k: data.get(k) for k in ["turnover_rate", "volume_ratio", "amount", "pe_ttm", "pb", "total_market_cap", "float_market_cap", "total_share", "float_share", "market_cap_style"]},
+        "missing_reasons": data.get("metric_missing_reasons") or [],
+        "metric_sources": data.get("metric_sources") or {},
+        "market_session": _market_session(q.market),
+    }, symbol=q.symbol, source=q.source)
+    data["cache_status"] = cache_status
+    return q, data, cache_status
 
 
 def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_id: str, cache_status: dict, *, used_snapshot: bool, mode: str, errors: list[str] | None = None) -> dict:
@@ -126,16 +256,27 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
     grouped = data.get("grouped_items") or news.get("duplicate_groups") or []
     global_items = data.get("global_items") or (data.get("global_news") or {}).get("items") or []
     mapped = data.get("industry_mapped_items") or (data.get("policy") or {}).get("industry_mapped_items") or []
+    raw_count = _safe_float(news.get("raw_count") or news.get("count") or data.get("raw_count") or len(items))
+    errors = list(errors or data.get("errors") or [])
+    if not items and raw_count:
+        errors.append("raw news existed but normalized items are empty; check dedup/date/category filters")
     stats = data.get("stats") or {
         "item_count": len(items),
+        "raw_item_count": int(raw_count or len(items)),
         "global_count": len(global_items),
         "industry_mapped_count": len(mapped),
         "source_count": len(source_logs),
+        "unknown_date_count": len([x for x in items if not (x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))]),
     }
     diagnostics = data.get("diagnostics") or {
-        "summary": data.get("summary") or "暂无诊断摘要",
+        "summary": data.get("summary") or ("items empty; source logs/errors are still returned" if not items else "info snapshot normalized"),
         "data_quality": data.get("data_quality") or {},
         "cache_status": cache_status,
+        "filter_empty_reason": "items empty after normalization or filtering" if not items else "",
+    }
+    score_model = data.get("score_model") or data.get("scoring_model") or {
+        "formula": "company/events + source credibility + finance + global/industry mapping - rumor risk",
+        "screener_formula": "technical/fundamental/capital/info/style with risk penalties",
     }
     created_at = data.get("created_at") or data.get("updated_at") or datetime.now().isoformat(timespec="seconds")
     data.update({
@@ -156,10 +297,10 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "mapped_concepts": data.get("mapped_concepts") or (data.get("policy") or {}).get("mapped_concepts") or [],
         "mapped_symbols": data.get("mapped_symbols") or (data.get("policy") or {}).get("mapped_symbols") or [],
         "stats": stats,
-        "score_model": data.get("score_model") or data.get("scoring_model") or {},
+        "score_model": score_model,
         "diagnostics": diagnostics,
         "source_logs": source_logs,
-        "errors": errors or data.get("errors") or [],
+        "errors": errors,
     })
     return data
 
@@ -174,15 +315,34 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
     fallback_chain: list[str] = []
     q = None
     cache_status = cache_state_service.status("miss", key=key, source="kline_api")
+    cached = cache_state_service.get_kline_cache(key)
+    if cached.data and not force and not cached.cache_status.get("stale"):
+        payload = dict(cached.data)
+        payload.update({
+            "ok": True,
+            "cache_status": cached.cache_status,
+            "stale_cache_used": False,
+            "fallback_chain": list(dict.fromkeys((payload.get("fallback_chain") or []) + ["cache_state_fresh_hit"])),
+        })
+        return payload
+    if cached.data and not force and not _market_session("CN").get("can_refresh"):
+        payload = dict(cached.data)
+        payload.update({
+            "ok": True,
+            "cache_status": cached.cache_status,
+            "stale_cache_used": True,
+            "fallback_chain": list(dict.fromkeys((payload.get("fallback_chain") or []) + ["cache_state_stale_closed_market"])),
+        })
+        return payload
     try:
-        q = service.get_quote(symbol, force_refresh=force) if sync_quote else None
+        q = _enrich_quote_real(symbol, force=force)[0] if sync_quote else None
     except Exception as exc:
         errors.append(f"quote_error: {str(exc)[:160]}")
     try:
         bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=force)
         fallback_chain.append("market_data_service.get_kline")
         if frame == "1d" and any(str(getattr(b, "source", "")).lower().find("minute") >= 0 or str(getattr(b, "source", "")).lower().find("intraday") >= 0 for b in bars):
-            raise RuntimeError("日K源返回疑似分钟数据，拒绝绘图")
+            raise RuntimeError("daily kline source returned minute/intraday data; refused to draw fake daily chart")
         if len(bars) < min(5, max(2, int(limit or 260))):
             raise RuntimeError(f"K线数量不足：{len(bars)}")
         if q is not None:
@@ -196,6 +356,7 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
             "symbol": symbol,
             "frame": frame,
             "adjust": adjust,
+            "cache_key": key,
             "bars": [b.to_dict() for b in bars],
             "data": [b.to_dict() for b in bars],
             "count": len(bars),
@@ -212,7 +373,6 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
         return payload
     except Exception as exc:
         errors.append(str(exc)[:220])
-        cached = cache_state_service.get_kline_cache(key)
         if cached.data:
             payload = dict(cached.data)
             payload.update({
@@ -223,12 +383,17 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
                 "fallback_chain": list(dict.fromkeys((payload.get("fallback_chain") or []) + ["cache_state_stale_fallback"])),
             })
             return payload
+        try:
+            cache_state_service._record_event("kline_cache", key, "read", "error", "; ".join(errors), "kline_api")
+        except Exception:
+            pass
         return {
             "ok": False,
             "server_time": datetime.now().isoformat(timespec="seconds"),
             "symbol": symbol,
             "frame": frame,
             "adjust": adjust,
+            "cache_key": key,
             "bars": [],
             "data": [],
             "count": 0,
@@ -431,17 +596,8 @@ def calendar_markets() -> dict:
 
 @app.get("/api/quote/{symbol}")
 def quote(symbol: str, force: bool = False) -> dict:
-    q = service.get_quote(symbol, force_refresh=force)
-    q = service.enrich_quote_metrics(q, force_refresh=force)
-    data = q.to_dict()
+    q, data, cache_status = _enrich_quote_real(symbol, force=force)
     data["extra"] = _quote_extra(q)
-    cache_status = cache_state_service.put("quote_cache", q.symbol, {
-        "symbol": q.symbol,
-        "quote": data,
-        "enriched_metrics": {k: data.get(k) for k in ["turnover", "volume_ratio", "amount", "pe_dynamic", "pb", "total_market_cap", "float_market_cap"]},
-        "missing_reasons": data.get("metric_missing_reasons") or [],
-        "market_session": _market_session(q.market),
-    }, symbol=q.symbol, source=q.source)
     return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session(q.market), "cache_status": cache_status, "data": data}
 
 
@@ -451,25 +607,50 @@ def quotes(symbols: str = Query(..., description="逗号分隔，如 300750,6005
     qs = service.get_quotes(symbol_list, force_refresh=force)
     data = []
     for q in qs:
-        q = service.enrich_quote_metrics(q, force_refresh=force)
-        item = q.to_dict()
+        q, item, _ = _enrich_quote_real(q.symbol, force=force, quote_obj=q)
         item["extra"] = _quote_extra(q)
-        item["cache_status"] = cache_state_service.put("quote_cache", q.symbol, {
-            "symbol": q.symbol,
-            "quote": item,
-            "enriched_metrics": {k: item.get(k) for k in ["turnover", "volume_ratio", "amount", "pe_dynamic", "pb", "total_market_cap", "float_market_cap"]},
-            "missing_reasons": item.get("metric_missing_reasons") or [],
-            "market_session": _market_session(q.market),
-        }, symbol=q.symbol, source=q.source)
         data.append(item)
     return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session("CN"), "count": len(data), "data": data}
+
+
+def _merge_screener_item_quote_metrics(item: dict, *, force: bool = False) -> None:
+    symbol = str(item.get("symbol") or "").strip()
+    if not symbol:
+        return
+    try:
+        _q, qd, cache_status = _enrich_quote_real(symbol, force=force)
+    except Exception as exc:
+        item.setdefault("metric_missing_reasons", []).append(f"quote enrichment failed: {str(exc)[:120]}")
+        return
+    mapping = {
+        "turnover": "turnover",
+        "turnover_rate": "turnover_rate",
+        "volume_ratio": "volume_ratio",
+        "amount": "amount",
+        "pe_dynamic": "pe_dynamic",
+        "pe_ttm": "pe_ttm",
+        "pb": "pb",
+        "total_market_cap": "total_market_cap",
+        "float_market_cap": "float_market_cap",
+        "circulating_market_cap": "circulating_market_cap",
+        "total_share": "total_share",
+        "float_share": "float_share",
+        "market_cap_style": "market_cap_style",
+    }
+    for dest, src in mapping.items():
+        value = qd.get(src)
+        if item.get(dest) in (None, "", 0, "--", "未知") and value not in (None, "", 0):
+            item[dest] = value
+    item["metric_missing_reasons"] = list(dict.fromkeys((item.get("metric_missing_reasons") or []) + (qd.get("metric_missing_reasons") or [])))
+    item["metric_sources"] = {**(item.get("metric_sources") or {}), **(qd.get("metric_sources") or {})}
+    item["quote_cache_status"] = cache_status
 
 
 @app.get("/api/timeline/{symbol}")
 def timeline(symbol: str, force: bool = False) -> dict:
     q = None
     try:
-        q = service.get_quote(symbol, force_refresh=force)
+        q = _enrich_quote_real(symbol, force=force)[0]
     except Exception:
         q = None
     points = _timeline_with_fallback(symbol, q, force=force)
@@ -502,7 +683,7 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
         frame = "1M"
     quote_error = None
     try:
-        q = service.get_quote(symbol, force_refresh=force)
+        q = _enrich_quote_real(symbol, force=force)[0]
     except Exception as exc:
         q = None
         quote_error = str(exc)
@@ -513,9 +694,11 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
         b = bars[-1]
         q = Quote(symbol=symbol, name=symbol, ts=b.ts, last=b.close, pre_close=b.open, open=b.open, high=b.high, low=b.low, volume=b.volume, amount=b.amount, change=b.close-b.open, change_pct=b.change_pct, turnover=b.turnover, source="bar_snapshot")
     if q is not None:
+        q, qd, quote_cache_status = _enrich_quote_real(symbol, force=False, quote_obj=q, bars=bars)
         bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
         points = _timeline_with_fallback(symbol, q, force=force) if include_timeline else []
-        qd = q.to_dict(); qd["extra"] = _quote_extra(q)
+        qd["extra"] = _quote_extra(q)
+        qd["cache_status"] = quote_cache_status
         session = _market_session(q.market)
         out_symbol = q.symbol
     else:
@@ -552,7 +735,7 @@ def market_stocks(page: int = 1, page_size: int = 100) -> dict:
     qs = service.get_market_snapshot(page=page, page_size=page_size)
     data = []
     for q in qs:
-        item = q.to_dict()
+        q, item, _ = _enrich_quote_real(q.symbol, quote_obj=q)
         item["extra"] = _quote_extra(q)
         data.append(item)
     return {"ok": True, "count": len(data), "data": data}
@@ -728,6 +911,10 @@ def screener_run(
     enable_news: bool = False,
     info_limit: int = 180,
     info_weight: float | None = None,
+    selected_symbol: str | None = None,
+    view_mode: str = "compact",
+    scroll_position: int = 0,
+    show_excluded: bool = False,
 ) -> dict:
     symbol_list = [x.strip() for x in symbols.replace("，", ",").replace("\n", ",").split(",") if x.strip()]
     config = ScreenerConfig(
@@ -749,11 +936,13 @@ def screener_run(
         enable_news=bool(enable_news),
     )
     result = screener_service.run(config)
+    for item in result.get("data", []) or []:
+        _merge_screener_item_quote_metrics(item, force=force_quotes)
     selected_strategies = [x.strip() for x in str(strategies or "").split(",") if x.strip()]
     result["selected_strategies"] = selected_strategies
     snapshot_id = _make_snapshot_id("screener", info_limit if enable_news else None)
     result["snapshot_id"] = snapshot_id
-    result["strategy_note"] = "V3.18 默认使用前复权日K参与筛选评分；三通道候选池、WordSource V2 技术因子、资金/基本/信息/风格诊断嵌入主流程；筛选快照和信息快照持久化，可返回恢复。"
+    result["strategy_note"] = "V3.18.1 默认使用前复权日K参与筛选评分；三通道候选池、WordSource V2 技术因子、资金/基本/信息/风格诊断嵌入主流程；筛选快照和信息快照持久化，可返回恢复。"
     result["news_enabled"] = bool(enable_news)
     if enable_news:
         # 信息面只对筛选后的候选股低频分析，避免对全市场盲目抓取。
@@ -861,7 +1050,7 @@ def screener_run(
                 item["info"] = {"error": str(exc)[:180], "info_score": None}
         result["news_analyzed_count"] = info_count
         result["info_analyzed_count"] = info_count
-        result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
+        result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18.1 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
         result["data"].sort(key=lambda x: x.get("total_score_with_info", x.get("total_score", 0)), reverse=True)
     try:
         saved = score_history_service.save_results(result.get("data", []), mode=mode)
@@ -870,11 +1059,16 @@ def screener_run(
     except Exception as exc:
         result["score_history_saved"] = 0
         result["score_history_error"] = str(exc)[:220]
-    selected_symbol = (result.get("data") or [{}])[0].get("symbol")
+    available_symbols = {str(x.get("symbol")) for x in result.get("data", []) if x.get("symbol")}
+    selected_symbol = selected_symbol if selected_symbol in available_symbols else (result.get("data") or [{}])[0].get("symbol")
+    selected_row = next((x for x in result.get("data", []) if x.get("symbol") == selected_symbol), None)
     created_at = datetime.now().isoformat(timespec="seconds")
     result["screener_snapshot_id"] = snapshot_id
     result["created_at"] = created_at
     result["selected_symbol"] = selected_symbol
+    result["selected_row"] = selected_row
+    result["view_mode"] = view_mode
+    result["scroll_position"] = scroll_position
     result["summary"] = {
         "result_count": result.get("result_count", len(result.get("data", []))),
         "analyzed_count": result.get("analyzed_count"),
@@ -905,6 +1099,11 @@ def screener_run(
         "results": result.get("data", []),
         "data": result.get("data", []),
         "selected_symbol": selected_symbol,
+        "selected_row": selected_row,
+        "view_mode": view_mode,
+        "scroll_position": scroll_position,
+        "custom_symbols": symbols,
+        "enabled_strategies": selected_strategies,
         "summary": result["summary"],
         "source_status": result.get("errors", []),
     }
@@ -916,14 +1115,24 @@ def screener_run(
 def screener_snapshot(snapshot_id: str) -> dict:
     cached = cache_state_service.get_screener_snapshot(snapshot_id)
     data = cached.data or {}
+    results = data.get("results") or data.get("data") or []
     return {
         "ok": bool(cached.data),
+        "restored": bool(cached.data and results),
+        "message": "" if results else "snapshot has no results",
         "snapshot_id": snapshot_id,
         "cache_status": cached.cache_status,
-        "data": data.get("data") or data.get("results") or [],
-        "results": data.get("results") or data.get("data") or [],
+        "data": results,
+        "results": results,
         "summary": data.get("summary") or {},
         "selected_symbol": data.get("selected_symbol"),
+        "selected_row": data.get("selected_row"),
+        "view_mode": data.get("view_mode"),
+        "scroll_position": data.get("scroll_position"),
+        "custom_symbols": data.get("custom_symbols"),
+        "enabled_strategies": data.get("enabled_strategies") or data.get("strategies") or [],
+        "enable_news": data.get("enable_news"),
+        "params": data.get("params") or {},
         "created_at": data.get("created_at"),
         "snapshot": data,
     }
@@ -938,15 +1147,25 @@ def cache_status() -> dict:
 def cache_screener_latest() -> dict:
     cached = cache_state_service.latest_screener_snapshot()
     data = cached.data or {}
+    results = data.get("results") or data.get("data") or []
     return {
         "ok": bool(cached.data),
+        "restored": bool(cached.data and results),
+        "message": "" if results else "snapshot has no results",
         "cache_status": cached.cache_status,
         "snapshot_id": data.get("snapshot_id"),
         "created_at": data.get("created_at"),
-        "data": data.get("data") or data.get("results") or [],
-        "results": data.get("results") or data.get("data") or [],
+        "data": results,
+        "results": results,
         "summary": data.get("summary") or {},
         "selected_symbol": data.get("selected_symbol"),
+        "selected_row": data.get("selected_row"),
+        "view_mode": data.get("view_mode"),
+        "scroll_position": data.get("scroll_position"),
+        "custom_symbols": data.get("custom_symbols"),
+        "enabled_strategies": data.get("enabled_strategies") or data.get("strategies") or [],
+        "enable_news": data.get("enable_news"),
+        "params": data.get("params") or {},
         "snapshot": data,
     }
 
@@ -1368,7 +1587,32 @@ def info_items(
         symbol, page=page, page_size=page_size, include_history_days=history_days,
         sort=sort, category=category, source=source, include_unknown_date=include_unknown_date
     )
+    if not data.get("data"):
+        cached = cache_state_service.latest_info_snapshot(symbol)
+        items = (cached.data or {}).get("items") or []
+        if items:
+            if not include_unknown_date:
+                items = [x for x in items if x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date")]
+            if category:
+                items = [x for x in items if str(x.get("category") or x.get("event_type") or "") == str(category)]
+            reverse = str(sort).lower() != "asc"
+            items = sorted(items, key=lambda x: str(x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date") or ""), reverse=reverse)
+            total = len(items)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            if page > total_pages:
+                page = 1
+            offset = (page - 1) * page_size
+            data = {
+                "data": items[offset:offset + page_size],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "stats": {"from_info_snapshot": True, "unknown_date_count": len([x for x in items if not (x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))])},
+                "cache_status": cached.cache_status,
+            }
     return {"ok": True, "symbol": symbol, "data": data}
+
 
 
 @app.get("/api/info/event-test")
@@ -1602,33 +1846,33 @@ def wordsource_page() -> str:
         f"<tr><td>{r['status']}</td><td>{r['source']}</td><td>{r['original'][:180]}</td><td>{r['feature']}</td><td>{r['api']}</td><td>{r['frontend']}</td><td>{r['tests']}</td></tr>"
         for r in rows[:800]
     )
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 WordSource Trace</title>
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 WordSource Trace</title>
 <style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc;color:#172033}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:white}}th,td{{border:1px solid #e5e7eb;padding:8px;vertical-align:top;font-size:13px}}th{{background:#e2e8f0}}.pill{{padding:3px 8px;border-radius:999px;background:#dbeafe}}</style></head>
-<body><header><b>Quant Data Gateway V3.18 / WordSource ClosedLoop Cache Edition</b> <span class='pill'>逐条映射可见</span> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
+<body><header><b>Quant Data Gateway V3.18.1 / WordSource ClosedLoop Cache Edition</b> <span class='pill'>逐条映射可见</span> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
 <main><div class='pill'>API: /api/wordsource/trace</div><h2>WordSource 原文映射</h2><p>每条显示原文、功能、API、前端位置、测试与落地状态；部分落地项会继续保留为待验收。</p>
 <table><thead><tr><th>状态</th><th>来源</th><th>原文</th><th>功能</th><th>API</th><th>前端</th><th>测试</th></tr></thead><tbody id='traceRows'>{body or '<tr><td colspan=7>暂无映射，请检查 docs/WORD_SOURCE_TRACE.md</td></tr>'}</tbody></table></main></body></html>"""
 
 
 @app.get("/technical/{symbol}", response_class=HTMLResponse)
 def technical_page(symbol: str) -> str:
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 技术因子矩阵</title>
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 技术因子矩阵</title>
 <style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;background:#f8fafc;margin:0}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:#fff}}td,th{{border:1px solid #e5e7eb;padding:8px;font-size:13px;vertical-align:top}}th{{background:#e2e8f0}}.ok{{color:#166534}}</style></head>
-<body><header><b>Quant Data Gateway V3.18 技术因子矩阵</b> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
+<body><header><b>Quant Data Gateway V3.18.1 技术因子矩阵</b> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
 <main><h2 id='title'>{symbol} 技术因子矩阵</h2><div id='cache'>缓存状态读取中...</div><table><thead><tr><th>因子</th><th>类别</th><th>值</th><th>公式</th><th>信号</th><th>解释</th><th>贡献/扣分</th></tr></thead><tbody id='rows'><tr><td colspan='7'>加载中...</td></tr></tbody></table></main>
 <script>
 const esc=s=>String(s??'').replace(/[&<>]/g,m=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[m]));
-fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}</td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
+fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18.1';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}</td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
 </script></body></html>"""
 
 
 @app.get("/health", response_class=HTMLResponse)
 def health_page() -> str:
-    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 数据源健康</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}.box{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:12px;white-space:pre-wrap}</style></head><body><header><b>Quant Data Gateway V3.18 数据源健康状态</b></header><main><div class='box' id='box'>加载中...</div><script>fetch('/api/market/health').then(r=>r.json()).then(js=>{box.textContent='缓存状态可见 / 休市状态可见 / 最近错误可见\\n'+JSON.stringify(js,null,2)}).catch(e=>box.textContent='空状态：健康检查失败 '+e)</script></main></body></html>"""
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 数据源健康</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}.box{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:12px;white-space:pre-wrap}</style></head><body><header><b>Quant Data Gateway V3.18.1 数据源健康状态</b></header><main><div class='box' id='box'>加载中...</div><script>fetch('/api/market/health').then(r=>r.json()).then(js=>{box.textContent='缓存状态可见 / 休市状态可见 / 最近错误可见\\n'+JSON.stringify(js,null,2)}).catch(e=>box.textContent='空状态：健康检查失败 '+e)</script></main></body></html>"""
 
 
 @app.get("/cache", response_class=HTMLResponse)
 def cache_page() -> str:
-    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18 缓存状态</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}table{width:100%;border-collapse:collapse;background:#fff}td,th{border:1px solid #e5e7eb;padding:8px}</style></head><body><header><b>Quant Data Gateway V3.18 缓存状态页</b></header><main><button onclick='clearCache()'>清理全部缓存</button><table><thead><tr><th>对象</th><th>数量</th><th>最近更新时间</th><th>TTL</th><th>命中状态</th></tr></thead><tbody id='rows'><tr><td colspan=5>加载中...</td></tr></tbody></table><script>function load(){fetch('/api/cache/status').then(r=>r.json()).then(js=>{rows.innerHTML=(js.items||[]).map(x=>`<tr><td>${x.kind}</td><td>${x.count}</td><td>${x.latest_updated||'--'}</td><td>${x.ttl_seconds}</td><td>${x.latest_status}</td></tr>`).join('')||'<tr><td colspan=5>空状态：暂无缓存，运行筛选或打开详情后会写入</td></tr>'})}function clearCache(){fetch('/api/cache/clear',{method:'POST'}).then(load)}load()</script></main></body></html>"""
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 Cache Diagnostics / 缓存状态</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc;color:#1f2937}header{background:#0f172a;color:#fff;padding:14px 18px;display:flex;justify-content:space-between}main{padding:16px}.hint{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:10px;padding:10px;margin:10px 0}table{width:100%;border-collapse:collapse;background:#fff;box-shadow:0 4px 16px rgba(15,23,42,.07)}td,th{border:1px solid #e5e7eb;padding:8px;vertical-align:top;font-size:13px}th{background:#f1f5f9}.bad{color:#b91c1c}.ok{color:#166534}button{border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}.small{font-size:12px;color:#64748b;line-height:1.5}</style></head><body><header><b>Quant Data Gateway V3.18.1 Cache Diagnostics / 缓存状态</b><span><a style='color:#bfdbfe' href='/screener'>Screener</a> | <a style='color:#bfdbfe' href='/health'>Health</a></span></header><main><button onclick='clearCache()'>Clear cache</button><div class='hint'>缓存状态 visible. Persistent cache diagnostics: counts, TTL, latest read/write keys, miss reasons and errors. If kline_cache is zero, the diagnostic explains whether no successful write happened or the latest source failed. API: /api/cache/status</div><table><thead><tr><th>Kind</th><th>Count</th><th>Latest update</th><th>TTL</th><th>Status</th><th>Last write key</th><th>Last read key</th><th>miss/error diagnostic</th></tr></thead><tbody id='rows'><tr><td colspan=8>Loading...</td></tr></tbody></table><script>function esc(s){return String(s??'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}function load(){fetch('/api/cache/status').then(r=>r.json()).then(js=>{rows.innerHTML=(js.items||[]).map(x=>`<tr><td>${esc(x.kind)}</td><td>${x.count}</td><td>${esc(x.latest_updated||'--')}</td><td>${x.ttl_seconds}</td><td class='${x.latest_status==='hit'||x.count?'ok':'bad'}'>${esc(x.latest_status||'--')}</td><td>${esc(x.last_write_key||'--')}</td><td>${esc(x.last_read_key||'--')}</td><td><div>${esc(x.diagnostic||'--')}</div><div class='small'>miss=${esc(x.recent_miss_reason||'--')}<br>error=${esc(x.recent_error||'--')}</div></td></tr>`).join('')||'<tr><td colspan=8>Empty state: run screener or open a detail page to populate cache.</td></tr>'})}function clearCache(){fetch('/api/cache/clear',{method:'POST'}).then(load)}load()</script></main></body></html>"""
 
 
 @app.get("/info", response_class=HTMLResponse)

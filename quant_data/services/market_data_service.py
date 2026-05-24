@@ -157,6 +157,37 @@ class MarketDataService:
             if float_cap and not float_share:
                 float_share = float_cap / last
         reasons: list[str] = []
+        metric_sources = dict(q.metric_sources or {})
+        for field, value in {
+            "turnover_rate": q.turnover,
+            "volume_ratio": q.volume_ratio,
+            "amount": q.amount,
+            "pe_ttm": q.pe_dynamic,
+            "pb": q.pb,
+            "total_market_cap": q.total_market_cap,
+            "float_market_cap": q.float_market_cap,
+            "total_share": total_share,
+            "float_share": float_share,
+        }.items():
+            if value not in (None, 0, ""):
+                metric_sources.setdefault(field, q.source or "quote_snapshot")
+
+        def cap_style(cap):
+            v = num(cap)
+            if v is None or v <= 0:
+                return None
+            if v < 5_000_000_000:
+                return "\u5fae\u76d8"
+            if v < 20_000_000_000:
+                return "\u5c0f\u76d8"
+            if v < 100_000_000_000:
+                return "\u4e2d\u76d8"
+            if v < 500_000_000_000:
+                return "\u5927\u76d8"
+            return "\u8d85\u5927\u76d8"
+
+
+        market_cap_style = q.market_cap_style or cap_style(float_cap or total_cap)
         is_etf = q.asset_type == AssetType.ETF or str(q.symbol).startswith(("15", "51", "56", "58"))
         if is_etf:
             if q.pe_dynamic is None:
@@ -184,6 +215,8 @@ class MarketDataService:
             circulating_market_cap=circulating_cap,
             total_share=total_share,
             float_share=float_share,
+            market_cap_style=market_cap_style,
+            metric_sources=metric_sources,
             metric_missing_reasons=list(dict.fromkeys(reasons)),
         )
 

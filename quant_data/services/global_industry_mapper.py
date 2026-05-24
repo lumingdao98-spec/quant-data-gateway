@@ -91,7 +91,7 @@ class GlobalIndustryMapper:
             "mapped_industries": sorted({x for m in mapped for x in m.get("mapped_industries", [])}),
             "mapped_concepts": sorted({x for m in mapped for x in m.get("mapped_concepts", [])}),
             "mapped_symbols": sorted({x for m in mapped for x in m.get("mapped_symbols", [])}),
-            "related_count": len([m for m in mapped if m.get("score_included")]),
+            "related_count": len([m for m in mapped if m.get("included_in_score") or m.get("score_included")]),
         }
 
     def map_item(self, item: dict[str, Any], symbol: str, exposure: dict[str, Any]) -> dict[str, Any]:
@@ -113,9 +113,12 @@ class GlobalIndustryMapper:
             reason += f" 与当前标的暴露重合：{'、'.join(sorted(overlap))}。"
         elif not hit_rules:
             reason += " 不相关全球新闻只作为市场背景。"
+        included = bool(relevance >= 55 and (overlap or direct))
+        item_id = item.get("id") or item.get("url") or item.get("title") or f"global-{symbol}-{abs(hash(text)) % 1000000}"
         return {
             **item,
-            "is_related_to_symbol": bool(relevance >= 55 and (overlap or direct)),
+            "global_item_id": str(item_id),
+            "is_related_to_symbol": included,
             "mapped_industries": industries,
             "mapped_concepts": concepts,
             "mapped_symbols": symbols,
@@ -123,5 +126,6 @@ class GlobalIndustryMapper:
             "relevance_score": relevance,
             "impact_direction": impact_direction,
             "impact_reason": reason,
-            "score_included": bool(relevance >= 55 and (overlap or direct)),
+            "included_in_score": included,
+            "score_included": included,
         }
