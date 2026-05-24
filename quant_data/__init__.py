@@ -1,1 +1,1 @@
-__version__ = "3.18.1-cache-real-closedloop-fix"
+__version__ = "3.18.2-navigation-state-background-cache"
