@@ -32,6 +32,10 @@ def build_screener_ui() -> str:
 .full-table .cell-theme{max-width:145px}
 .full-table .cell-summary{max-width:180px}
 .full-table .cell-behavior{max-width:140px}
+.full-table tbody tr{height:48px}
+.full-table td{height:48px;max-height:48px}
+.line2{display:block;white-space:normal;word-break:break-word;overflow:hidden;line-height:1.25;max-height:2.5em;text-align:left}
+.debug-cell{display:block;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -594,6 +598,51 @@ render=function(){
     const suffix=hidden&&tableMode==='compact'?`；精简视图隐藏 ${hidden} 个剔除项，完整/调试视图显示全部 ${rows.length} 只`:`；当前显示 ${visible.length}/${rows.length} 只`;
     $('cacheHint').textContent=($('cacheHint').textContent||'cache ready').split('；')[0]+suffix;
   }
+};
+
+resultColspan=function(){return tableMode==='compact'?15:tableMode==='debug'?7:16}
+renderHeader=function(){
+  const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;
+  table.className=tableMode==='compact'?'compact-table':'full-table';
+  const compactCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['市值风格','market_cap_style'],['行为风险','behavior'],['操作','']];
+  const fullCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['最新价','last'],['涨跌幅','change_pct'],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['总/流通市值','market_cap'],['市值风格','market_cap_style'],['题材/阶段',''],['技术摘要',''],['行为风险','behavior'],['操作','']];
+  const debugCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['缺失原因',''],['缓存/来源摘要',''],['操作','']];
+  const cols=tableMode==='compact'?compactCols:tableMode==='debug'?debugCols:fullCols;
+  head.innerHTML='<tr>'+cols.map(x=>th(x[0],x[1])).join('')+'</tr>';
+};
+fullRow=function(r){
+  const behavior=uniq(r.behavior_tags||[]).slice(0,3).join('、')||r.manipulation_risk_label||'--';
+  const theme=uniq([...(r.theme_labels||[]),(r.theme_stage||'')].filter(x=>x&&x!=='未知'&&x!=='--')).slice(0,5).join('、')||r.theme_stage||'--';
+  const summary=r.technical_signal_summary||r.comprehensive_diagnosis||'--';
+  return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')">
+    <td title="${htmlEsc(r.symbol)}">${htmlEsc(r.symbol)}</td>
+    <td class="cell-clip cell-name" title="${htmlEsc(r.name)}">${htmlEsc(r.name)}</td>
+    <td>${htmlEsc(r.grade||'--')}</td>
+    <td><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span></td>
+    <td>${fmt(r.last,2)}</td>
+    <td class="${clsPct(r.change_pct)}">${pct(r.change_pct)}</td>
+    <td title="${money(r.amount)}">${money(r.amount)}</td>
+    <td>${pct(r.turnover)}</td>
+    <td>${fmt(r.volume_ratio,2)}</td>
+    <td class="cell-clip cell-pepb" title="${htmlEsc(missingCell(r))}">${htmlEsc(pePbCell(r))}</td>
+    <td class="cell-clip cell-caps" title="${htmlEsc(capCell(r))}">${htmlEsc(capCell(r))}</td>
+    <td class="cell-clip cell-style" title="${htmlEsc(r.market_cap_style||'--')}">${htmlEsc(r.market_cap_style||'--')}</td>
+    <td title="${htmlEsc(theme)}"><span class="line2">${htmlEsc(theme)}</span></td>
+    <td title="${htmlEsc(summary)}"><span class="line2">${htmlEsc(summary)}</span></td>
+    <td title="${htmlEsc(behavior)}"><span class="line2">${htmlEsc(behavior)}</span></td>
+    <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
+  </tr>`;
+};
+debugRow=function(r){
+  const logs=(r.source_logs||r.news?.sources_status||[]).map(x=>`${x.source||'source'}:${x.status||'--'}`).join('；')||'--';
+  const cache=JSON.stringify(r.cache_status||r.info?.cache_status||r.quote_cache_status||{});
+  const miss=missingCell(r);
+  return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')">
+    <td>${htmlEsc(r.symbol)}</td><td class="cell-clip cell-name" title="${htmlEsc(r.name)}">${htmlEsc(r.name)}</td><td>${htmlEsc(r.grade||'--')}</td><td>${fmt(r.total_score,1)}</td>
+    <td title="${htmlEsc(miss)}"><span class="debug-cell">${htmlEsc(miss)}</span></td>
+    <td title="${htmlEsc(logs+' '+cache)}"><span class="debug-cell">${htmlEsc(logs||cache||'--')}</span></td>
+    <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
+  </tr>`;
 };
 
 (function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
