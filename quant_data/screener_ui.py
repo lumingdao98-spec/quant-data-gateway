@@ -24,6 +24,14 @@ def build_screener_ui() -> str:
 .compact-table .cell-pepb{max-width:92px}
 .compact-table .cell-style{max-width:84px}
 .compact-table .cell-behavior{max-width:150px}
+.full-table{table-layout:fixed!important;min-width:1680px!important}
+.full-table th,.full-table td{overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.full-table .cell-name{max-width:110px}
+.full-table .cell-channel{max-width:130px}
+.full-table .cell-caps{max-width:130px}
+.full-table .cell-theme{max-width:145px}
+.full-table .cell-summary{max-width:180px}
+.full-table .cell-behavior{max-width:140px}
 </style>
 </head>
 <body>
@@ -535,7 +543,58 @@ function compactRow(r){
 }
 
 const renderDetailBase=renderDetail;
-renderDetail=function(r){renderDetailBase(r);if(!r)return;document.querySelectorAll('#detailKv .item').forEach(el=>{const label=(el.querySelector('span')?.textContent||'').trim();const value=el.querySelector('b');if(!value)return;if(label==='PE/PB')value.textContent=pePbCell(r);if(label==='总/流通市值')value.textContent=capCell(r);});};
+renderDetail=function(r){renderDetailBase(r);if(!r)return;document.querySelectorAll('#detailKv .item').forEach(el=>{const label=(el.querySelector('span')?.textContent||'').trim();const value=el.querySelector('b');if(!value)return;if(label==='PE/PB')value.textContent=pePbCell(r);if(label.includes('市值')||label.includes('流通'))value.textContent=capCell(r);});};
+
+function resultColspan(){return tableMode==='compact'?15:tableMode==='debug'?9:18}
+renderHeader=function(){
+  const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;
+  table.className=tableMode==='compact'?'compact-table':'full-table';
+  const compactCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['市值风格','market_cap_style'],['行为风险','behavior'],['操作','']];
+  const fullCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['总/流通市值','market_cap'],['市值风格','market_cap_style'],['题材/阶段',''],['技术摘要',''],['行为风险','behavior'],['操作','']];
+  const debugCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['原始字段',''],['缺失原因',''],['source logs',''],['cache_status',''],['操作','']];
+  const cols=tableMode==='compact'?compactCols:tableMode==='debug'?debugCols:fullCols;
+  head.innerHTML='<tr>'+cols.map(x=>th(x[0],x[1])).join('')+'</tr>';
+};
+fullRow=function(r){
+  const behavior=uniq(r.behavior_tags||[]).slice(0,3).join('、')||r.manipulation_risk_label||'--';
+  const channel=(r.candidate_channels||[]).join('/')||'--';
+  const theme=uniq([...(r.theme_labels||[]),(r.theme_stage||'')].filter(x=>x&&x!=='未知'&&x!=='--')).slice(0,5).join('、')||r.theme_stage||'--';
+  const summary=r.technical_signal_summary||r.comprehensive_diagnosis||'--';
+  return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')">
+    <td title="${htmlEsc(r.symbol)}">${htmlEsc(r.symbol)}</td>
+    <td class="cell-clip cell-name" title="${htmlEsc(r.name)}">${htmlEsc(r.name)}</td>
+    <td>${htmlEsc(r.grade||'--')}</td>
+    <td><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span></td>
+    <td>${fmt(r.manual_review_score,1)}</td>
+    <td>${fmt(r.last,2)}</td>
+    <td class="${clsPct(r.change_pct)}">${pct(r.change_pct)}</td>
+    <td class="cell-clip cell-channel" title="${htmlEsc(r.candidate_channel_reason||channel)}">${htmlEsc(channel)}</td>
+    <td title="${money(r.amount)}">${money(r.amount)}</td>
+    <td>${pct(r.turnover)}</td>
+    <td>${fmt(r.volume_ratio,2)}</td>
+    <td class="cell-clip cell-pepb" title="${htmlEsc(missingCell(r))}">${htmlEsc(pePbCell(r))}</td>
+    <td class="cell-clip cell-caps" title="${htmlEsc(capCell(r))}">${htmlEsc(capCell(r))}</td>
+    <td class="cell-clip cell-style" title="${htmlEsc(r.market_cap_style||'--')}">${htmlEsc(r.market_cap_style||'--')}</td>
+    <td class="cell-wrap-2 cell-theme" title="${htmlEsc(theme)}">${htmlEsc(theme)}</td>
+    <td class="cell-wrap-2 cell-summary" title="${htmlEsc(summary)}">${htmlEsc(summary)}</td>
+    <td class="cell-wrap-2 cell-behavior" title="${htmlEsc(behavior)}">${htmlEsc(behavior)}</td>
+    <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
+  </tr>`;
+};
+render=function(){
+  renderHeader();
+  const tb=document.querySelector('#resultTable tbody');if(!tb)return;
+  const hidden=rows.filter(isExcludedRow).length;
+  const visible=tableMode==='compact'?rows.filter(r=>!isExcludedRow(r)):rows;
+  if(!rows.length){selected=null;tb.innerHTML=`<tr><td colspan="${resultColspan()}" class="muted">暂无结果。可以恢复上次筛选或重新筛选；过期缓存不会清空表格。</td></tr>`;renderDetail(null);return}
+  if(!visible.length){selected=null;tb.innerHTML=`<tr><td colspan="${resultColspan()}" class="muted">精简视图无符合条件候选，已隐藏剔除项 ${hidden} 个。<button class="btn2" onclick="setTableMode('full')">完整视图显示全部</button> <button class="btn2" onclick="setTableMode('debug')">调试视图</button></td></tr>`;renderDetail(null);return}
+  if(selected&&!visible.some(x=>x.symbol===selected.symbol)){selected=null;renderDetail(null)}
+  tb.innerHTML=visible.map(r=>tableMode==='compact'?compactRow(r):tableMode==='debug'?debugRow(r):fullRow(r)).join('');
+  if($('cacheHint')){
+    const suffix=hidden&&tableMode==='compact'?`；精简视图隐藏 ${hidden} 个剔除项，完整/调试视图显示全部 ${rows.length} 只`:`；当前显示 ${visible.length}/${rows.length} 只`;
+    $('cacheHint').textContent=($('cacheHint').textContent||'cache ready').split('；')[0]+suffix;
+  }
+};
 
 (function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
 </script>

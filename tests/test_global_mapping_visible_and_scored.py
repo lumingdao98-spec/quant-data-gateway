@@ -28,10 +28,12 @@ def test_global_mapping_outputs_visible_evidence_fields():
 
 def test_info_page_global_mapping_tab_has_evidence_columns():
     html = TestClient(api.app).get("/info?symbol=300274&name=Sungrow").text
-    assert "global/industry mapping evidence" in html or "Global Mapping" in html
-    assert "industries:" in html
-    assert "impact_reason" in html
-    assert "included in score" in html
+    assert "全球/行业映射" in html
+    assert "行业：" in html
+    assert "概念：" in html
+    assert "影响原因：" in html
+    assert "纳入个股评分" in html
+    assert "发布时间：" in html
 
 
 def test_info_analyze_maps_cached_global_energy_policy(monkeypatch, tmp_path):

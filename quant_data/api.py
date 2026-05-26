@@ -141,7 +141,11 @@ def _parse_cny_amount(value) -> float | None:
 def _apply_company_profile_metrics(q: Quote) -> Quote:
     if q.asset_type == AssetType.ETF or str(q.symbol).startswith(("15", "51", "56", "58")):
         return q
-    if q.total_market_cap and q.float_market_cap:
+    needs_profile = any(
+        getattr(q, field, None) in (None, 0, "")
+        for field in ["total_market_cap", "float_market_cap", "pe_dynamic"]
+    )
+    if not needs_profile:
         return q
     try:
         profile = company_profile_service.get_profile(q.symbol, force=False)
@@ -150,12 +154,25 @@ def _apply_company_profile_metrics(q: Quote) -> Quote:
     updates: dict = {}
     total_cap = _parse_cny_amount(profile.get("total_market_value"))
     float_cap = _parse_cny_amount(profile.get("float_market_value"))
+    last = _safe_float(q.last)
     if not q.total_market_cap and total_cap:
         updates["total_market_cap"] = total_cap
     if not q.float_market_cap and float_cap:
         updates["float_market_cap"] = float_cap
         updates["circulating_market_cap"] = float_cap
-    last = _safe_float(q.last)
+    if not q.pe_dynamic and last > 0:
+        eps_candidates = []
+        summary = profile.get("financial_summary") or {}
+        if isinstance(summary, dict):
+            eps_candidates.append(summary.get("latest_eps") or summary.get("eps"))
+        for row in profile.get("financial_history") or []:
+            if isinstance(row, dict):
+                eps_candidates.append(row.get("eps"))
+        eps_values = [_safe_float(x) for x in eps_candidates if abs(_safe_float(x)) > 1e-9]
+        ttm_like = [x for x in eps_values if abs(x) >= 0.5]
+        eps = max(ttm_like or eps_values or [0.0], key=lambda x: abs(x))
+        if abs(eps) > 1e-9:
+            updates["pe_dynamic"] = round(last / eps, 4)
     if last > 0:
         if updates.get("total_market_cap") and not q.total_share:
             updates["total_share"] = updates["total_market_cap"] / last
@@ -169,10 +186,14 @@ def _apply_company_profile_metrics(q: Quote) -> Quote:
             sources.setdefault(key, "company_profile")
         if key in {"float_market_cap", "circulating_market_cap", "float_share"}:
             sources.setdefault(key, "company_profile")
+        if key == "pe_dynamic":
+            sources.setdefault("pe_ttm", "company_profile_eps")
     reasons = [
         r for r in (q.metric_missing_reasons or [])
         if not any(token in str(r) for token in ["总市值", "流通市值", "total_market_cap", "float_market_cap"])
     ]
+    if "pe_dynamic" in updates:
+        reasons = [r for r in reasons if not any(token in str(r) for token in ["PE", "pe_ttm", "pe_dynamic", "市盈"])]
     updates["metric_sources"] = sources
     updates["metric_missing_reasons"] = reasons
     updates["source"] = f"{q.source}+company_profile" if q.source else "company_profile"
@@ -835,6 +856,65 @@ def _merge_screener_item_quote_metrics(item: dict, *, force: bool = False) -> No
     item["metric_missing_reasons"] = list(dict.fromkeys((item.get("metric_missing_reasons") or []) + (qd.get("metric_missing_reasons") or [])))
     item["metric_sources"] = {**(item.get("metric_sources") or {}), **(qd.get("metric_sources") or {})}
     item["quote_cache_status"] = cache_status
+    _clean_screener_metric_missing_reasons(item)
+    _fill_screener_theme_from_profile(item)
+
+
+def _metric_has_value(value) -> bool:
+    return value not in (None, "", "--", "未知", "不适用", 0)
+
+
+def _clean_screener_metric_missing_reasons(item: dict) -> None:
+    """Remove stale missing-field hints after quote/F10 enrichment fills metrics."""
+    tokens: list[str] = []
+    if _metric_has_value(item.get("pe_dynamic")) or _metric_has_value(item.get("pe_ttm")):
+        tokens.extend(["PE", "pe_ttm", "pe_dynamic", "市盈"])
+    if _metric_has_value(item.get("pb")):
+        tokens.extend(["PB", "市净"])
+    if _metric_has_value(item.get("total_market_cap")):
+        tokens.extend(["总市值", "total_market_cap"])
+    if _metric_has_value(item.get("float_market_cap")) or _metric_has_value(item.get("circulating_market_cap")):
+        tokens.extend(["流通市值", "float_market_cap", "circulating_market_cap"])
+    if _metric_has_value(item.get("turnover")) or _metric_has_value(item.get("turnover_rate")):
+        tokens.extend(["换手率", "turnover"])
+    if _metric_has_value(item.get("volume_ratio")):
+        tokens.extend(["量比", "volume_ratio"])
+    if not tokens:
+        return
+
+    def keep(reason: object) -> bool:
+        text = str(reason)
+        return not any(token and token in text for token in tokens)
+
+    for key in ("metric_missing_reasons", "missing_data_hints"):
+        cleaned = [str(x) for x in (item.get(key) or []) if x and keep(x)]
+        item[key] = list(dict.fromkeys(cleaned))
+
+
+def _fill_screener_theme_from_profile(item: dict) -> None:
+    labels = [str(x) for x in (item.get("theme_labels") or item.get("themes") or []) if str(x).strip()]
+    usable = [x for x in labels if x not in {"未知", "未识别题材", "--", "None"}]
+    if usable:
+        item["theme_labels"] = list(dict.fromkeys(usable))
+        return
+    symbol = str(item.get("symbol") or "").strip()
+    if not symbol:
+        return
+    try:
+        profile = company_profile_service.get_profile(symbol, force=False)
+    except Exception:
+        profile = {}
+    try:
+        exposure = global_industry_mapper.company_exposure(symbol, profile=profile, name=str(item.get("name") or symbol))
+    except Exception:
+        exposure = {}
+    concepts = [str(x) for x in exposure.get("concepts") or [] if str(x).strip()]
+    industries = [str(x) for x in exposure.get("industries") or [] if str(x).strip()]
+    labels = list(dict.fromkeys(concepts[:4] + industries[:3]))
+    if labels:
+        item["theme_labels"] = labels
+        if item.get("theme_stage") in (None, "", "--", "未知", "未识别题材"):
+            item["theme_stage"] = "题材待确认"
 
 
 @app.get("/api/timeline/{symbol}")

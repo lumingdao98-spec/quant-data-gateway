@@ -35,7 +35,13 @@ def _quote(symbol: str = "601012", asset_type: AssetType = AssetType.STOCK) -> Q
 
 
 def test_custom_input_merge_uses_enriched_quote(monkeypatch):
-    item = {"symbol": "601012", "name": "Longi", "candidate_channels": ["custom_input"]}
+    item = {
+        "symbol": "601012",
+        "name": "Longi",
+        "candidate_channels": ["custom_input"],
+        "missing_data_hints": ["PE缺失", "PB缺失", "总市值缺失", "流通市值缺失"],
+        "metric_missing_reasons": ["行情源缺失 PE", "行情源缺失 PB"],
+    }
     q = _quote()
     qd = api._quote_dict_with_aliases(q)
     monkeypatch.setattr(api, "_enrich_quote_real", lambda symbol, force=False, quote_obj=None, bars=None: (q, qd, {"status": "hit"}))
@@ -44,6 +50,8 @@ def test_custom_input_merge_uses_enriched_quote(monkeypatch):
     assert item["pb"] == 2.1
     assert item["market_cap_style"] not in (None, "", "未知")
     assert item["metric_sources"]["pe_ttm"] == "unit"
+    assert not item["missing_data_hints"]
+    assert not item["metric_missing_reasons"]
 
 
 def test_stale_quote_cache_can_fill_fields(monkeypatch, tmp_path):
