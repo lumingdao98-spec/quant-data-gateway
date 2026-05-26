@@ -64,3 +64,22 @@ def test_etf_pe_pb_not_applicable_reason():
     q = replace(q, pe_dynamic=None, pb=None, asset_type=AssetType.ETF)
     enriched = api.service.enrich_quote_metrics(q, force_refresh=False, bars=[])
     assert "ETF" in " ".join(enriched.metric_missing_reasons or [])
+
+
+def test_company_profile_fills_market_cap_when_quote_source_lacks_it(monkeypatch, tmp_path):
+    svc = CacheStateService(tmp_path / "cache_state.sqlite")
+    monkeypatch.setattr(api, "cache_state_service", svc)
+    q = replace(_quote("300750"), total_market_cap=None, float_market_cap=None, source="sina")
+    monkeypatch.setattr(api.service, "get_quote", lambda *a, **k: q)
+    monkeypatch.setattr(api.service, "enrich_quote_metrics", lambda q, **kwargs: q)
+    monkeypatch.setattr(
+        api.company_profile_service,
+        "get_profile",
+        lambda *a, **k: {"total_market_value": "1.87万亿", "float_market_value": "1.72万亿"},
+    )
+
+    _q, qd, _status = api._enrich_quote_real("300750")
+
+    assert qd["total_market_cap"] == 1.87e12
+    assert qd["float_market_cap"] == 1.72e12
+    assert qd["metric_sources"]["total_market_cap"] == "company_profile"

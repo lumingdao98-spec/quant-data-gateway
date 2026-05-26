@@ -26,7 +26,7 @@ class StrategyLibraryService:
         items = [
             StrategyItem("low_position", "低位修复", "低位/价值", ["低位", "回撤", "修复"], "近60/120/250日价格位置、阶段回撤与均线修复综合判断。", 1.2, True),
             StrategyItem("oversold_rebound", "超卖回升", "低位/价值", ["RSI", "低位", "反弹"], "RSI处于低位回升区间，同时价格重新靠近短均线。", .9, False),
-            StrategyItem("avoid_chasing_high", "高位追涨过滤", "风控过滤", ["高位", "过滤"], "处于近一年高位时降低追涨权重，避免高位接力风险。", 1.0, True),
+            StrategyItem("avoid_chasing_high", "高位追高过滤", "风控过滤", ["高位", "过滤"], "处于近一年高位时降低追涨权重，避免高位接力风险。", 1.0, True),
             StrategyItem("exright_drawdown_guard", "复权回撤校正", "风控过滤", ["除权", "前复权", "回撤"], "筛选默认使用前复权日K计算高位回撤/低位位置，降低分红、送转、除权导致的假回撤。", 1.0, True),
             StrategyItem("ma_repair", "均线修复", "K线趋势", ["MA", "趋势", "修复"], "MA5/MA10/MA20修复，价格重新站上或接近MA20。", 1.0, True),
             StrategyItem("ma_bull", "均线多头", "K线趋势", ["MA", "多头"], "MA5>MA10>MA20，趋势延续性较强。", 1.0, False),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import quant_data.api as api
 
@@ -82,6 +83,24 @@ def test_deep_refresh_enables_deep_mode(monkeypatch):
     assert calls[-1]["mode"] == "deep"
     assert calls[-1]["deep_refresh"] is True
     assert result["data"]["crawl_mode"] == "deep"
+
+
+def test_missing_explicit_snapshot_does_not_auto_refresh(monkeypatch):
+    store = MemorySnapshotStore()
+    monkeypatch.setattr(api.news_service, "store", store)
+    monkeypatch.setattr(api.cache_state_service, "get_info_snapshot", lambda sid: SimpleNamespace(data=None, cache_status={"status": "miss"}))
+    monkeypatch.setattr(api.cache_state_service, "latest_info_snapshot", lambda symbol: SimpleNamespace(data=None, cache_status={"status": "miss"}))
+
+    def fail_analyze(*args, **kwargs):
+        raise AssertionError("missing explicit snapshot should not auto refresh")
+
+    monkeypatch.setattr(api.info_analysis_service, "analyze", fail_analyze)
+    result = api.info_analyze("601012", name="隆基绿能", snapshot_id="missing-sid", force=False, deep_refresh=False)
+
+    assert result["ok"] is True
+    assert result["data"]["mode"] == "snapshot_miss"
+    assert result["data"]["items"] == []
+    assert any("not found" in str(x) for x in result["data"]["errors"])
 
 
 def test_screener_returns_info_snapshot_fields(monkeypatch):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import datetime, time
 from pathlib import Path
@@ -60,14 +61,14 @@ market_behavior_engine = MarketBehaviorEngine()
 cache_state_service = CacheStateService()
 technical_factor_engine = TechnicalFactorEngine()
 FALLBACK_STRATEGIES = [
-    {"key": "low_repair", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
-    {"key": "chase_high_filter", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
+    {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
+    {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
     {"key": "ma_repair", "name": "均线修复", "category": "K线趋势", "description": "MA5/10/20 斜率和价格回到均线体系。", "enabled": True, "default_weight": 1.0, "tags": ["ma"]},
-    {"key": "macd_golden_cross", "name": "MACD金叉/多头", "category": "趋势跟随", "description": "DIF/DEA 金叉、多头排列与零轴位置。", "enabled": True, "default_weight": 1.0, "tags": ["macd"]},
-    {"key": "macd_hist_improve", "name": "MACD柱改善", "category": "动量/反转", "description": "MACD 柱体收敛、翻红或负柱缩短。", "enabled": True, "default_weight": 1.0, "tags": ["momentum"]},
-    {"key": "moderate_volume", "name": "温和放量", "category": "量价/盘口", "description": "成交额、量比和均量温和改善，避免异常巨量。", "enabled": True, "default_weight": 1.0, "tags": ["volume"]},
-    {"key": "risk_penalty", "name": "风险扣分", "category": "风控过滤", "description": "行为风险、跌破关键位、假突破和高换手不涨扣分。", "enabled": True, "default_weight": 1.0, "tags": ["risk"]},
-    {"key": "atr_filter", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
+    {"key": "macd_cross", "name": "MACD金叉/多头", "category": "趋势跟随", "description": "DIF/DEA 金叉、多头排列与零轴位置。", "enabled": True, "default_weight": 1.0, "tags": ["macd"]},
+    {"key": "macd_hist_turn", "name": "MACD柱改善", "category": "动量/反转", "description": "MACD 柱体收敛、翻红或负柱缩短。", "enabled": True, "default_weight": 1.0, "tags": ["momentum"]},
+    {"key": "volume_breakout", "name": "温和放量", "category": "量价/盘口", "description": "成交额、量比和均量温和改善，避免异常巨量。", "enabled": True, "default_weight": 1.0, "tags": ["volume"]},
+    {"key": "risk_control", "name": "风险扣分", "category": "风控过滤", "description": "行为风险、跌破关键位、假突破和高换手不涨扣分。", "enabled": True, "default_weight": 1.0, "tags": ["risk"]},
+    {"key": "atr_risk", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
     {"key": "position_stop", "name": "仓位与止损", "category": "回测/风控/执行", "description": "结合支撑、ATR 与等级输出仓位/止损建议。", "enabled": True, "default_weight": 1.0, "tags": ["position"]},
 ]
 app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与后续量化系统的数据网关")
@@ -111,6 +112,69 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _parse_cny_amount(value) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if float(value) > 0 else None
+    text = str(value).replace(",", "").strip()
+    if not text or text in {"--", "-"}:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    num = float(match.group(0))
+    multiplier = 1.0
+    if "万亿" in text or "萬億" in text or "兆" in text:
+        multiplier = 1_000_000_000_000.0
+    elif "亿" in text or "億" in text:
+        multiplier = 100_000_000.0
+    elif "万" in text or "萬" in text:
+        multiplier = 10_000.0
+    return num * multiplier if num > 0 else None
+
+
+def _apply_company_profile_metrics(q: Quote) -> Quote:
+    if q.asset_type == AssetType.ETF or str(q.symbol).startswith(("15", "51", "56", "58")):
+        return q
+    if q.total_market_cap and q.float_market_cap:
+        return q
+    try:
+        profile = company_profile_service.get_profile(q.symbol, force=False)
+    except Exception:
+        return q
+    updates: dict = {}
+    total_cap = _parse_cny_amount(profile.get("total_market_value"))
+    float_cap = _parse_cny_amount(profile.get("float_market_value"))
+    if not q.total_market_cap and total_cap:
+        updates["total_market_cap"] = total_cap
+    if not q.float_market_cap and float_cap:
+        updates["float_market_cap"] = float_cap
+        updates["circulating_market_cap"] = float_cap
+    last = _safe_float(q.last)
+    if last > 0:
+        if updates.get("total_market_cap") and not q.total_share:
+            updates["total_share"] = updates["total_market_cap"] / last
+        if updates.get("float_market_cap") and not q.float_share:
+            updates["float_share"] = updates["float_market_cap"] / last
+    if not updates:
+        return q
+    sources = dict(q.metric_sources or {})
+    for key in updates:
+        if key in {"total_market_cap", "total_share"}:
+            sources.setdefault(key, "company_profile")
+        if key in {"float_market_cap", "circulating_market_cap", "float_share"}:
+            sources.setdefault(key, "company_profile")
+    reasons = [
+        r for r in (q.metric_missing_reasons or [])
+        if not any(token in str(r) for token in ["总市值", "流通市值", "total_market_cap", "float_market_cap"])
+    ]
+    updates["metric_sources"] = sources
+    updates["metric_missing_reasons"] = reasons
+    updates["source"] = f"{q.source}+company_profile" if q.source else "company_profile"
+    return replace(q, **updates)
 
 
 def _detect_market(symbol: str | None = None, fallback: str = "CN") -> str:
@@ -248,6 +312,8 @@ def _enrich_quote_real(symbol: str, *, force: bool = False, quote_obj: Quote | N
     q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status if used_cached_quote else None)
     q = service.enrich_quote_metrics(q, force_refresh=force, bars=bars)
     q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status if used_cached_quote else None)
+    q = _apply_company_profile_metrics(q)
+    q = service.enrich_quote_metrics(q, force_refresh=False, bars=bars)
     if cached_q is not None and cache_read.cache_status.get("stale") and used_cached_quote:
         q = replace(q, metric_missing_reasons=list(dict.fromkeys((q.metric_missing_reasons or []) + ["quote_cache stale used"])))
     data = _quote_dict_with_aliases(q, cache_read.cache_status if used_cached_quote else None)
@@ -1066,10 +1132,20 @@ def screener_run(
                 }
                 base = float(item.get("total_score") or 0)
                 info_score = float(ir.get("info_score") or 50)
+                usable_info = bool(
+                    item.get("info_effective_count")
+                    or nr.get("count")
+                    or ir.get("items")
+                    or ir.get("industry_mapped_items")
+                )
+                effective_info_weight = calc_info_weight if usable_info else 0.0
                 item["technical_score"] = round(base, 2)
-                item["total_score_with_info"] = round(max(0, min(100, base * (1 - calc_info_weight) + info_score * calc_info_weight)), 2)
-                item["info_weight"] = calc_info_weight
-                item["score_formula"] = f"技术/量价底分×{1-calc_info_weight:.2f} + 信息面分×{calc_info_weight:.2f}"
+                item["total_score_with_info"] = round(max(0, min(100, base * (1 - effective_info_weight) + info_score * effective_info_weight)), 2)
+                item["info_weight"] = effective_info_weight
+                item["score_formula"] = (
+                    f"技术/量价底分×{1-effective_info_weight:.2f} + 信息面分×{effective_info_weight:.2f}"
+                    + ("" if usable_info else "；信息面无有效证据，本轮不改写评分")
+                )
                 item["total_score_with_news"] = item["total_score_with_info"]
                 item["total_score"] = item["total_score_with_info"]
                 if nr.get("sentiment") == "positive":
@@ -1080,7 +1156,35 @@ def screener_run(
                     item.setdefault("risk_flags", []).append(rf)
                 info_count += 1
             except Exception as exc:
-                item["info"] = {"error": str(exc)[:180], "info_score": None}
+                item_snapshot_id = f"{snapshot_id}-{item.get('symbol','')}"
+                detail_url = f"/info?symbol={item.get('symbol','')}&name={item.get('name','')}&limit={info_limit}&snapshot_id={item_snapshot_id}&force=false"
+                err_payload = _normalize_info_payload(
+                    {
+                        "errors": [str(exc)[:220]],
+                        "source_logs": [{
+                            "source": "screener_info_light",
+                            "status": "error",
+                            "count": 0,
+                            "mode": "light",
+                            "skipped_reason": str(exc)[:160],
+                        }],
+                    },
+                    item.get("symbol", ""),
+                    item.get("name"),
+                    item_snapshot_id,
+                    cache_state_service.status("error", key=item_snapshot_id, source="screener_info", error=str(exc)[:180]),
+                    used_snapshot=False,
+                    mode="light",
+                    errors=[str(exc)[:220]],
+                )
+                news_service.store.save_analysis(item.get("symbol", ""), f"snapshot:{item_snapshot_id}", err_payload, name=item.get("name"))
+                cache_state_service.save_info_snapshot(item_snapshot_id, item.get("symbol", ""), err_payload, mode="light")
+                item["info_snapshot_id"] = item_snapshot_id
+                item["info_crawl_time"] = err_payload.get("created_at")
+                item["info_effective_count"] = 0
+                item["info_unique_event_count"] = 0
+                item["info"] = {"error": str(exc)[:180], "info_score": None, "snapshot_id": item_snapshot_id, "detail_url": detail_url}
+                item["news"] = {"snapshot_id": item_snapshot_id, "detail_url": detail_url, "count": 0, "summary": "信息面 light 快照为空，详情页会显示错误原因而不自动重抓。"}
         result["news_analyzed_count"] = info_count
         result["info_analyzed_count"] = info_count
         result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18.3 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
@@ -1567,6 +1671,29 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
             data = cached.data
             cache_status = cached.cache_status
             used_snapshot = True
+    if data is None and sid and not force and not deep_refresh:
+        cached = cache_state_service.latest_info_snapshot(symbol)
+        if cached.data:
+            requested_sid = sid
+            sid = str(cached.data.get("snapshot_id") or cached.cache_status.get("snapshot_id") or sid)
+            data = cached.data
+            cache_status = cached.cache_status
+            used_snapshot = True
+            errors.append(f"requested snapshot not found: {requested_sid}; used latest snapshot for {symbol}")
+        else:
+            errors.append(f"requested snapshot not found: {sid}; no refresh was started automatically")
+            cache_status = cache_state_service.status("miss", key=sid, source="info_snapshot", error=errors[-1])
+            data = _normalize_info_payload(
+                {},
+                symbol,
+                qname,
+                sid,
+                cache_status,
+                used_snapshot=False,
+                mode="snapshot_miss",
+                errors=errors,
+            )
+            data["snapshot_notice"] = "请求的筛选页快照不存在，详情页未自动重抓；请点击普通刷新或深度刷新。"
     if data is None:
         sid = sid or _make_snapshot_id(symbol, limit)
         try:
@@ -1582,7 +1709,10 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
             data = _normalize_info_payload({}, symbol, qname, sid, cache_status, used_snapshot=False, mode=use_mode, errors=errors)
     else:
         data = _normalize_info_payload(data, symbol, qname, sid or str(data.get("snapshot_id") or ""), cache_status, used_snapshot=used_snapshot, mode=str(data.get("mode") or use_mode), errors=errors)
-        data["snapshot_notice"] = "当前使用筛选页快照；如需深挖请点击深度刷新。" if used_snapshot else "当前使用最近信息快照。"
+        if str(data.get("mode")) == "snapshot_miss":
+            data["snapshot_notice"] = "请求的筛选页快照不存在，详情页未自动重抓；请点击普通刷新或深度刷新。"
+        else:
+            data["snapshot_notice"] = "当前使用筛选页快照；如需深挖请点击深度刷新。" if used_snapshot else "当前使用最近信息快照。"
     data["detail_contract"] = {
         "snapshot_id": data.get("snapshot_id"),
         "limit": limit,

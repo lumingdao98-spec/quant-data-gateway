@@ -88,6 +88,9 @@ def test_ui_starts_active_session_with_force_refresh_and_compact_subcharts():
     assert "shouldForceActiveRefresh" in html
     assert "loadQuotes(active)" in html
     assert "refreshDetail(active)" in html
+    assert "quant_postclose_refresh_" in html
+    assert "currentQuoteExtra=js.quote_extra" in html
+    assert "limitUp=extra.limit_up" in html
     assert "grid-template-rows:52px 1fr 82px" in html
     assert "max-height:52px" in html
     assert "MACD指标" in html

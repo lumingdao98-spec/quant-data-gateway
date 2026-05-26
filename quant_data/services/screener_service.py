@@ -215,6 +215,9 @@ class ScreenerResult:
     strength_score: float
     value_score: float
     risk_penalty: float
+    score_before_strategy: float
+    raw_strategy_score_adjustment: float
+    strategy_score_adjustment: float
     total_score: float
     grade: str
     tags: list[str]
@@ -595,7 +598,9 @@ class ScreenerService:
 
         strategy_tags: list[str] = []
         strategy_risks: list[str] = []
+        score_before_strategy = float(total)
         # 策略多选真正参与评分：每个策略基于已计算的技术因子进行轻量加减权。
+        # 但净加分做封顶，避免“全选 50 项”把基础模型直接推到 A+。
         if strategies:
             if "low_position" in strategies and (pos250 is not None and pos250 <= 40):
                 total += 4; strategy_tags.append("策略:低位修复")
@@ -659,6 +664,13 @@ class ScreenerService:
             if "psy_brar_sentiment" in strategies and psy12 is not None and 30 <= psy12 <= 70 and (br26 is None or br26 < 350):
                 total += 1.2; strategy_tags.append("策略:情绪温度正常")
 
+        raw_strategy_delta = round(float(total) - score_before_strategy, 4)
+        capped_strategy_delta = max(-8.0, min(6.0, raw_strategy_delta))
+        if abs(raw_strategy_delta - capped_strategy_delta) > 0.001:
+            strategy_risks.append(
+                f"strategy adjustment capped from {raw_strategy_delta:+.1f} to {capped_strategy_delta:+.1f}"
+            )
+        total = score_before_strategy + capped_strategy_delta
         total_score = round(clamp(total, 0, 100), 2)
         tags = low_tags + trend_tags + momentum_tags + volume_tags + volatility_tags + strength_tags + tape_tags + time_tags + pattern_tags + value_tags + strategy_tags + behavior_tags
         risk_flags = risk_flags + volume_risks + tape_risks + value_risks + strategy_risks
@@ -926,6 +938,9 @@ class ScreenerService:
             strength_score=round(strength_score, 2),
             value_score=round(value_score, 2),
             risk_penalty=round(risk_penalty, 2),
+            score_before_strategy=round(score_before_strategy, 2),
+            raw_strategy_score_adjustment=round(raw_strategy_delta, 2),
+            strategy_score_adjustment=round(capped_strategy_delta, 2),
             total_score=total_score,
             grade=grade,
             tags=tags,

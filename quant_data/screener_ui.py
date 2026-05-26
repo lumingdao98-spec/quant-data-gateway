@@ -17,7 +17,13 @@ def build_screener_ui() -> str:
 .tag{max-width:100%;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.45}.tag.event{background:#172554;border-color:#1d4ed8;color:#bfdbfe}.tag.scope{background:#2e1065;border-color:#6d28d9;color:#ddd6fe}.tag.good{background:#052e16;border-color:#166534;color:#bbf7d0}.news-item{background:#0d1428;border:1px solid rgba(38,54,79,.75);border-radius:10px;padding:8px;margin:7px 0;overflow:hidden}.news-title{font-weight:800;color:#bfdbfe;text-decoration:none;line-height:1.45;white-space:normal;word-break:break-word;overflow-wrap:anywhere}.news-meta{margin-top:5px;font-size:12px;color:#8ea3c3;line-height:1.45}.news-summary{margin-top:6px;font-size:12px;color:#9fb2d4;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word;overflow-wrap:anywhere}.profile-box{background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:9px;margin:8px 0;line-height:1.55;white-space:normal;word-break:break-word;overflow-wrap:anywhere}.global-news-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.global-news-head button{font-size:11px;padding:5px 7px}
 
 .strategy-mini{background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.strategy-mini .row{justify-content:space-between}.strategy-summary-tags{margin-top:8px;max-height:74px;overflow:auto}.strategy-inline-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.strategy-inline-actions button{font-size:11px;padding:5px 7px}.strategy-inline{display:grid;grid-template-columns:1fr;gap:6px;margin-top:8px;max-height:190px;overflow:auto}.strategy-inline label{display:flex;gap:7px;align-items:flex-start;background:#101a2e;border:1px solid #26364f;border-radius:10px;padding:7px;font-size:12px}.strategy-inline input{width:auto;margin-top:2px}.strategy-inline b{color:#dbeafe}.strategy-inline p{margin:2px 0 0;color:#9fb2d4;line-height:1.35}.screener-actions{position:sticky;bottom:-14px;z-index:15;background:linear-gradient(180deg,rgba(15,23,42,.90),#0f172a 38%);border-top:1px solid #26364f;margin:12px -14px -14px;padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap}.modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.72);z-index:120;display:none;align-items:center;justify-content:center;padding:18px}.modal-backdrop.show{display:flex}.strategy-modal{width:min(1060px,96vw);height:min(760px,92vh);background:#0f172a;border:1px solid #41618e;border-radius:18px;box-shadow:0 28px 80px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden}.strategy-modal-h{height:54px;display:flex;align-items:center;gap:10px;justify-content:space-between;padding:0 14px;border-bottom:1px solid #283956;background:#141e32}.strategy-modal-b{padding:12px;overflow:hidden;display:flex;flex-direction:column;gap:10px;min-height:0}.strategy-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.strategy-tabs{display:flex;gap:6px;flex-wrap:wrap}.strategy-tabs button{font-size:12px;padding:6px 9px;background:#172033;border:1px solid #26364f;color:#bfdbfe}.strategy-tabs button.active{background:#2563eb;color:#fff;border-color:#60a5fa}.strategy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:9px;max-height:none;overflow:auto;min-height:0}.strategy-modal .strategy-grid{flex:1}.strategy-card{background:#101a2e;border:1px solid #26364f;border-radius:12px;padding:10px;font-size:12px}.strategy-card .cat-title{font-size:14px;color:#bfdbfe;font-weight:900;margin-bottom:6px}.strategy-card label{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-top:1px solid rgba(38,54,79,.45)}.strategy-card label:first-of-type{border-top:0}.strategy-card input{width:auto;margin-top:2px}.strategy-card b{color:#dbeafe}.strategy-card p{margin:3px 0 0;color:#9fb2d4;line-height:1.35}.strategy-card .meta{color:#8ea3c3;font-size:11px;margin-top:2px}.adjust-note{background:#102037;border:1px solid #27548b;color:#bfdbfe;border-radius:10px;padding:8px;font-size:12px;line-height:1.45}
-
+.compact-table{table-layout:fixed!important;min-width:1420px!important}
+.compact-table th,.compact-table td{overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.compact-table .cell-name{max-width:104px}
+.compact-table .cell-channel{max-width:118px}
+.compact-table .cell-pepb{max-width:92px}
+.compact-table .cell-style{max-width:84px}
+.compact-table .cell-behavior{max-width:150px}
 </style>
 </head>
 <body>
@@ -338,14 +344,14 @@ function drawTrend(data){const canvas=$('trendCanvas');const empty=$('trendEmpty
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='symbol'||k==='name'||k==='grade')?1:-1}sortRows(false);render()});
 
 const FALLBACK_STRATEGIES=[
-  {key:'low_repair',name:'低位修复',category:'稳定恢复',description:'低位结构、回踩修复和趋势确认的兜底策略。',enabled:true,default_weight:1,tags:['fallback','low']},
-  {key:'chase_high_filter',name:'高位追高过滤',category:'稳定恢复',description:'过滤高位放量滞涨、假突破和追高风险。',enabled:true,default_weight:1,tags:['fallback','risk']},
+  {key:'low_position',name:'低位修复',category:'稳定恢复',description:'低位结构、回踩修复和趋势确认的兜底策略。',enabled:true,default_weight:1,tags:['fallback','low']},
+  {key:'avoid_chasing_high',name:'高位追高过滤',category:'稳定恢复',description:'过滤高位放量滞涨、假突破和追高风险。',enabled:true,default_weight:1,tags:['fallback','risk']},
   {key:'ma_repair',name:'均线修复',category:'稳定恢复',description:'MA5/10/20 修复和多头排列观察。',enabled:true,default_weight:1,tags:['ma']},
   {key:'macd_cross',name:'MACD金叉/多头',category:'稳定恢复',description:'MACD DIF/DEA 和柱体方向确认。',enabled:true,default_weight:1,tags:['macd']},
-  {key:'macd_hist_improve',name:'MACD柱改善',category:'稳定恢复',description:'弱转强时的柱体改善观察。',enabled:true,default_weight:1,tags:['macd']},
-  {key:'volume_mild',name:'温和放量',category:'稳定恢复',description:'量能温和配合，避免异常巨量。',enabled:true,default_weight:1,tags:['volume']},
-  {key:'risk_penalty',name:'风险扣分',category:'稳定恢复',description:'行为风险、技术破位、消息风险扣分。',enabled:true,default_weight:1,tags:['risk']},
-  {key:'atr_filter',name:'ATR波动过滤',category:'稳定恢复',description:'过滤异常波动和不可控振幅。',enabled:true,default_weight:1,tags:['atr']},
+  {key:'macd_hist_turn',name:'MACD柱改善',category:'稳定恢复',description:'弱转强时的柱体改善观察。',enabled:true,default_weight:1,tags:['macd']},
+  {key:'volume_breakout',name:'温和放量',category:'稳定恢复',description:'量能温和配合，避免异常巨量。',enabled:true,default_weight:1,tags:['volume']},
+  {key:'risk_control',name:'风险扣分',category:'稳定恢复',description:'行为风险、技术破位、消息风险扣分。',enabled:true,default_weight:1,tags:['risk']},
+  {key:'atr_risk',name:'ATR波动过滤',category:'稳定恢复',description:'过滤异常波动和不可控振幅。',enabled:true,default_weight:1,tags:['atr']},
   {key:'position_stop',name:'仓位与止损',category:'稳定恢复',description:'输出仓位、止损和人工复核建议。',enabled:true,default_weight:1,tags:['position']}
 ];
 const LS_Q_SNAPSHOT='quant_screener_snapshot_id',LS_Q_ROWS='quant_screener_rows',LS_Q_PARAMS='quant_screener_params',LS_Q_SELECTED='quant_screener_selected_symbol',LS_Q_VIEW='quant_screener_view_mode',LS_Q_SCROLL='quant_screener_scroll_position',LS_Q_STRATEGIES='quant_screener_strategy_keys',LS_Q_CUSTOM='quant_screener_custom_symbols';
@@ -499,6 +505,29 @@ async function showTagExplain(tagEnc){
     const anns=(d.annotations_preview||[]).map(a=>`<span class="tag">${htmlEsc(a.label||a.type)}</span>`).join('')||'<span class="small">暂无临时标注</span>';
     body.innerHTML=`<div class="hint">${htmlEsc(d.conclusion||'')}</div><div class="section-title">判断逻辑</div><ul>${why}</ul><div class="section-title">数据对比</div>${metrics}<div class="section-title">K线标注预留</div>${anns}<div class="hint" style="margin-top:8px">${htmlEsc(d.future_interface||'')}</div>`;
   }catch(e){body.innerHTML='<span class="err">读取失败：'+htmlEsc(e)+'</span>'}
+}
+
+function compactRow(r){
+  const behavior=uniq(r.behavior_tags||[]).slice(0,3).join('、')||r.manipulation_risk_label||'--';
+  const channel=(r.candidate_channels||[]).join('/')||'--';
+  const pepb=`${fmt(r.pe_dynamic,1)} / ${fmt(r.pb,1)}`;
+  return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')">
+    <td title="${htmlEsc(r.symbol)}">${htmlEsc(r.symbol)}</td>
+    <td class="cell-clip cell-name" title="${htmlEsc(r.name)}">${htmlEsc(r.name)}</td>
+    <td title="${htmlEsc(r.grade||'--')}">${htmlEsc(r.grade||'--')}</td>
+    <td><span class="score ${scoreClass(r.total_score)}" title="base ${fmt(r.score_before_strategy,1)} / strategy ${fmt(r.strategy_score_adjustment,1)}">${fmt(r.total_score,1)}</span></td>
+    <td>${fmt(r.manual_review_score,1)}</td>
+    <td>${fmt(r.last,2)}</td>
+    <td class="${clsPct(r.change_pct)}">${pct(r.change_pct)}</td>
+    <td class="cell-clip cell-channel" title="${htmlEsc(r.candidate_channel_reason||channel)}">${htmlEsc(channel)}</td>
+    <td title="${money(r.amount)}">${money(r.amount)}</td>
+    <td>${pct(r.turnover)}</td>
+    <td>${fmt(r.volume_ratio,2)}</td>
+    <td class="cell-clip cell-pepb" title="${htmlEsc(pepb)}">${htmlEsc(pepb)}</td>
+    <td class="cell-clip cell-style" title="${htmlEsc(r.market_cap_style||'--')}">${htmlEsc(r.market_cap_style||'--')}</td>
+    <td class="cell-wrap-2 cell-behavior" title="${htmlEsc(behavior)}">${htmlEsc(behavior)}</td>
+    <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
+  </tr>`;
 }
 
 (function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();

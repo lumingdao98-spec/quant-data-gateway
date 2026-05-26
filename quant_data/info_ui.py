@@ -40,7 +40,7 @@ def build_info_ui() -> str:
       <div><label>事件类别</label><input id="category" placeholder="如 财报业绩"></div>
       <div><label>包含未知日期</label><select id="unknown"><option value="true">包含</option><option value="false">不包含</option></select></div>
       <div><button class="secondary" onclick="loadLatestSnapshot()">读取最近快照</button></div>
-      <div><button class="green" onclick="refreshAll(false,false)">普通刷新</button></div>
+      <div><button class="green" onclick="refreshAll(true,false)">普通刷新</button></div>
       <div><button class="secondary" onclick="refreshAll(false,true)">深度刷新</button></div>
       <div><button class="secondary" onclick="clearInfoCache()">清除缓存</button></div>
     </div>
