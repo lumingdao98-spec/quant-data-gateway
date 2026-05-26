@@ -37,6 +37,9 @@ def test_screener_strategy_uses_immediate_fallback_not_loading():
     html = TestClient(api.app).get("/screener").text
     assert "startup fallback" in html
     assert "useFallbackStrategyLibrary('startup fallback')" in html
+    assert "strategyInlineBox" in html
+    assert "screener-actions" in html
+    assert "renderStrategyInline" in html
     assert "策略库加载中" not in html
 
 
