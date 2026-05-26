@@ -7,7 +7,7 @@ def build_info_ui() -> str:
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>信息面分析详情 V3.18.1</title>
+<title>信息面分析详情 V3.18.3</title>
 <style>
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Arial,sans-serif;margin:0;background:#f5f7fb;color:#1f2937;}
   header{background:#0f172a;color:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:10;box-shadow:0 6px 20px rgba(15,23,42,.18)}
@@ -27,7 +27,7 @@ def build_info_ui() -> str:
 </style>
 </head>
 <body>
-<header><h1>信息面分析详情 V3.18.1 / 快照复用、缓存状态、全球行业映射</h1><div><a class="toplink" href="/screener">返回筛选页</a><a class="toplink" href="/cache">缓存状态</a><a class="toplink" href="/ui">行情监控</a></div></header>
+<header><h1>信息面分析详情 V3.18.3 / 快照复用、缓存状态、全球行业映射</h1><div><a class="toplink" href="/screener">返回筛选页</a><a class="toplink" href="/cache">缓存状态</a><a class="toplink" href="/ui">行情监控</a></div></header>
 <main>
   <section class="panel">
     <div class="controls">

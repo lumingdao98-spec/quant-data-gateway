@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+import quant_data.api as api
+
+
+def test_info_page_autoloads_snapshot_and_has_empty_states():
+    html = TestClient(api.app).get("/info?symbol=300274&name=阳光电源").text
+    assert "refreshAll" in html
+    assert "读取最近快照" in html or "最近快照" in html
+    assert "source_logs" in html or "sources" in html
+    assert "全球/行业映射" in html
+    assert "深度刷新" in html
+
+
+def test_info_analyze_empty_snapshot_id_returns_200():
+    res = TestClient(api.app).get("/api/info/analyze/300274?snapshot_id=&force=false&deep_refresh=false")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["ok"] is True
+    assert "cache_status" in data

@@ -23,7 +23,7 @@ def test_closed_loop_smoke_pages_and_cached_apis(monkeypatch, tmp_path):
         assert res.status_code == 200
         text = res.text
         assert text.strip()
-        assert "V3.18.1" in text
+        assert "V3.18.3" in text
         assert "traceback" not in text.lower()
 
     assert client.get("/api/cache/screener/latest").json()["results"]

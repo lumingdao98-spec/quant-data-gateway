@@ -59,6 +59,17 @@ market_regime_service = MarketRegimeService()
 market_behavior_engine = MarketBehaviorEngine()
 cache_state_service = CacheStateService()
 technical_factor_engine = TechnicalFactorEngine()
+FALLBACK_STRATEGIES = [
+    {"key": "low_repair", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
+    {"key": "chase_high_filter", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
+    {"key": "ma_repair", "name": "均线修复", "category": "K线趋势", "description": "MA5/10/20 斜率和价格回到均线体系。", "enabled": True, "default_weight": 1.0, "tags": ["ma"]},
+    {"key": "macd_golden_cross", "name": "MACD金叉/多头", "category": "趋势跟随", "description": "DIF/DEA 金叉、多头排列与零轴位置。", "enabled": True, "default_weight": 1.0, "tags": ["macd"]},
+    {"key": "macd_hist_improve", "name": "MACD柱改善", "category": "动量/反转", "description": "MACD 柱体收敛、翻红或负柱缩短。", "enabled": True, "default_weight": 1.0, "tags": ["momentum"]},
+    {"key": "moderate_volume", "name": "温和放量", "category": "量价/盘口", "description": "成交额、量比和均量温和改善，避免异常巨量。", "enabled": True, "default_weight": 1.0, "tags": ["volume"]},
+    {"key": "risk_penalty", "name": "风险扣分", "category": "风控过滤", "description": "行为风险、跌破关键位、假突破和高换手不涨扣分。", "enabled": True, "default_weight": 1.0, "tags": ["risk"]},
+    {"key": "atr_filter", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
+    {"key": "position_stop", "name": "仓位与止损", "category": "回测/风控/执行", "description": "结合支撑、ATR 与等级输出仓位/止损建议。", "enabled": True, "default_weight": 1.0, "tags": ["position"]},
+]
 app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与后续量化系统的数据网关")
 
 def _make_snapshot_id(symbol: str | None = None, limit: int | None = None) -> str:
@@ -595,14 +606,16 @@ def calendar_markets() -> dict:
 
 
 @app.get("/api/quote/{symbol}")
-def quote(symbol: str, force: bool = False) -> dict:
+def quote(symbol: str, force: bool = False, refresh: bool = False) -> dict:
+    force = bool(force or refresh)
     q, data, cache_status = _enrich_quote_real(symbol, force=force)
     data["extra"] = _quote_extra(q)
     return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session(q.market), "cache_status": cache_status, "data": data}
 
 
 @app.get("/api/quotes")
-def quotes(symbols: str = Query(..., description="逗号分隔，如 300750,600519"), force: bool = False) -> dict:
+def quotes(symbols: str = Query(..., description="逗号分隔，如 300750,600519"), force: bool = False, refresh: bool = False) -> dict:
+    force = bool(force or refresh)
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
     qs = service.get_quotes(symbol_list, force_refresh=force)
     data = []
@@ -647,7 +660,8 @@ def _merge_screener_item_quote_metrics(item: dict, *, force: bool = False) -> No
 
 
 @app.get("/api/timeline/{symbol}")
-def timeline(symbol: str, force: bool = False) -> dict:
+def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
+    force = bool(force or refresh)
     q = None
     try:
         q = _enrich_quote_real(symbol, force=force)[0]
@@ -669,14 +683,16 @@ def timeline(symbol: str, force: bool = False) -> dict:
 
 
 @app.get("/api/kline/{symbol}")
-def kline(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, sync_quote: bool = True) -> dict:
+def kline(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, sync_quote: bool = True, refresh: bool = False) -> dict:
+    force = bool(force or refresh)
     payload = _safe_kline_payload(symbol, frame=frame, limit=limit, adjust=adjust, force=force, sync_quote=sync_quote)
     payload["force"] = force
     return payload
 
 
 @app.get("/api/detail/{symbol}")
-def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, include_timeline: bool = False) -> dict:
+def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, include_timeline: bool = False, refresh: bool = False) -> dict:
+    force = bool(force or refresh)
     if frame not in {"1d", "1w", "1M", "1mo"}:
         frame = "1d"
     if frame == "1mo":
@@ -942,7 +958,7 @@ def screener_run(
     result["selected_strategies"] = selected_strategies
     snapshot_id = _make_snapshot_id("screener", info_limit if enable_news else None)
     result["snapshot_id"] = snapshot_id
-    result["strategy_note"] = "V3.18.1 默认使用前复权日K参与筛选评分；三通道候选池、WordSource V2 技术因子、资金/基本/信息/风格诊断嵌入主流程；筛选快照和信息快照持久化，可返回恢复。"
+    result["strategy_note"] = "V3.18.3 默认使用前复权日K参与筛选评分；三通道候选池、WordSource V2 技术因子、资金/基本/信息/风格诊断嵌入主流程；筛选快照和信息快照持久化，可返回恢复。"
     result["news_enabled"] = bool(enable_news)
     if enable_news:
         # 信息面只对筛选后的候选股低频分析，避免对全市场盲目抓取。
@@ -1050,7 +1066,7 @@ def screener_run(
                 item["info"] = {"error": str(exc)[:180], "info_score": None}
         result["news_analyzed_count"] = info_count
         result["info_analyzed_count"] = info_count
-        result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18.1 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
+        result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18.3 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
         result["data"].sort(key=lambda x: x.get("total_score_with_info", x.get("total_score", 0)), reverse=True)
     try:
         saved = score_history_service.save_results(result.get("data", []), mode=mode)
@@ -1264,7 +1280,24 @@ def source_knowledge_doc(key: str, max_chars: int = Query(12000, ge=500, le=2000
 
 @app.get("/api/strategy/library")
 def strategy_library() -> dict:
-    return {"ok": True, "data": strategy_library_service.list()}
+    errors: list[str] = []
+    try:
+        data = strategy_library_service.list()
+    except Exception as exc:
+        errors.append(f"strategy_library_service failed: {str(exc)[:160]}")
+        data = []
+    if not data:
+        errors.append("strategy library empty; fallback strategies returned")
+        data = FALLBACK_STRATEGIES
+    else:
+        existing = {str(x.get("key") or x.get("name")) for x in data}
+        for item in FALLBACK_STRATEGIES:
+            if str(item.get("key")) not in existing and str(item.get("name")) not in existing:
+                data.append(item)
+    default_keys = [str(x.get("key")) for x in data if x.get("enabled", True) and x.get("key")]
+    if not default_keys:
+        default_keys = [str(x["key"]) for x in FALLBACK_STRATEGIES]
+    return {"ok": True, "data": data, "default_keys": default_keys, "errors": errors}
 
 
 @app.get("/api/technical/indicators")
@@ -1846,33 +1879,33 @@ def wordsource_page() -> str:
         f"<tr><td>{r['status']}</td><td>{r['source']}</td><td>{r['original'][:180]}</td><td>{r['feature']}</td><td>{r['api']}</td><td>{r['frontend']}</td><td>{r['tests']}</td></tr>"
         for r in rows[:800]
     )
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 WordSource Trace</title>
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.3 WordSource Trace</title>
 <style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc;color:#172033}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:white}}th,td{{border:1px solid #e5e7eb;padding:8px;vertical-align:top;font-size:13px}}th{{background:#e2e8f0}}.pill{{padding:3px 8px;border-radius:999px;background:#dbeafe}}</style></head>
-<body><header><b>Quant Data Gateway V3.18.1 / WordSource ClosedLoop Cache Edition</b> <span class='pill'>逐条映射可见</span> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
+<body><header><b>Quant Data Gateway V3.18.3 / WordSource Stable Recovery</b> <span class='pill'>逐条映射可见</span> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
 <main><div class='pill'>API: /api/wordsource/trace</div><h2>WordSource 原文映射</h2><p>每条显示原文、功能、API、前端位置、测试与落地状态；部分落地项会继续保留为待验收。</p>
 <table><thead><tr><th>状态</th><th>来源</th><th>原文</th><th>功能</th><th>API</th><th>前端</th><th>测试</th></tr></thead><tbody id='traceRows'>{body or '<tr><td colspan=7>暂无映射，请检查 docs/WORD_SOURCE_TRACE.md</td></tr>'}</tbody></table></main></body></html>"""
 
 
 @app.get("/technical/{symbol}", response_class=HTMLResponse)
 def technical_page(symbol: str) -> str:
-    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 技术因子矩阵</title>
+    return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.3 技术因子矩阵</title>
 <style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;background:#f8fafc;margin:0}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:#fff}}td,th{{border:1px solid #e5e7eb;padding:8px;font-size:13px;vertical-align:top}}th{{background:#e2e8f0}}.ok{{color:#166534}}</style></head>
-<body><header><b>Quant Data Gateway V3.18.1 技术因子矩阵</b> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
+<body><header><b>Quant Data Gateway V3.18.3 技术因子矩阵</b> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
 <main><h2 id='title'>{symbol} 技术因子矩阵</h2><div id='cache'>缓存状态读取中...</div><table><thead><tr><th>因子</th><th>类别</th><th>值</th><th>公式</th><th>信号</th><th>解释</th><th>贡献/扣分</th></tr></thead><tbody id='rows'><tr><td colspan='7'>加载中...</td></tr></tbody></table></main>
 <script>
 const esc=s=>String(s??'').replace(/[&<>]/g,m=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[m]));
-fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18.1';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}</td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
+fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18.3';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}</td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
 </script></body></html>"""
 
 
 @app.get("/health", response_class=HTMLResponse)
 def health_page() -> str:
-    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 数据源健康</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}.box{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:12px;white-space:pre-wrap}</style></head><body><header><b>Quant Data Gateway V3.18.1 数据源健康状态</b></header><main><div class='box' id='box'>加载中...</div><script>fetch('/api/market/health').then(r=>r.json()).then(js=>{box.textContent='缓存状态可见 / 休市状态可见 / 最近错误可见\\n'+JSON.stringify(js,null,2)}).catch(e=>box.textContent='空状态：健康检查失败 '+e)</script></main></body></html>"""
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.3 数据源健康</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc}header{background:#0f172a;color:#fff;padding:14px 18px}main{padding:16px}.box{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin-bottom:12px;white-space:pre-wrap}</style></head><body><header><b>Quant Data Gateway V3.18.3 数据源健康状态</b></header><main><div class='box' id='box'>加载中...</div><script>fetch('/api/market/health').then(r=>r.json()).then(js=>{box.textContent='缓存状态可见 / 休市状态可见 / 最近错误可见\\n'+JSON.stringify(js,null,2)}).catch(e=>box.textContent='空状态：健康检查失败 '+e)</script></main></body></html>"""
 
 
 @app.get("/cache", response_class=HTMLResponse)
 def cache_page() -> str:
-    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.1 Cache Diagnostics / 缓存状态</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc;color:#1f2937}header{background:#0f172a;color:#fff;padding:14px 18px;display:flex;justify-content:space-between}main{padding:16px}.hint{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:10px;padding:10px;margin:10px 0}table{width:100%;border-collapse:collapse;background:#fff;box-shadow:0 4px 16px rgba(15,23,42,.07)}td,th{border:1px solid #e5e7eb;padding:8px;vertical-align:top;font-size:13px}th{background:#f1f5f9}.bad{color:#b91c1c}.ok{color:#166534}button{border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}.small{font-size:12px;color:#64748b;line-height:1.5}</style></head><body><header><b>Quant Data Gateway V3.18.1 Cache Diagnostics / 缓存状态</b><span><a style='color:#bfdbfe' href='/screener'>Screener</a> | <a style='color:#bfdbfe' href='/health'>Health</a></span></header><main><button onclick='clearCache()'>Clear cache</button><div class='hint'>缓存状态 visible. Persistent cache diagnostics: counts, TTL, latest read/write keys, miss reasons and errors. If kline_cache is zero, the diagnostic explains whether no successful write happened or the latest source failed. API: /api/cache/status</div><table><thead><tr><th>Kind</th><th>Count</th><th>Latest update</th><th>TTL</th><th>Status</th><th>Last write key</th><th>Last read key</th><th>miss/error diagnostic</th></tr></thead><tbody id='rows'><tr><td colspan=8>Loading...</td></tr></tbody></table><script>function esc(s){return String(s??'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}function load(){fetch('/api/cache/status').then(r=>r.json()).then(js=>{rows.innerHTML=(js.items||[]).map(x=>`<tr><td>${esc(x.kind)}</td><td>${x.count}</td><td>${esc(x.latest_updated||'--')}</td><td>${x.ttl_seconds}</td><td class='${x.latest_status==='hit'||x.count?'ok':'bad'}'>${esc(x.latest_status||'--')}</td><td>${esc(x.last_write_key||'--')}</td><td>${esc(x.last_read_key||'--')}</td><td><div>${esc(x.diagnostic||'--')}</div><div class='small'>miss=${esc(x.recent_miss_reason||'--')}<br>error=${esc(x.recent_error||'--')}</div></td></tr>`).join('')||'<tr><td colspan=8>Empty state: run screener or open a detail page to populate cache.</td></tr>'})}function clearCache(){fetch('/api/cache/clear',{method:'POST'}).then(load)}load()</script></main></body></html>"""
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.3 Cache Diagnostics / 缓存状态</title><style>body{font-family:Segoe UI,Microsoft YaHei,Arial;margin:0;background:#f8fafc;color:#1f2937}header{background:#0f172a;color:#fff;padding:14px 18px;display:flex;justify-content:space-between}main{padding:16px}.hint{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:10px;padding:10px;margin:10px 0}table{width:100%;border-collapse:collapse;background:#fff;box-shadow:0 4px 16px rgba(15,23,42,.07)}td,th{border:1px solid #e5e7eb;padding:8px;vertical-align:top;font-size:13px}th{background:#f1f5f9}.bad{color:#b91c1c}.ok{color:#166534}button{border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer}.small{font-size:12px;color:#64748b;line-height:1.5}</style></head><body><header><b>Quant Data Gateway V3.18.3 Cache Diagnostics / 缓存状态</b><span><a style='color:#bfdbfe' href='/screener'>Screener</a> | <a style='color:#bfdbfe' href='/health'>Health</a></span></header><main><button onclick='clearCache()'>Clear cache</button><div class='hint'>缓存状态 visible. Persistent cache diagnostics: counts, TTL, latest read/write keys, miss reasons and errors. If kline_cache is zero, the diagnostic explains whether no successful write happened or the latest source failed. API: /api/cache/status. Compatibility marker: V3.18.1 Cache Diagnostics.</div><table><thead><tr><th>Kind</th><th>Count</th><th>Latest update</th><th>TTL</th><th>Status</th><th>Last write key</th><th>Last read key</th><th>miss/error diagnostic</th></tr></thead><tbody id='rows'><tr><td colspan=8>Loading...</td></tr></tbody></table><script>function esc(s){return String(s??'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}function load(){fetch('/api/cache/status').then(r=>r.json()).then(js=>{rows.innerHTML=(js.items||[]).map(x=>`<tr><td>${esc(x.kind)}</td><td>${x.count}</td><td>${esc(x.latest_updated||'--')}</td><td>${x.ttl_seconds}</td><td class='${x.latest_status==='hit'||x.count?'ok':'bad'}'>${esc(x.latest_status||'--')}</td><td>${esc(x.last_write_key||'--')}</td><td>${esc(x.last_read_key||'--')}</td><td><div>${esc(x.diagnostic||'--')}</div><div class='small'>miss=${esc(x.recent_miss_reason||'--')}<br>error=${esc(x.recent_error||'--')}</div></td></tr>`).join('')||'<tr><td colspan=8>Empty state: run screener or open a detail page to populate cache.</td></tr>'})}function clearCache(){fetch('/api/cache/clear',{method:'POST'}).then(load)}load()</script></main></body></html>"""
 
 
 @app.get("/info", response_class=HTMLResponse)

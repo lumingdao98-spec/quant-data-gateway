@@ -7,7 +7,7 @@ def build_screener_ui() -> str:
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Quant Data Gateway V3.18.1 - ClosedLoop Cache Edition</title>
+<title>Quant Data Gateway V3.18.3 - Stable Recovery</title>
 <style>
 :root{--bg:#0b1020;--panel:#101827;--panel2:#151f34;--line:#283956;--text:#dbeafe;--muted:#8ea3c3;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--purple:#a78bfa;--shadow:0 18px 48px rgba(0,0,0,.28)}
 *{box-sizing:border-box}html,body{height:100%;margin:0}body{background:var(--bg);color:var(--text);font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif;overflow:hidden}.app{height:100vh;display:grid;grid-template-rows:52px 1fr 120px;grid-template-columns:320px 1fr 360px;grid-template-areas:"top top top" "left main right" "log log log";gap:0}.top{grid-area:top;background:#111827;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 14px}.left{grid-area:left;background:#0f172a;border-right:1px solid var(--line);padding:14px;overflow:auto}.main{grid-area:main;padding:12px;overflow:hidden;display:flex;flex-direction:column;gap:10px}.right{grid-area:right;background:#0f172a;border-left:1px solid var(--line);padding:12px;overflow:auto}.log{grid-area:log;background:#0f172a;border-top:1px solid var(--line);padding:8px 12px;overflow:auto;font-family:Consolas,monospace;font-size:12px;color:#a8bbd8}.brand{font-weight:900;color:#bfdbfe;font-size:16px;display:flex;align-items:center;gap:8px}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 16px var(--green)}.pill{display:inline-flex;align-items:center;border:1px solid #30405d;background:#1f2a44;color:#bfdbfe;border-radius:999px;padding:5px 9px;font-size:12px}.pill.green{color:#86efac;border-color:#166534;background:#112e21}.pill.yellow{color:#fcd34d;border-color:#854d0e;background:#2a2112}.grow{flex:1}.card{background:rgba(16,24,39,.98);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}.card-h{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--line);background:#141e32}.card-title{font-weight:900}.card-b{padding:12px}.section-title{font-size:13px;color:#93a4c1;margin:12px 0 7px}.row{display:flex;gap:8px;align-items:center}.row.wrap{flex-wrap:wrap}input,select,textarea{width:100%;background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:10px;padding:9px 11px;outline:none}textarea{min-height:86px;resize:vertical;line-height:1.45}input:focus,select:focus,textarea:focus{border-color:#60a5fa;box-shadow:0 0 0 3px rgba(59,130,246,.12)}button{background:#2563eb;color:#fff;border:0;border-radius:10px;padding:9px 12px;cursor:pointer;font-weight:800;white-space:nowrap}button:hover{background:#1d4ed8}button:disabled{opacity:.45;cursor:not-allowed}.btn2{background:#243145;color:#c7d2fe}.btn2:hover{background:#30405d}.btn-green{background:#16a34a}.btn-green:hover{background:#15803d}.btn-red{background:#991b1b}.btn-red:hover{background:#7f1d1d}.check{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px;color:#cbd5e1}.check input{width:auto}.hint{font-size:12px;color:#9fb2d4;line-height:1.55;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.summary{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.metric{background:#172033;border:1px solid #26364f;border-radius:12px;padding:9px;min-width:0}.metric .k{font-size:11px;color:#8ea3c3}.metric .v{font-size:18px;font-weight:900;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.table-wrap{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-radius:14px;background:#0f172a}.compact-table{table-layout:fixed;min-width:1120px}.full-table{table-layout:auto;min-width:2200px}.cell-clip{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cell-wrap-2{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;max-height:2.8em;text-align:left}.view-toggle button{font-size:12px;padding:6px 9px}.view-toggle button.active{background:#2563eb;color:#fff}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 8px;border-bottom:1px solid rgba(38,54,79,.8);text-align:right;white-space:nowrap}th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}th{position:sticky;top:0;background:#182238;color:#93c5fd;z-index:1;cursor:pointer}tbody tr{cursor:pointer}tbody tr:hover{background:#1e293b}.selected{background:#233555!important}.up{color:var(--red)}.down{color:var(--green)}.flat{color:#cbd5e1}.muted{color:var(--muted)}.small{font-size:12px;color:var(--muted)}.tag{display:inline-block;padding:2px 6px;border-radius:999px;background:#1f2a44;color:#bfdbfe;border:1px solid #30405d;font-size:11px;margin:1px;cursor:pointer}.tag:hover{filter:brightness(1.25);border-color:#60a5fa}.explain-box{position:fixed;right:390px;top:72px;width:420px;max-height:72vh;overflow:auto;background:#0b1224;border:1px solid #40608f;border-radius:16px;box-shadow:0 22px 60px rgba(0,0,0,.45);z-index:99;padding:14px;display:none}.explain-box h3{margin:0 0 8px}.explain-box .x{float:right;background:#243145;padding:4px 8px}.explain-metric{display:grid;grid-template-columns:118px 1fr;gap:8px;border-top:1px solid #26364f;padding:6px 0;font-size:12px}.tag.risk{color:#fecaca;border-color:#7f1d1d;background:#2a1111}.score{font-weight:900}.score.a{color:#fbbf24}.score.b{color:#22c55e}.score.c{color:#93c5fd}.score.d{color:#94a3b8}.detail-title{font-size:20px;font-weight:900}.kv{display:grid;grid-template-columns:1fr 1fr;gap:8px}.kv .item{background:#101a2e;border:1px solid #26364f;border-radius:10px;padding:8px}.kv span{display:block;font-size:11px;color:#8ea3c3}.kv b{display:block;margin-top:3px;text-align:right}.bar{height:8px;background:#0b1224;border-radius:999px;overflow:hidden;border:1px solid #26364f}.bar i{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#3b82f6,#f59e0b);width:0}.quick{display:grid;grid-template-columns:1fr 1fr;gap:7px}.quick button{font-size:12px;padding:8px 9px;text-align:left;background:#172033;color:#bfdbfe;border:1px solid #26364f}.quick button:hover{background:#1f2a44}.err{color:#fecaca}.ok{color:#86efac}@media(max-width:1200px){.app{grid-template-columns:300px 1fr;grid-template-areas:"top top" "left main" "log log"}.right{display:none}.summary{grid-template-columns:repeat(3,1fr)}}
@@ -23,7 +23,7 @@ def build_screener_ui() -> str:
 <body>
 <div class="app">
   <div class="top">
-    <div class="brand"><span class="dot"></span>量化数据网关 V3.18.1 · ClosedLoop Cache Edition</div>
+    <div class="brand"><span class="dot"></span>量化数据网关 V3.18.3 · Stable Recovery</div>
     <span class="pill green">保留V1.9行情/分时/K线详情</span>
     <span class="pill yellow">筛选评分仅作研究辅助</span>
     <div class="grow"></div>
@@ -254,7 +254,7 @@ function openInfoDetailPage(){
   window.open(url,'_blank');
 }
 function renderInfoPanel(r){
-  // V3.18.1：筛选页展示主流程诊断字段，信息流长列表仍进入详情页，结果通过后端 snapshot 恢复。
+  // V3.18.3：筛选页展示主流程诊断字段，信息流长列表仍进入详情页，结果通过后端 snapshot 恢复。
   const btn = `<button class="btn2" onclick="openInfoDetailPage()">打开信息面分析详情页</button>`;
   let note = '<div class="small" style="margin-top:8px">新闻明细、全球/前沿要闻、宏观/行业/公司/资金/国际/舆情分层、publish/event/crawl 时间、统计图、事件簇去重组和来源诊断均在详情页查看。</div>';
   if(r&&r.info){
@@ -329,6 +329,150 @@ function drawTrend(data){const canvas=$('trendCanvas');const empty=$('trendEmpty
 
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='symbol'||k==='name'||k==='grade')?1:-1}sortRows(false);render()});
 
+const FALLBACK_STRATEGIES=[
+  {key:'low_repair',name:'低位修复',category:'稳定恢复',description:'低位结构、回踩修复和趋势确认的兜底策略。',enabled:true,default_weight:1,tags:['fallback','low']},
+  {key:'chase_high_filter',name:'高位追高过滤',category:'稳定恢复',description:'过滤高位放量滞涨、假突破和追高风险。',enabled:true,default_weight:1,tags:['fallback','risk']},
+  {key:'ma_repair',name:'均线修复',category:'稳定恢复',description:'MA5/10/20 修复和多头排列观察。',enabled:true,default_weight:1,tags:['ma']},
+  {key:'macd_cross',name:'MACD金叉/多头',category:'稳定恢复',description:'MACD DIF/DEA 和柱体方向确认。',enabled:true,default_weight:1,tags:['macd']},
+  {key:'macd_hist_improve',name:'MACD柱改善',category:'稳定恢复',description:'弱转强时的柱体改善观察。',enabled:true,default_weight:1,tags:['macd']},
+  {key:'volume_mild',name:'温和放量',category:'稳定恢复',description:'量能温和配合，避免异常巨量。',enabled:true,default_weight:1,tags:['volume']},
+  {key:'risk_penalty',name:'风险扣分',category:'稳定恢复',description:'行为风险、技术破位、消息风险扣分。',enabled:true,default_weight:1,tags:['risk']},
+  {key:'atr_filter',name:'ATR波动过滤',category:'稳定恢复',description:'过滤异常波动和不可控振幅。',enabled:true,default_weight:1,tags:['atr']},
+  {key:'position_stop',name:'仓位与止损',category:'稳定恢复',description:'输出仓位、止损和人工复核建议。',enabled:true,default_weight:1,tags:['position']}
+];
+const LS_Q_SNAPSHOT='quant_screener_snapshot_id',LS_Q_ROWS='quant_screener_rows',LS_Q_PARAMS='quant_screener_params',LS_Q_SELECTED='quant_screener_selected_symbol',LS_Q_VIEW='quant_screener_view_mode',LS_Q_SCROLL='quant_screener_scroll_position',LS_Q_STRATEGIES='quant_screener_strategy_keys',LS_Q_CUSTOM='quant_screener_custom_symbols';
+function persistScreenerState(){
+  try{
+    localStorage.setItem(LS_Q_ROWS,JSON.stringify(rows||[]));
+    localStorage.setItem(LS_Q_SELECTED,selected?.symbol||localStorage.getItem(LS_SELECTED)||'');
+    localStorage.setItem(LS_Q_VIEW,tableMode);
+    localStorage.setItem(LS_Q_SCROLL,String(document.querySelector('.table-wrap')?.scrollTop||0));
+    localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+    localStorage.setItem(LS_Q_CUSTOM,$('symbols')?.value||'');
+    const sid=localStorage.getItem(LS_SNAPSHOT)||localStorage.getItem(LS_SNAPSHOT_LEGACY)||localStorage.getItem(LS_Q_SNAPSHOT)||'';
+    if(sid)localStorage.setItem(LS_Q_SNAPSHOT,sid);
+    const params=localStorage.getItem(LS_PARAMS);
+    if(params)localStorage.setItem(LS_Q_PARAMS,params);
+  }catch(e){}
+}
+function restoreScreenerState(){
+  try{
+    const syms=localStorage.getItem(LS_Q_CUSTOM)||localStorage.getItem(LS_CUSTOM)||localStorage.getItem(LS);
+    if(syms&&$('symbols'))$('symbols').value=syms;
+    const vm=localStorage.getItem(LS_Q_VIEW)||localStorage.getItem(LS_VIEW);
+    if(vm)tableMode=vm;
+    const saved=localStorage.getItem(LS_Q_ROWS);
+    if(saved){
+      const parsed=JSON.parse(saved);
+      if(Array.isArray(parsed)&&parsed.length){
+        rows=parsed;
+        const sym=localStorage.getItem(LS_Q_SELECTED)||localStorage.getItem(LS_SELECTED);
+        selected=rows.find(x=>x.symbol===sym)||rows[0]||null;
+        updateMetrics({result_count:rows.length,elapsed_seconds:'local',error_count:0});
+        $('cacheHint').textContent='Restored local screener rows immediately; backend snapshot refresh continues in background.';
+      }
+    }
+  }catch(e){}
+}
+function ensureSortControl(){
+  if($('sortMode'))return;
+  const host=$('cacheHint')?.parentElement;
+  if(!host)return;
+  const box=document.createElement('div');
+  box.className='row';
+  box.style.margin='8px 0';
+  box.innerHTML='<span class="small">排序</span><select id="sortMode" onchange="applySortMode(this.value)"><option value="total_score">综合分优先</option><option value="low_position">低位优先</option><option value="capital">资金强度优先</option><option value="trend">技术趋势优先</option><option value="info">信息面优先</option><option value="behavior">行为风险低优先</option></select>';
+  host.insertBefore(box,$('cacheHint'));
+}
+function useFallbackStrategyLibrary(reason){
+  strategyLibrary=FALLBACK_STRATEGIES.slice();
+  defaultStrategyKeys=new Set(strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));
+  const saved=localStorage.getItem(LS_STRATEGIES)||localStorage.getItem(LS_Q_STRATEGIES);
+  selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
+  currentStrategyCategory='全部';
+  renderStrategyTabs();renderStrategyLibrary();
+  if($('strategySummary'))$('strategySummary').insertAdjacentHTML('beforeend',` <span class="tag risk">fallback: ${htmlEsc(reason||'strategy api timeout')}</span>`);
+}
+async function loadStrategyLibrary(){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),3000);
+  try{
+    const r=await fetch('/api/strategy/library',{cache:'no-store',signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const js=await r.json();
+    strategyLibrary=Array.isArray(js.data)&&js.data.length?js.data:FALLBACK_STRATEGIES.slice();
+    defaultStrategyKeys=new Set((js.default_keys&&js.default_keys.length?js.default_keys:strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key)));
+    const saved=localStorage.getItem(LS_STRATEGIES)||localStorage.getItem(LS_Q_STRATEGIES);
+    selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
+    currentStrategyCategory='全部';
+    renderStrategyTabs();renderStrategyLibrary();
+  }catch(e){
+    clearTimeout(timer);
+    useFallbackStrategyLibrary(String(e));
+  }
+}
+function sortValue(row,key){
+  if(key==='pe')return Number(row.pe_dynamic??row.pe_ttm??0);
+  if(key==='market_cap')return Number(row.float_market_cap??row.total_market_cap??0);
+  if(key==='ma20_deviation')return Number(row.ma20_deviation_pct??0);
+  if(key==='risk_penalty')return Number(row.risk_penalty??row.behavior_score??0);
+  if(key==='low_position')return Number(row.pos20??row.position_20d??100);
+  if(key==='capital')return Number(row.strength_score??row.volume_score??row.amount??0);
+  if(key==='trend')return Number(row.trend_score??row.technical_score??row.total_score??0);
+  if(key==='info')return Number(row.info?.info_score??row.news?.news_score??row.info_score??0);
+  if(key==='behavior')return Number(row.behavior_score??0);
+  return row[key];
+}
+function sortRows(toggle=true){
+  if(toggle)sortDir*=-1;
+  rows.sort((a,b)=>{
+    const av=sortValue(a,sortKey),bv=sortValue(b,sortKey);
+    if(typeof av==='string'||typeof bv==='string')return String(av??'').localeCompare(String(bv??''),'zh')*sortDir;
+    return ((Number(av)||0)-(Number(bv)||0))*sortDir;
+  });
+  persistScreenerState();
+}
+function setSort(key){
+  if(sortKey===key)sortDir*=-1;
+  else{sortKey=key;sortDir=(key==='symbol'||key==='name'||key==='grade'||key==='low_position'||key==='behavior'||key==='risk_penalty')?1:-1;}
+  sortRows(false);render();persistScreenerState();
+}
+function applySortMode(mode){
+  const map={total_score:['total_score',-1],low_position:['low_position',1],capital:['capital',-1],trend:['trend',-1],info:['info',-1],behavior:['behavior',1]};
+  const pair=map[mode]||map.total_score;
+  sortKey=pair[0];sortDir=pair[1];sortRows(false);render();persistScreenerState();
+}
+function th(label,key){return key?`<th data-k="${key}" onclick="setSort('${key}')" title="点击排序">${label}${sortKey===key?(sortDir>0?' ↑':' ↓'):''}</th>`:`<th>${label}</th>`}
+function renderHeader(){
+  const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;
+  table.className=tableMode==='compact'?'compact-table':'full-table';
+  const compact=['代码','名称','等级','综合分','复核分','最新价','涨跌幅','候选通道','成交额','换手率','量比','PE/PB','市值风格','行为风险','操作'];
+  const compactCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['市值风格','market_cap_style'],['行为风险','behavior'],['操作','']];
+  const fullCols=[['代码','symbol'],['名称','name'],['候选来源通道',''],['换手率','turnover'],['量比','volume_ratio'],['成交额','amount'],['PE','pe'],['PB','pb'],['总市值','market_cap'],['流通市值','market_cap'],['MA20偏离','ma20_deviation'],['近5日振幅','amplitude_5d_pct'],['近20日位置','low_position'],['技术信号摘要',''],['资金面信号','capital'],['板块/题材阶段',''],['市值风格','market_cap_style'],['支撑距离',''],['压力距离',''],['追高风险','risk_penalty'],['行为风险','behavior'],['信息面快照','info'],['缺失提示',''],['等级','grade'],['核心标签','']];
+  const debugCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['原始字段',''],['缺失原因',''],['source logs',''],['cache_status',''],['操作','']];
+  const cols=tableMode==='compact'?compactCols:tableMode==='debug'?debugCols:fullCols;
+  head.innerHTML='<tr>'+cols.map(x=>th(x[0],x[1])).join('')+'</tr>';
+}
+function selectRow(symbol){selected=rows.find(x=>x.symbol===symbol)||null;if(selected){localStorage.setItem(LS_SELECTED,selected.symbol);localStorage.setItem(LS_Q_SELECTED,selected.symbol)}render();renderDetail(selected);persistScreenerState()}
+async function restoreLastScreener(){
+  restoreScreenerState();render();if(selected)renderDetail(selected);
+  try{
+    const sid=localStorage.getItem(LS_Q_SNAPSHOT)||localStorage.getItem(LS_SNAPSHOT)||localStorage.getItem(LS_SNAPSHOT_LEGACY)||'';
+    let js=null;
+    if(sid){const resp=await fetch('/api/screener/snapshot/'+encodeURIComponent(sid),{cache:'no-store'});js=await resp.json();}
+    if(!js||!js.ok){const resp=await fetch('/api/cache/screener/latest',{cache:'no-store'});js=await resp.json();}
+    if(!js||!js.ok){$('cacheHint').textContent=rows.length?'Using local screener rows; backend snapshot unavailable.':'No screener snapshot to restore.';return}
+    const incoming=snapshotRows(js);
+    if(!incoming.length){$('cacheHint').textContent='Snapshot has no rows; local rows kept if available.';if(!rows.length){render();renderDetail(null)}return}
+    rows=incoming;selected=null;
+    const sid2=js.snapshot_id||sid;if(sid2){localStorage.setItem(LS_Q_SNAPSHOT,sid2);localStorage.setItem(LS_SNAPSHOT,sid2);localStorage.setItem(LS_SNAPSHOT_LEGACY,sid2);}
+    applySnapshotState(js);sortRows(false);render();restoreSelection(js.selected_symbol||js.selected_row?.symbol);persistScreenerState();
+    const stale=js.cache_status?.stale?' stale':'';
+    $('cacheHint').textContent=`Restored backend screener snapshot ${sid2||'latest'} (${incoming.length} rows, ${js.cache_status?.status||'cache'}${stale}).`;
+  }catch(e){$('cacheHint').textContent=rows.length?'Backend restore failed; local rows preserved.':'Restore failed: '+e;log('Restore failed: '+e,'ERROR')}
+}
+
 function hideExplain(){const b=$('explainBox');if(b)b.style.display='none'}
 function htmlEsc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function showTagExplain(tagEnc){
@@ -349,7 +493,7 @@ async function showTagExplain(tagEnc){
   }catch(e){body.innerHTML='<span class="err">读取失败：'+htmlEsc(e)+'</span>'}
 }
 
-(function init(){restoreLocalInputs();setTableMode(tableMode);render();renderDetail(null);loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>localStorage.setItem(LS_SCROLL,String(tw.scrollTop)));restoreLastScreener();log('V3.18.1 screener initialized: real cache restore and local state persistence enabled')})();
+(function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
 </script>
 </body>
 </html>'''
