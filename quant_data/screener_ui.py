@@ -64,8 +64,8 @@ def build_screener_ui() -> str:
 
     <div class="section-title">策略组合 <span class="small">可多选</span></div>
     <div class="strategy-mini">
-      <div class="row"><button class="btn2" onclick="openStrategyModal()">打开分类策略选择器</button><span id="strategyCount" class="pill">加载中</span></div>
-      <div id="strategySummary" class="strategy-summary-tags small">策略库加载中...</div>
+      <div class="row"><button class="btn2" onclick="openStrategyModal()">打开分类策略选择器</button><span id="strategyCount" class="pill">内置可用</span></div>
+      <div id="strategySummary" class="strategy-summary-tags small">已加载内置策略，后台同步策略库...</div>
     </div>
     <label class="check"><input id="enableNews" type="checkbox"> 启用信息面评分（公告/公司/宏观/行业/资金/国际/舆情分层；搜索引擎页彻底禁用）</label>
     <div class="section-title">自定义策略 Python 代码</div>
@@ -170,7 +170,7 @@ def score(context):
     <div class="strategy-modal-b">
       <div class="adjust-note">提示：策略只是“因子组合开关”。真正评分仍由当前数据、公式、权重和风险扣分计算；宏观/基本面/消息面只作为证据链，不直接等同于买卖建议；Level-2相关主力/虚假单不会伪造，只给“需核验”提示。</div>
       <div id="strategyTabs" class="strategy-tabs"></div>
-      <div id="strategyBox" class="strategy-grid"><div class="small">策略库加载中...</div></div>
+      <div id="strategyBox" class="strategy-grid"><div class="small">内置策略可用，正在后台同步策略库...</div></div>
     </div>
   </div>
 </div>
@@ -493,7 +493,7 @@ async function showTagExplain(tagEnc){
   }catch(e){body.innerHTML='<span class="err">读取失败：'+htmlEsc(e)+'</span>'}
 }
 
-(function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
+(function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
 </script>
 </body>
 </html>'''

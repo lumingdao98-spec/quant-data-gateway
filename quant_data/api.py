@@ -234,19 +234,28 @@ def _enrich_quote_real(symbol: str, *, force: bool = False, quote_obj: Quote | N
     q = quote_obj
     cache_read = cache_state_service.get("quote_cache", symbol, allow_stale=True)
     cached_q = _quote_from_dict((cache_read.data or {}).get("quote") if cache_read.data else None)
+    used_cached_quote = False
+    service_quote_ok = q is not None
     if q is None:
         try:
             q = service.get_quote(symbol, force_refresh=force)
+            service_quote_ok = True
         except Exception:
             if cached_q is None:
                 raise
             q = cached_q
-    q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status)
+            used_cached_quote = True
+    q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status if used_cached_quote else None)
     q = service.enrich_quote_metrics(q, force_refresh=force, bars=bars)
-    q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status)
-    if cached_q is not None and cache_read.cache_status.get("stale"):
+    q = _merge_quote_from_cache(q, cached_q, cache_read.cache_status if used_cached_quote else None)
+    if cached_q is not None and cache_read.cache_status.get("stale") and used_cached_quote:
         q = replace(q, metric_missing_reasons=list(dict.fromkeys((q.metric_missing_reasons or []) + ["quote_cache stale used"])))
-    data = _quote_dict_with_aliases(q, cache_read.cache_status if cached_q else None)
+    data = _quote_dict_with_aliases(q, cache_read.cache_status if used_cached_quote else None)
+    if service_quote_ok and not used_cached_quote:
+        data["metric_missing_reasons"] = [
+            reason for reason in (data.get("metric_missing_reasons") or [])
+            if "quote_cache stale used" not in str(reason)
+        ]
     cache_status = cache_state_service.put("quote_cache", q.symbol, {
         "symbol": q.symbol,
         "quote": data,
@@ -256,6 +265,8 @@ def _enrich_quote_real(symbol: str, *, force: bool = False, quote_obj: Quote | N
         "market_session": _market_session(q.market),
     }, symbol=q.symbol, source=q.source)
     data["cache_status"] = cache_status
+    if not used_cached_quote:
+        data["quote_cache_status"] = cache_status
     return q, data, cache_status
 
 
@@ -327,7 +338,13 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
     q = None
     cache_status = cache_state_service.status("miss", key=key, source="kline_api")
     cached = cache_state_service.get_kline_cache(key)
-    if cached.data and not force and not cached.cache_status.get("stale"):
+    session = _market_session("CN")
+    # UI/chart pages pass force=true during active sessions. Keep the API-level
+    # cache contract predictable for background callers and tests: force=false
+    # may hit fresh cache, stale cache is used only when the market is closed
+    # or the live source fails.
+    effective_force = bool(force)
+    if cached.data and not effective_force and not cached.cache_status.get("stale"):
         payload = dict(cached.data)
         payload.update({
             "ok": True,
@@ -336,7 +353,7 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
             "fallback_chain": list(dict.fromkeys((payload.get("fallback_chain") or []) + ["cache_state_fresh_hit"])),
         })
         return payload
-    if cached.data and not force and not _market_session("CN").get("can_refresh"):
+    if cached.data and not effective_force and not session.get("can_refresh"):
         payload = dict(cached.data)
         payload.update({
             "ok": True,
@@ -346,11 +363,11 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
         })
         return payload
     try:
-        q = _enrich_quote_real(symbol, force=force)[0] if sync_quote else None
+        q = _enrich_quote_real(symbol, force=effective_force)[0] if sync_quote else None
     except Exception as exc:
         errors.append(f"quote_error: {str(exc)[:160]}")
     try:
-        bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=force)
+        bars = service.get_kline(symbol, frame=frame, limit=limit, adjust=adjust, force_refresh=effective_force)
         fallback_chain.append("market_data_service.get_kline")
         if frame == "1d" and any(str(getattr(b, "source", "")).lower().find("minute") >= 0 or str(getattr(b, "source", "")).lower().find("intraday") >= 0 for b in bars):
             raise RuntimeError("daily kline source returned minute/intraday data; refused to draw fake daily chart")
