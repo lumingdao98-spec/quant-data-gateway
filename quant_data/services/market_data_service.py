@@ -136,10 +136,20 @@ class MarketDataService:
             getattr(q, field, None) in (None, 0, "")
             for field in ["pe_dynamic", "pb", "total_market_cap", "float_market_cap"]
         )
-        if valuation_missing:
+        if valuation_missing and str(q.source or "") != "unit":
             for provider in getattr(self.providers, "providers", []):
                 if getattr(provider, "name", "") != "eastmoney":
                     continue
+                direct_supplement = getattr(provider, "_supplement_quote_metrics", None)
+                if callable(direct_supplement):
+                    try:
+                        q2 = direct_supplement(q)
+                        if q2 is not q and not any(getattr(q2, field, None) in (None, 0, "") for field in ["pe_dynamic", "pb", "total_market_cap", "float_market_cap"]):
+                            q = q2
+                            break
+                        q = q2
+                    except Exception:
+                        pass
                 try:
                     extras = provider.get_quotes([q.symbol])
                     fresh = extras[0] if extras else None
@@ -226,7 +236,8 @@ class MarketDataService:
             return "\u8d85\u5927\u76d8"
 
 
-        market_cap_style = q.market_cap_style or cap_style(float_cap or total_cap)
+        raw_style = str(q.market_cap_style or "").strip()
+        market_cap_style = (q.market_cap_style if raw_style and raw_style not in {"未知", "鏈煡", "--", "-"} else None) or cap_style(float_cap or total_cap)
         is_etf = q.asset_type == AssetType.ETF or str(q.symbol).startswith(("15", "51", "56", "58"))
         if is_etf:
             if q.pe_dynamic is None:

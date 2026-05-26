@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from quant_data.services.global_industry_mapper import GlobalIndustryMapper
+from quant_data.services.cache_state_service import CacheStateService
 import quant_data.api as api
 
 
@@ -31,3 +32,47 @@ def test_info_page_global_mapping_tab_has_evidence_columns():
     assert "industries:" in html
     assert "impact_reason" in html
     assert "included in score" in html
+
+
+def test_info_analyze_maps_cached_global_energy_policy(monkeypatch, tmp_path):
+    svc = CacheStateService(tmp_path / "cache_state.sqlite")
+    monkeypatch.setattr(api, "cache_state_service", svc)
+    svc.put(
+        "global_news_cache",
+        "global:80",
+        {
+            "items": [
+                {
+                    "title": "光伏政策支持组件需求 储能逆变器招标增长",
+                    "summary": "新能源政策和储能系统项目推进。",
+                    "source": "unit",
+                    "source_type": "macro",
+                }
+            ]
+        },
+        source="unit_global",
+    )
+
+    class EmptyStore:
+        def list_items(self, *args, **kwargs):
+            return []
+
+        def read_analysis(self, *args, **kwargs):
+            return None
+
+        def save_analysis(self, *args, **kwargs):
+            return True
+
+    monkeypatch.setattr(api.news_service, "store", EmptyStore())
+    monkeypatch.setattr(api.company_profile_service, "get_profile", lambda *a, **k: {})
+    monkeypatch.setattr(api.info_analysis_service, "analyze", lambda *a, **k: {"items": [], "news": {"count": 0}, "source_logs": []})
+
+    result = api.info_analyze("300274", name="阳光电源", limit=80, force=True)
+    mapped = result["data"]["industry_mapped_items"]
+
+    assert mapped
+    assert mapped[0]["included_in_score"] is True
+    assert mapped[0]["relevance_score"] >= 55
+    assert any("光伏" in x for x in mapped[0]["mapped_concepts"] + mapped[0]["mapped_industries"])
+    assert any("储能" in x for x in mapped[0]["mapped_concepts"] + mapped[0]["mapped_industries"])
+    assert "impact_reason" in mapped[0]

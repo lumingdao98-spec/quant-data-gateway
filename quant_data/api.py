@@ -33,6 +33,7 @@ from quant_data.services.fundamental_library_service import FundamentalLibrarySe
 from quant_data.services.news_service import NewsAnalysisService
 from quant_data.services.info_analysis_service import InfoAnalysisService
 from quant_data.services.company_profile_service import CompanyProfileService
+from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
@@ -51,6 +52,7 @@ fundamental_library_service = FundamentalLibraryService()
 news_service = NewsAnalysisService()
 info_analysis_service = InfoAnalysisService(service, news_service)
 company_profile_service = CompanyProfileService()
+global_industry_mapper = GlobalIndustryMapper()
 market_calendar = MarketCalendar()
 wordsource_system_service = WordSourceSystemService()
 source_registry_service = SourceRegistryService()
@@ -284,6 +286,8 @@ def _quote_dict_with_aliases(q: Quote, cache_status: dict | None = None) -> dict
     data["pe_ttm"] = data.get("pe_dynamic")
     data["circulating_market_cap"] = data.get("circulating_market_cap") or data.get("float_market_cap")
     data["market_cap_style"] = data.get("market_cap_style") or _market_cap_style(data.get("float_market_cap") or data.get("total_market_cap")) or "未知"
+    if str(data.get("market_cap_style") or "").strip() in {"未知", "鏈煡", "δ֪", "--", "-"}:
+        data["market_cap_style"] = _market_cap_style(data.get("float_market_cap") or data.get("total_market_cap")) or "未知"
     sources = dict(data.get("metric_sources") or {})
     for field in ["turnover_rate", "volume_ratio", "amount", "pe_ttm", "pb", "total_market_cap", "float_market_cap", "total_share", "float_share"]:
         if data.get(field) not in (None, 0, ""):
@@ -390,6 +394,97 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "source_logs": source_logs,
         "errors": errors,
     })
+    return data
+
+
+def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[dict, dict]:
+    limit = max(30, min(int(limit or 120), 500))
+    if not force:
+        cached = cache_state_service.get("global_news_cache", f"global:{limit}", allow_stale=True)
+        if cached.data and (cached.data.get("items") or not cached.cache_status.get("stale")):
+            return dict(cached.data), cached.cache_status
+        latest = cache_state_service.latest("global_news_cache", allow_stale=True)
+        if latest.data and latest.data.get("items"):
+            return dict(latest.data), latest.cache_status
+    data = news_service.fetch_global_news(limit=limit, force=force)
+    status = cache_state_service.put("global_news_cache", f"global:{limit}", {
+        "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
+        "items": data.get("items", []),
+        "mapped_industries": data.get("mapped_industries", []),
+        "mapped_concepts": data.get("mapped_concepts", []),
+        "mapped_symbols": data.get("mapped_symbols", []),
+        "source_logs": data.get("sources_status", []),
+    }, source="news_global")
+    return data, status
+
+
+def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limit: int) -> dict:
+    data = dict(data or {})
+    source_logs = list(data.get("source_logs") or [])
+    errors = list(data.get("errors") or [])
+    items = list(data.get("items") or [])
+    if not items:
+        try:
+            cached_items = news_service.store.list_items(symbol, limit=min(max(limit, 30), 180), include_history_days=3650)
+        except Exception as exc:
+            cached_items = []
+            errors.append(f"history news cache fallback failed: {str(exc)[:160]}")
+        if cached_items:
+            items = cached_items
+            data["items"] = items
+            news = dict(data.get("news") or {})
+            news.setdefault("items", items)
+            news["count"] = len(items)
+            data["news"] = news
+            source_logs.append({"source": "history_news_store", "status": "fallback_hit", "count": len(items), "mode": data.get("mode") or "snapshot"})
+        else:
+            source_logs.append({"source": "history_news_store", "status": "empty", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": "no persisted stock-specific items"})
+    global_items = list(data.get("global_items") or [])
+    global_status = None
+    if not global_items:
+        try:
+            global_data, global_status = _read_global_news_cached(limit=min(max(limit, 60), 180), force=False)
+            global_items = list(global_data.get("items") or [])
+            data["global_items"] = global_items
+            source_logs.append({"source": "global_news_cache", "status": global_status.get("status") if global_status else "hit", "count": len(global_items), "mode": data.get("mode") or "snapshot"})
+        except Exception as exc:
+            errors.append(f"global news cache fallback failed: {str(exc)[:160]}")
+            source_logs.append({"source": "global_news_cache", "status": "error", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": str(exc)[:160]})
+    if global_items:
+        try:
+            profile = company_profile_service.get_profile(symbol, force=False)
+        except Exception:
+            profile = {}
+        mapped = global_industry_mapper.map_items(global_items, symbol, name or data.get("name") or symbol, profile=profile)
+        mapped_items = sorted(mapped.get("industry_mapped_items") or [], key=lambda x: (not bool(x.get("included_in_score") or x.get("score_included")), -float(x.get("relevance_score") or 0)))
+        data.update({
+            "company_exposure": mapped.get("company_exposure"),
+            "industry_mapped_items": mapped_items,
+            "mapped_industries": mapped.get("mapped_industries") or [],
+            "mapped_concepts": mapped.get("mapped_concepts") or [],
+            "mapped_symbols": mapped.get("mapped_symbols") or [],
+            "global_news_used": {"related_count": mapped.get("related_count", 0), "cache_status": global_status or {}},
+        })
+        source_logs.append({"source": "global_industry_mapper", "status": "mapped", "count": len(data.get("industry_mapped_items") or []), "mode": data.get("mode") or "snapshot", "skipped_reason": ""})
+    stats = dict(data.get("stats") or {})
+    stats.update({
+        "item_count": len(data.get("items") or []),
+        "raw_item_count": max(int(stats.get("raw_item_count") or 0), len(data.get("items") or [])),
+        "global_count": len(data.get("global_items") or []),
+        "industry_mapped_count": len(data.get("industry_mapped_items") or []),
+        "source_count": len(source_logs),
+        "unknown_date_count": len([x for x in data.get("items", []) if not (x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))]),
+    })
+    diagnostics = dict(data.get("diagnostics") or {})
+    if not data.get("items"):
+        diagnostics["summary"] = "个股信息为空；已保留抓取日志，并补充全球/行业映射作为背景证据"
+        diagnostics["empty_reason"] = "stock-specific official/F10/news sources returned no valid items or previous empty snapshot was reused"
+    elif not diagnostics.get("summary"):
+        diagnostics["summary"] = "个股历史信息已从持久化库恢复"
+    data["stats"] = stats
+    data["diagnostics"] = diagnostics
+    data["source_logs"] = source_logs
+    data["errors"] = errors
     return data
 
 
@@ -1571,17 +1666,9 @@ def news_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
 
 @app.get("/api/news/global")
 def global_news(limit: int = 80, force: bool = False) -> dict:
-    data = news_service.fetch_global_news(limit=limit, force=force)
-    key = f"global:{limit}"
-    data["cache_status"] = cache_state_service.put("global_news_cache", key, {
-        "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
-        "items": data.get("items", []),
-        "mapped_industries": data.get("mapped_industries", []),
-        "mapped_concepts": data.get("mapped_concepts", []),
-        "mapped_symbols": data.get("mapped_symbols", []),
-        "source_logs": data.get("sources_status", []),
-    }, source="news_global")
-    return {"ok": True, "cache_status": data["cache_status"], "data": data}
+    data, cache_status = _read_global_news_cached(limit=limit, force=force)
+    data["cache_status"] = cache_status
+    return {"ok": True, "cache_status": cache_status, "data": data}
 
 
 @app.get("/api/company/profile/store/stats")
@@ -1713,6 +1800,13 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
             data["snapshot_notice"] = "请求的筛选页快照不存在，详情页未自动重抓；请点击普通刷新或深度刷新。"
         else:
             data["snapshot_notice"] = "当前使用筛选页快照；如需深挖请点击深度刷新。" if used_snapshot else "当前使用最近信息快照。"
+    data = _ensure_info_visible_content(data, symbol, qname, limit)
+    data = _normalize_info_payload(data, symbol, qname, str(data.get("snapshot_id") or sid or ""), data.get("cache_status") or cache_status, used_snapshot=used_snapshot, mode=str(data.get("mode") or use_mode), errors=data.get("errors") or errors)
+    if data.get("snapshot_id"):
+        try:
+            cache_state_service.save_info_snapshot(str(data.get("snapshot_id")), symbol, data, mode=str(data.get("mode") or use_mode))
+        except Exception:
+            pass
     data["detail_contract"] = {
         "snapshot_id": data.get("snapshot_id"),
         "limit": limit,

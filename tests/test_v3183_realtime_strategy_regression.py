@@ -12,6 +12,7 @@ import pytest
 
 import quant_data.api as api
 from quant_data.models import Quote
+from quant_data.providers.eastmoney import EastmoneyProvider
 from quant_data.screener_ui import build_screener_ui
 from quant_data.services.cache_state_service import CacheStateService
 
@@ -88,7 +89,9 @@ def test_ui_starts_active_session_with_force_refresh_and_compact_subcharts():
     assert "shouldForceActiveRefresh" in html
     assert "loadQuotes(active)" in html
     assert "refreshDetail(active)" in html
-    assert "quant_postclose_refresh_" in html
+    assert "quant_postclose_refresh_cn_" in html
+    assert "postCloseRefreshUsed" in html
+    assert "quant_postclose_refresh_'+currentSymbol" not in html
     assert "currentQuoteExtra=js.quote_extra" in html
     assert "limitUp=extra.limit_up" in html
     assert "grid-template-rows:52px 1fr 82px" in html
@@ -112,3 +115,52 @@ def test_force_quote_success_does_not_carry_stale_missing_reason(monkeypatch, tm
     assert status["status"] == "refreshed"
     assert data["quote_cache_status"]["status"] == "refreshed"
     assert not any("stale" in str(reason).lower() for reason in data["metric_missing_reasons"])
+
+
+def test_screener_has_single_primary_run_button_and_no_english_fallback_label():
+    html = TestClient(api.app).get("/screener").text
+    assert html.count('id="runBtn"') == 1
+    assert "Start Screener" not in html
+    assert "筛选中" in html or "绛涢€変腑" in html
+
+
+def test_eastmoney_stock_get_supplements_real_valuation_metrics(monkeypatch):
+    provider = EastmoneyProvider()
+    q = Quote(
+        symbol="300274",
+        name="阳光电源",
+        ts=datetime(2026, 5, 26, 15, 0),
+        last=178.99,
+        pre_close=167.24,
+        open=166.8,
+        high=181.77,
+        low=163.7,
+        volume=1,
+        amount=1,
+        change=0,
+        change_pct=0,
+        source="sina",
+    )
+    monkeypatch.setattr(
+        provider,
+        "_get_json",
+        lambda *a, **k: {
+            "data": {
+                "f116": 371_084_112_781.76,
+                "f117": 284_596_737_775.63,
+                "f162": 4049,
+                "f167": 786,
+                "f168": 713,
+                "f84": 2_073_211_424,
+                "f85": 1_590_014_737,
+            }
+        },
+    )
+
+    enriched = provider._supplement_quote_metrics(q)
+
+    assert enriched.pe_dynamic == 40.49
+    assert enriched.pb == 7.86
+    assert enriched.turnover == 7.13
+    assert enriched.total_market_cap == 371_084_112_781.76
+    assert enriched.float_market_cap == 284_596_737_775.63

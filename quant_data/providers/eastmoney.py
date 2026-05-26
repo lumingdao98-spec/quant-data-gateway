@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -41,6 +42,7 @@ class EastmoneyProvider(MarketDataProvider):
 
     def __init__(self) -> None:
         self.http = ThrottledSession()
+        self.http.session.trust_env = False
 
     def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         resp = self.http.get(url, params=params)
@@ -62,8 +64,52 @@ class EastmoneyProvider(MarketDataProvider):
         for row in diff:
             q = self._parse_quote_row(row)
             if q:
-                quotes.append(q)
+                quotes.append(self._supplement_quote_metrics(q))
         return quotes
+
+    def _ratio_value(self, value: Any) -> float | None:
+        v = safe_float(value)
+        if v is None:
+            return None
+        return v / 100.0 if abs(v) > 100 else v
+
+    def _supplement_quote_metrics(self, q: Quote) -> Quote:
+        missing = any(getattr(q, f, None) in (None, 0, "") for f in ["pe_dynamic", "pb", "turnover", "total_market_cap", "float_market_cap"])
+        if not missing or q.asset_type == AssetType.ETF:
+            return q
+        try:
+            data = self._get_json(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                {
+                    "secid": to_eastmoney_secid(q.symbol),
+                    "fltt": "2",
+                    "invt": "2",
+                    "fields": "f57,f58,f84,f85,f116,f117,f162,f167,f168",
+                },
+            )
+        except Exception:
+            return q
+        row = ((data or {}).get("data") or {})
+        updates: dict[str, Any] = {}
+        if q.total_market_cap in (None, 0, "") and safe_float(row.get("f116")):
+            updates["total_market_cap"] = safe_float(row.get("f116"))
+        if q.float_market_cap in (None, 0, "") and safe_float(row.get("f117")):
+            updates["float_market_cap"] = safe_float(row.get("f117"))
+            updates["circulating_market_cap"] = safe_float(row.get("f117"))
+        if q.pe_dynamic in (None, 0, "") and self._ratio_value(row.get("f162")) is not None:
+            updates["pe_dynamic"] = self._ratio_value(row.get("f162"))
+        if q.pb in (None, 0, "") and self._ratio_value(row.get("f167")) is not None:
+            updates["pb"] = self._ratio_value(row.get("f167"))
+        if q.turnover in (None, 0, "") and self._ratio_value(row.get("f168")) is not None:
+            updates["turnover"] = self._ratio_value(row.get("f168"))
+        if q.total_share in (None, 0, "") and safe_float(row.get("f84")):
+            updates["total_share"] = safe_float(row.get("f84"))
+        if q.float_share in (None, 0, "") and safe_float(row.get("f85")):
+            updates["float_share"] = safe_float(row.get("f85"))
+        if not updates:
+            return q
+        updates["source"] = f"{q.source}+eastmoney_stock_get" if q.source else "eastmoney_stock_get"
+        return replace(q, **updates)
 
     def get_spot_list(self, page: int = 1, page_size: int = 100, fs: str | None = None) -> list[Quote]:
         # A股 + 常用 ETF/基金场内品种。后续系统可按页面参数拆分股票/ETF/指数。
