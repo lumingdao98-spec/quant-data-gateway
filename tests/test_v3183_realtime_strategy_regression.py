@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
+import re
+import shutil
+import subprocess
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 import quant_data.api as api
 from quant_data.models import Quote
+from quant_data.screener_ui import build_screener_ui
 from quant_data.services.cache_state_service import CacheStateService
 
 
@@ -41,6 +48,39 @@ def test_screener_strategy_uses_immediate_fallback_not_loading():
     assert "screener-actions" in html
     assert "renderStrategyInline" in html
     assert "策略库加载中" not in html
+
+
+def test_screener_script_is_parseable_so_buttons_work(tmp_path):
+    html = build_screener_ui()
+    match = re.search(r"<script>([\s\S]*)</script>", html)
+    assert match, "screener page must include its action script"
+    script = match.group(1)
+    assert "js.scroll_position??localStorage.getItem(LS_SCROLL)||0" not in script
+
+    candidates = [
+        os.environ.get("NODE"),
+        shutil.which("node"),
+        str(Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"),
+    ]
+    node = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            probe = subprocess.run([candidate, "--version"], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if probe.returncode == 0:
+            node = candidate
+            break
+    if not node:
+        pytest.skip("node executable is not available for browser-script parse check")
+
+    check = tmp_path / "screener_script_check.js"
+    check.write_text("new Function(" + repr(script) + "); console.log('ok')", encoding="utf-8")
+    result = subprocess.run([node, str(check)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
 
 
 def test_ui_starts_active_session_with_force_refresh_and_compact_subcharts():
