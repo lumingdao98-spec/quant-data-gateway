@@ -39,7 +39,7 @@ from quant_data.services.backtest_service import BacktestConfig, BacktestService
 from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
-from quant_data.backtest_ui import build_backtest_ui
+from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui
 
 
 service = MarketDataService()
@@ -2467,6 +2467,11 @@ def screener_page() -> str:
 @app.get("/backtest", response_class=HTMLResponse)
 def backtest_page() -> str:
     return build_backtest_ui()
+
+
+@app.get("/backtest/trades", response_class=HTMLResponse)
+def backtest_trades_page() -> str:
+    return build_backtest_trades_ui()
 
 
 @app.get("/chart/{symbol}", response_class=HTMLResponse)

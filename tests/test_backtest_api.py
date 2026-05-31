@@ -84,3 +84,17 @@ def test_backtest_page_is_visible():
     assert "买卖明细" in html
     assert "收益诊断" in html
     assert "比较策略收益" in html
+    assert "tradeDrawer" in html
+    assert "openTradeDrawer" in html
+    assert "openTradePage" in html
+    assert "/backtest/trades" in html
+
+
+def test_backtest_trade_detail_page_is_visible():
+    html = TestClient(api.app).get("/backtest/trades?symbol=300750&strategy=score_driven").text
+
+    assert "Backtest Trades" in html
+    assert "/api/backtest/run" in html
+    assert "rows" in html
+    assert "entry_reason" in html
+    assert "exit_reason" in html

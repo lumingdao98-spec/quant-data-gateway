@@ -32,3 +32,6 @@ def test_chart_frontend_waits_for_layout_before_drawing():
     assert "k-shell" in html
     assert "book.style.display='none'" in html
     assert "rect.width/2" in html
+    assert ".app.full .chart-area" in html
+    assert "minmax(610px,1fr)" in html
+    assert "#sub2Wrap{min-height:96px}" in html
