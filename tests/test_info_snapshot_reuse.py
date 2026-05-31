@@ -131,5 +131,9 @@ def test_screener_returns_info_snapshot_fields(monkeypatch):
     assert item["info_crawl_time"]
     assert item["info_effective_count"] == 3
     assert item["info_unique_event_count"] == 3
+    assert item["technical_score"] == 60.0
+    assert item["info_score_delta"] == 2.1
+    assert item["total_score"] == 62.1
+    assert "score_stability_note" in result
     assert "snapshot_id=" in item["info"]["detail_url"]
     assert "force=false" in item["info"]["detail_url"]

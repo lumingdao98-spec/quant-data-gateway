@@ -11,6 +11,10 @@ def test_chart_page_shows_behavior_marker_list_container():
     assert "K线行为标注" in html
     assert "资金行为/K线标注" in html
     assert "需Level-2确认" in html
+    assert "collectAllMarkers" in html
+    assert "共 ${markers.length} 条" in html
+    assert "chart-grid k-shell" in html
+    assert "markerHoverHtml" in html
 
 
 def test_kline_api_returns_behavior_and_marker_fields():

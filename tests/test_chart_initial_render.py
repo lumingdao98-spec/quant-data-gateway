@@ -29,3 +29,6 @@ def test_chart_frontend_waits_for_layout_before_drawing():
     assert "safeDrawCharts" in html
     assert "r.width>280" in html
     assert "K线数量不足" in html
+    assert "k-shell" in html
+    assert "book.style.display='none'" in html
+    assert "rect.width/2" in html

@@ -55,7 +55,7 @@ def test_technical_factor_api_returns_40_plus_explained_factors(monkeypatch, tmp
     for key in ["ma", "ema", "macd", "rsi", "kdj", "boll", "atr", "vwap", "obv", "mfi", "pivot_points", "support_resistance"]:
         assert key in keys
     for factor in data["factors"]:
-        assert {"key", "name", "category", "value", "formula", "params", "signal", "explanation", "score_contribution", "risk_penalty", "applicable_market"} <= set(factor)
+        assert {"key", "name", "category", "value", "formula", "params", "signal", "explanation", "score_contribution", "risk_penalty", "score_note", "applicable_market"} <= set(factor)
     assert data["cache_status"]["status"] == "refreshed"
 
 

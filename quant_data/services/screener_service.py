@@ -49,6 +49,7 @@ from quant_data.indicators import (
 from quant_data.services.technical_indicator_library import TechnicalIndicatorLibraryService
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.services.market_behavior_engine import MarketBehaviorEngine
+from quant_data.services.market_regime_service import MarketRegimeService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot, build_tradercore_diagnosis
 from quant_data.services.wordsource_system_service import WordSourceSystemService
 from quant_data.services.candidate_pool_service import CandidatePoolService
@@ -191,6 +192,10 @@ class ScreenerResult:
     theme_stage: str
     theme_strength: float | None
     theme_labels: list[str]
+    market_regime: dict
+    market_sentiment_score: float
+    market_sentiment_adjustment: float
+    market_sentiment_label: str
     market_cap_style: str
     support_resistance_distance: dict
     chase_high_risk: str
@@ -247,6 +252,7 @@ class ScreenerService:
         self.wordsource_system = WordSourceSystemService()
         self.technical_factor_engine = TechnicalFactorEngine()
         self.market_behavior_engine = MarketBehaviorEngine()
+        self.market_regime_service = MarketRegimeService()
         self.candidate_pool_service = CandidatePoolService()
         self._candidate_meta_by_symbol: dict[str, dict] = {}
 
@@ -260,6 +266,7 @@ class ScreenerService:
         if config.kline_adjust not in {"none", "qfq", "hfq"}:
             config.kline_adjust = "qfq"
         quotes = self._load_universe(config)
+        market_regime = self._market_regime_for_run(config, quotes)
         analyzed: list[ScreenerResult] = []
         passed: list[ScreenerResult] = []
         errors: list[dict] = []
@@ -274,7 +281,7 @@ class ScreenerService:
                     errors.append({"symbol": q.symbol, "name": q.name, "error": "K线数量不足，无法稳定评分"})
                     continue
                 q = self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes, bars=bars)
-                result = self.analyze(q, bars, mode=config.mode, strategies=config.strategies or [], kline_adjust=config.kline_adjust)
+                result = self.analyze(q, bars, mode=config.mode, strategies=config.strategies or [], kline_adjust=config.kline_adjust, market_regime=market_regime)
                 analyzed.append(result)
                 if result.total_score >= config.min_score:
                     passed.append(result)
@@ -295,6 +302,7 @@ class ScreenerService:
             "skipped_low_amount": skipped_low_amount,
             "result_count": len(passed),
             "error_count": len(errors),
+            "market_regime": market_regime,
             "data": [x.to_dict() for x in passed],
             "errors": errors[:80],
             "note": "候选数量=通过最低评分过滤的结果；分析数量=成功完成行情+K线+技术评分的标的；股票池数量=本次输入/快照标的。评分仅作研究辅助，不构成投资建议。",
@@ -366,6 +374,38 @@ class ScreenerService:
                 by_symbol[q.symbol] = q
         return list(by_symbol.values())[: config.max_items]
 
+    def _market_regime_for_run(self, config: ScreenerConfig, quotes: list[Quote]) -> dict:
+        universe = (config.universe or "custom").lower()
+        regime_quotes = quotes
+        sample_scope = "当前候选池"
+        errors: list[str] = []
+        if universe in {"custom", "watch", "watchlist"}:
+            try:
+                snapshot = self.market_data.get_market_snapshot(page=1, page_size=200)
+                if snapshot:
+                    regime_quotes = snapshot
+                    sample_scope = "全市场快照前200只"
+            except Exception as exc:
+                errors.append(str(exc)[:160])
+                sample_scope = "候选池兜底"
+        index_bars: dict[str, list[Bar]] = {}
+        index_errors: list[str] = []
+        for spec in getattr(self.market_regime_service, "index_specs", []):
+            try:
+                bars = self.market_data.providers.get_kline(spec.symbol, frame="1d", limit=90, adjust="none")
+                if bars:
+                    index_bars[spec.key] = bars
+            except Exception as exc:
+                index_errors.append(f"{spec.name}:{str(exc)[:80]}")
+        regime = dict(self.market_regime_service.analyze_market(regime_quotes, index_bars=index_bars))
+        regime["sample_scope"] = sample_scope
+        regime["sample_count"] = len(regime_quotes)
+        if errors:
+            regime["errors"] = errors
+        if index_errors:
+            regime["index_errors"] = index_errors[:5]
+        return regime
+
     def _three_channel_candidates(self, quotes: list[Quote], max_items: int) -> list[Quote]:
         """参考截图中的三通道候选逻辑。
 
@@ -395,7 +435,7 @@ class ScreenerService:
                     return ordered
         return ordered
 
-    def analyze(self, q: Quote, bars: list[Bar], mode: str = "balanced", strategies: list[str] | None = None, kline_adjust: str = "qfq") -> ScreenerResult:
+    def analyze(self, q: Quote, bars: list[Bar], mode: str = "balanced", strategies: list[str] | None = None, kline_adjust: str = "qfq", market_regime: dict | None = None) -> ScreenerResult:
         strategies = set(strategies or [])
         closes = [float(b.close or 0) for b in bars if b.close is not None]
         opens = [float(b.open or 0) for b in bars if b.open is not None]
@@ -670,7 +710,15 @@ class ScreenerService:
             strategy_risks.append(
                 f"strategy adjustment capped from {raw_strategy_delta:+.1f} to {capped_strategy_delta:+.1f}"
             )
-        total = score_before_strategy + capped_strategy_delta
+        market_sentiment = self._market_sentiment_adjustment(market_regime, q)
+        market_sentiment_score = float(market_sentiment.get("score") or 50)
+        market_sentiment_adjustment = float(market_sentiment.get("adjustment") or 0)
+        market_sentiment_label = str(market_sentiment.get("label") or "中性")
+        if market_sentiment_adjustment >= 0.8:
+            strategy_tags.append(f"大盘情绪:{market_sentiment_label}")
+        elif market_sentiment_adjustment <= -0.8:
+            strategy_risks.append(f"大盘情绪:{market_sentiment_label}")
+        total = score_before_strategy + capped_strategy_delta + market_sentiment_adjustment
         total_score = round(clamp(total, 0, 100), 2)
         tags = low_tags + trend_tags + momentum_tags + volume_tags + volatility_tags + strength_tags + tape_tags + time_tags + pattern_tags + value_tags + strategy_tags + behavior_tags
         risk_flags = risk_flags + volume_risks + tape_risks + value_risks + strategy_risks
@@ -792,7 +840,8 @@ class ScreenerService:
         comprehensive_diagnosis = (
             f"{risk_prefix}{grade}，{capital_signal}，"
             f"板块阶段={theme_info.get('theme_stage', '待确认')}，"
-            f"市值风格={market_cap_style}，追高风险={chase_high_risk}；{reason}"
+            f"市值风格={market_cap_style}，追高风险={chase_high_risk}，"
+            f"大盘情绪={market_sentiment_label}{market_sentiment_adjustment:+.1f}；{reason}"
         )
         rf = lambda x, d=2: round(x, d) if x is not None else None
         return ScreenerResult(
@@ -907,6 +956,10 @@ class ScreenerService:
             theme_stage=str(theme_info.get("theme_stage") or "待确认"),
             theme_strength=rf(theme_info.get("theme_score"), 2) if isinstance(theme_info.get("theme_score"), (int, float)) else None,
             theme_labels=theme_labels,
+            market_regime=dict(market_regime or {}),
+            market_sentiment_score=round(market_sentiment_score, 2),
+            market_sentiment_adjustment=round(market_sentiment_adjustment, 2),
+            market_sentiment_label=market_sentiment_label,
             market_cap_style=market_cap_style,
             support_resistance_distance={
                 "support_dist_pct": rf(support_dist_pct, 2),
@@ -952,6 +1005,32 @@ class ScreenerService:
             exright_adjusted=(kline_adjust in {"qfq", "hfq"}),
             updated_at=datetime.now().isoformat(timespec="seconds"),
         )
+
+    def _market_sentiment_adjustment(self, market_regime: dict | None, q: Quote) -> dict:
+        data = market_regime or {}
+        try:
+            score = float(data.get("score", 50) or 50)
+        except Exception:
+            score = 50.0
+        score = max(0.0, min(100.0, score))
+        sample_count = int(data.get("sample_count") or (int(data.get("up_count") or 0) + int(data.get("down_count") or 0)) or 0)
+        index_count = int(data.get("index_count") or 0)
+        if sample_count < 5 and index_count <= 0:
+            return {"score": score, "adjustment": 0.0, "label": "样本不足", "sample_count": sample_count}
+        raw = (score - 50.0) / 50.0 * 2.0
+        if q.asset_type == AssetType.ETF:
+            raw *= 1.1
+        adjustment = max(-2.0, min(2.0, raw))
+        label = "强势" if score >= 70 else "偏暖" if score >= 58 else "震荡" if score >= 45 else "偏弱"
+        return {
+            "score": round(score, 2),
+            "adjustment": round(adjustment, 2),
+            "label": label,
+            "sample_count": sample_count,
+            "index_count": index_count,
+            "regime": data.get("regime"),
+            "sample_scope": data.get("sample_scope"),
+        }
 
     def _grade_aware_technical_summary(
         self,

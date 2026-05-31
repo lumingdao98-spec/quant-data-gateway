@@ -29,6 +29,8 @@ def test_global_mapping_outputs_visible_evidence_fields():
 def test_info_page_global_mapping_tab_has_evidence_columns():
     html = TestClient(api.app).get("/info?symbol=300274&name=Sungrow").text
     assert "全球/行业映射" in html
+    assert "信息映射" in html
+    assert "全球信息" in html
     assert "行业：" in html
     assert "概念：" in html
     assert "影响原因：" in html

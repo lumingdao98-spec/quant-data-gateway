@@ -130,6 +130,7 @@ class EastmoneyProvider(MarketDataProvider):
         return [q for row in diff if (q := self._parse_quote_row(row))]
 
     def get_kline(self, symbol: str, frame: str = "1d", limit: int = 240, adjust: str = "qfq") -> list[Bar]:
+        raw_symbol = str(symbol)
         symbol = normalize_symbol(symbol)
         klt_map = {
             "1m": "1",
@@ -146,7 +147,7 @@ class EastmoneyProvider(MarketDataProvider):
             raise ValueError(f"不支持的K线周期: {frame}; 可选 1m/5m/15m/30m/60m/1d/1w/1M")
         fqt_map = {"none": "0", "": "0", "qfq": "1", "hfq": "2"}
         # 除默认 secid 外，再尝试沪/深两种 secid，防止 ETF/北交所/接口路由变化导致空数据。
-        secids = [to_eastmoney_secid(symbol), f"0.{symbol}", f"1.{symbol}"]
+        secids = [to_eastmoney_secid(raw_symbol), f"0.{symbol}", f"1.{symbol}"]
         secids = list(dict.fromkeys(secids))
         urls = getattr(self, "KLINE_URLS", [self.KLINE_URL])
         last_raw: list[str] = []

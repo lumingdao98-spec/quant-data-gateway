@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 import quant_data.api as api
-from quant_data.models import Quote
+from quant_data.models import IntradayPoint, Quote
 from quant_data.providers.eastmoney import EastmoneyProvider
 from quant_data.screener_ui import build_screener_ui
 from quant_data.services.cache_state_service import CacheStateService
@@ -92,12 +92,111 @@ def test_ui_starts_active_session_with_force_refresh_and_compact_subcharts():
     assert "quant_postclose_refresh_cn_" in html
     assert "postCloseRefreshUsed" in html
     assert "quant_postclose_refresh_'+currentSymbol" not in html
+    assert "currentMode==='time'&&tcache.symbol===currentSymbol" in html
+    assert "currentMode='time';$('chartLabel')" not in html
+    assert "mr.height>80" in html
+    assert "?'分时':'K线')+'刷新中" in html
     assert "currentQuoteExtra=js.quote_extra" in html
     assert "limitUp=extra.limit_up" in html
     assert "grid-template-rows:52px 1fr 82px" in html
     assert "max-height:52px" in html
     assert "MACD指标" in html
     assert "均线5/10/20" in html
+
+
+def _quote_with_ts(symbol: str, ts: datetime) -> Quote:
+    q = _quote(symbol=symbol)
+    return Quote(
+        symbol=q.symbol,
+        name=q.name,
+        ts=ts,
+        last=q.last,
+        pre_close=q.pre_close,
+        open=q.open,
+        high=q.high,
+        low=q.low,
+        volume=q.volume,
+        amount=q.amount,
+        change=q.change,
+        change_pct=q.change_pct,
+        turnover=q.turnover,
+        volume_ratio=q.volume_ratio,
+        pe_dynamic=q.pe_dynamic,
+        pb=q.pb,
+        total_market_cap=q.total_market_cap,
+        float_market_cap=q.float_market_cap,
+        source=q.source,
+    )
+
+
+def test_timeline_refreshes_stale_intraday_cache_during_lunch(monkeypatch):
+    q = _quote_with_ts("600438", datetime(2026, 5, 28, 11, 30))
+    stale = [
+        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 15.0, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 15.2, source="unit_stale"),
+    ]
+    fresh = [
+        IntradayPoint("600438", datetime(2026, 5, 28, 9, 30), 15.1, source="unit_fresh"),
+        IntradayPoint("600438", datetime(2026, 5, 28, 11, 30), 15.0, source="unit_fresh"),
+    ]
+    calls = []
+
+    monkeypatch.setattr(api, "_market_session", lambda market="CN": {"status": "lunch", "date": "2026-05-28"})
+
+    def fake_intraday(symbol, force_refresh=False):
+        calls.append(force_refresh)
+        return fresh if force_refresh else stale
+
+    monkeypatch.setattr(api.service, "get_intraday", fake_intraday)
+
+    points = api._timeline_with_fallback("600438", q, force=False)
+
+    assert calls == [False, True]
+    assert [p.ts.date().isoformat() for p in points] == ["2026-05-28", "2026-05-28"]
+
+
+def test_timeline_rejects_stale_intraday_cache_if_refresh_still_old(monkeypatch):
+    q = _quote_with_ts("600438", datetime(2026, 5, 28, 11, 30))
+    stale = [
+        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 15.0, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 15.2, source="unit_stale"),
+    ]
+    monkeypatch.setattr(api, "_market_session", lambda market="CN": {"status": "lunch", "date": "2026-05-28"})
+    monkeypatch.setattr(api.service, "get_intraday", lambda symbol, force_refresh=False: stale)
+
+    assert api._timeline_with_fallback("600438", q, force=False) == []
+
+
+def test_screener_explain_row_keeps_snapshot_info_metrics():
+    client = TestClient(api.app)
+    payload = {
+        "tag": "存在监管/诉讼/风险类信息",
+        "item": {
+            "symbol": "600438",
+            "name": "通威股份",
+            "total_score": 43.5,
+            "manual_review_score": 42.0,
+            "technical_score": 51.0,
+            "info_score_delta": -6.0,
+            "info_effective_count": 13,
+            "info_unique_event_count": 7,
+            "info_snapshot_id": "snap-test-info",
+            "risk_flags": ["存在监管/诉讼/风险类信息"],
+            "missing_data_hints": ["行业/板块注释不足"],
+        },
+    }
+
+    resp = client.post("/api/screener/explain-row", json=payload)
+    js = resp.json()
+
+    assert resp.status_code == 200
+    assert js["ok"] is True
+    metrics = {m["name"]: m["value"] for m in js["data"]["metrics"]}
+    assert metrics["信息面调分"] == -6.0
+    assert metrics["个股有效条目"] == 13
+    assert metrics["去重事件组"] == 7
+    assert metrics["快照ID"] == "snap-test-info"
+    assert any("风险提示来自当前筛选快照" in x for x in js["data"]["why"])
 
 
 def test_force_quote_success_does_not_carry_stale_missing_reason(monkeypatch, tmp_path):

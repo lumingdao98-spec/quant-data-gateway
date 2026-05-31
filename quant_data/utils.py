@@ -46,7 +46,12 @@ def eastmoney_market_id(symbol: str | int) -> int:
 
 
 def to_eastmoney_secid(symbol: str | int) -> str:
+    raw = str(symbol).strip().lower()
     code = normalize_symbol(symbol)
+    if raw.startswith("sh") or raw.endswith(".sh"):
+        return f"1.{code}"
+    if raw.startswith("sz") or raw.endswith(".sz"):
+        return f"0.{code}"
     return f"{eastmoney_market_id(code)}.{code}"
 
 

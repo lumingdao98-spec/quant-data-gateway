@@ -35,9 +35,11 @@ from quant_data.services.info_analysis_service import InfoAnalysisService
 from quant_data.services.company_profile_service import CompanyProfileService
 from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
+from quant_data.services.backtest_service import BacktestConfig, BacktestService
 from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
+from quant_data.backtest_ui import build_backtest_ui
 
 
 service = MarketDataService()
@@ -62,6 +64,7 @@ market_regime_service = MarketRegimeService()
 market_behavior_engine = MarketBehaviorEngine()
 cache_state_service = CacheStateService()
 technical_factor_engine = TechnicalFactorEngine()
+backtest_service = BacktestService()
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -210,6 +213,18 @@ def _market_session(market: str = "CN") -> dict:
 
 def _now_cn() -> datetime:
     return datetime.fromisoformat(_market_session("CN")["now"])
+
+
+def _market_index_bars(limit: int = 90) -> dict[str, list[Bar]]:
+    bars_by_key: dict[str, list[Bar]] = {}
+    for spec in getattr(market_regime_service, "index_specs", []):
+        try:
+            bars = service.providers.get_kline(spec.symbol, frame="1d", limit=limit, adjust="none")
+            if bars:
+                bars_by_key[spec.key] = bars
+        except Exception:
+            continue
+    return bars_by_key
 
 
 def _kline_key(symbol: str, frame: str, adjust: str, limit: int | None = None) -> str:
@@ -439,12 +454,12 @@ def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[
     return data, status
 
 
-def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limit: int) -> dict:
+def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limit: int, *, allow_history_fallback: bool = True) -> dict:
     data = dict(data or {})
     source_logs = list(data.get("source_logs") or [])
     errors = list(data.get("errors") or [])
     items = list(data.get("items") or [])
-    if not items:
+    if not items and allow_history_fallback:
         try:
             cached_items = news_service.store.list_items(symbol, limit=min(max(limit, 30), 180), include_history_days=3650)
         except Exception as exc:
@@ -460,6 +475,8 @@ def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limi
             source_logs.append({"source": "history_news_store", "status": "fallback_hit", "count": len(items), "mode": data.get("mode") or "snapshot"})
         else:
             source_logs.append({"source": "history_news_store", "status": "empty", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": "no persisted stock-specific items"})
+    elif not items:
+        source_logs.append({"source": "history_news_store", "status": "skipped", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": "request ended in fetch error; avoid unrelated persisted history fallback"})
     global_items = list(data.get("global_items") or [])
     global_status = None
     if not global_items:
@@ -729,6 +746,37 @@ def _quote_extra(q: Quote) -> dict:
     }
 
 
+def _clean_intraday_points(points: list[IntradayPoint] | None) -> list[IntradayPoint]:
+    return [p for p in (points or []) if not str(getattr(p, "source", "")).startswith("quote_fallback")]
+
+
+def _timeline_latest_date(points: list[IntradayPoint]) -> object | None:
+    dates = [getattr(getattr(p, "ts", None), "date", lambda: None)() for p in points if getattr(p, "ts", None)]
+    dates = [d for d in dates if d is not None]
+    return max(dates) if dates else None
+
+
+def _timeline_expected_date(q: Quote | None) -> object | None:
+    market = q.market if q else "CN"
+    session = _market_session(market)
+    status = str(session.get("status") or "")
+    if status not in {"pre_open_auction", "morning", "lunch", "afternoon", "closing_auction", "call_auction_cooldown"}:
+        return None
+    if q and getattr(q, "ts", None):
+        return q.ts.date()
+    try:
+        return datetime.fromisoformat(str(session.get("date"))).date()
+    except Exception:
+        return None
+
+
+def _filter_timeline_date(points: list[IntradayPoint], expected) -> list[IntradayPoint]:
+    if expected is None:
+        return points
+    same_day = [p for p in points if getattr(getattr(p, "ts", None), "date", lambda: None)() == expected]
+    return same_day or points
+
+
 def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -> list[IntradayPoint]:
     """获取真实分时数据。
 
@@ -736,9 +784,20 @@ def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -
     那种 quote_fallback 会在休市时画出一条假的斜线，误导用户。
     分时数据缺失时，后端只返回真实缓存或空列表；前端显示“暂无真实分时数据/保留缓存”。
     """
+    expected_date = _timeline_expected_date(q)
     points = service.get_intraday(symbol, force_refresh=force)
     # 过滤旧版本曾经产生的 quote_fallback/单点快照，避免假分时继续显示。
-    clean = [p for p in (points or []) if not str(getattr(p, "source", "")).startswith("quote_fallback")]
+    clean = _clean_intraday_points(points)
+    latest = _timeline_latest_date(clean)
+    if expected_date is not None and latest is not None and latest < expected_date and not force:
+        refreshed = _clean_intraday_points(service.get_intraday(symbol, force_refresh=True))
+        refreshed_latest = _timeline_latest_date(refreshed)
+        if refreshed_latest is not None and refreshed_latest >= expected_date:
+            clean = refreshed
+            latest = refreshed_latest
+    if expected_date is not None and latest is not None and latest < expected_date:
+        return []
+    clean = _filter_timeline_date(clean, expected_date)
     if len(clean) < 2:
         return []
     return clean
@@ -1144,7 +1203,7 @@ def wordsource_candidates(max_pages: int = 2, page_size: int = 100, max_items: i
         block = service.get_market_snapshot(page=page, page_size=max(20, min(int(page_size or 100), 500)))
         quotes.extend(block or [])
     pool = candidate_pool_service.build(quotes, max_items=max(20, min(int(max_items or 120), 300)))
-    regime = market_regime_service.analyze_quotes(quotes)
+    regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
     return {"ok": True, "market_regime": regime, "candidate_pool": pool}
 
 @app.get("/api/screener/strategies")
@@ -1163,6 +1222,67 @@ def screener_strategies() -> dict:
             {"key": "etf", "name": "ETF关注模式", "description": "弱化估值字段，重点考察位置、趋势和流动性。"},
         ],
     }
+
+
+@app.get("/api/backtest/strategies")
+def backtest_strategies() -> dict:
+    return {"ok": True, "data": backtest_service.strategies}
+
+
+@app.get("/api/backtest/run")
+def backtest_run(
+    symbol: str = "300750",
+    strategy: str = "ma_cross",
+    initial_cash: float = 100_000.0,
+    fee_rate: float = 0.0003,
+    slippage_rate: float = 0.0005,
+    position_pct: float = 1.0,
+    stop_loss_pct: float = 8.0,
+    take_profit_pct: float = 0.0,
+    buy_score: float = 62.0,
+    sell_score: float = 48.0,
+    limit: int = 520,
+    adjust: str = "qfq",
+    force: bool = False,
+) -> dict:
+    symbol = str(symbol or "300750").strip()
+    limit = max(60, min(int(limit or 520), 1200))
+    adjust = str(adjust or "qfq").lower()
+    if adjust not in {"none", "qfq", "hfq"}:
+        adjust = "qfq"
+    try:
+        q = service.get_quote(symbol, force_refresh=force)
+    except Exception:
+        q = None
+    try:
+        bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=force)
+        if not force and len(bars) < min(limit, 120):
+            bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=True)
+        result = backtest_service.run(
+            symbol,
+            bars,
+            BacktestConfig(
+                strategy=strategy,
+                initial_cash=initial_cash,
+                fee_rate=fee_rate,
+                slippage_rate=slippage_rate,
+                position_pct=position_pct,
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct,
+                buy_score=buy_score,
+                sell_score=sell_score,
+            ),
+            name=getattr(q, "name", None) if q else symbol,
+        )
+        result["quote_source"] = getattr(q, "source", None) if q else None
+        result["kline_source"] = sorted({getattr(b, "source", "") for b in bars if getattr(b, "source", "")})
+        result["adjust"] = adjust
+        result["requested_limit"] = limit
+        result["data_quality"]["requested_bars"] = limit
+        result["data_quality"]["short_kline"] = len(bars) < min(limit, 120)
+        return {"ok": True, "data": result}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}
 
 
 @app.get("/api/screener/run")
@@ -1314,13 +1434,21 @@ def screener_run(
                     or ir.get("industry_mapped_items")
                 )
                 effective_info_weight = calc_info_weight if usable_info else 0.0
+                info_delta_raw = (info_score - base) * effective_info_weight
+                info_delta_cap = 12.0 if calc_info_weight >= 0.45 else 8.0
+                info_delta = max(-info_delta_cap, min(info_delta_raw, info_delta_cap))
                 item["technical_score"] = round(base, 2)
-                item["total_score_with_info"] = round(max(0, min(100, base * (1 - effective_info_weight) + info_score * effective_info_weight)), 2)
+                item["info_score_delta_raw"] = round(info_delta_raw, 2)
+                item["info_score_delta"] = round(info_delta, 2)
+                item["info_score_delta_cap"] = info_delta_cap if effective_info_weight else 0.0
+                item["total_score_with_info"] = round(max(0, min(100, base + info_delta)), 2)
                 item["info_weight"] = effective_info_weight
                 item["score_formula"] = (
                     f"技术/量价底分×{1-effective_info_weight:.2f} + 信息面分×{effective_info_weight:.2f}"
-                    + ("" if usable_info else "；信息面无有效证据，本轮不改写评分")
+                    + (f"；信息面单次调分限制±{info_delta_cap:.0f}" if usable_info else "；信息面无有效证据，本轮不改写评分")
                 )
+                if usable_info and abs(info_delta_raw - info_delta) > 0.001:
+                    item.setdefault("risk_flags", []).append("信息面调分已限幅，避免单次抓取过度扰动")
                 item["total_score_with_news"] = item["total_score_with_info"]
                 item["total_score"] = item["total_score_with_info"]
                 if nr.get("sentiment") == "positive":
@@ -1364,6 +1492,10 @@ def screener_run(
         result["info_analyzed_count"] = info_count
         result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18.3 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
         result["data"].sort(key=lambda x: x.get("total_score_with_info", x.get("total_score", 0)), reverse=True)
+    result["score_stability_note"] = (
+        "筛选评分不使用随机数；短时间差异主要来自实时行情、K线强刷、信息面缓存/刷新口径和外部公开源可用性。"
+        "大盘情绪由指数趋势和市场宽度合成，只做±2分内的小幅背景调分；启用信息面时会先保留技术底分，并对单次信息面调分限幅，降低重复抓取造成的大幅波动。"
+    )
     try:
         saved = score_history_service.save_results(result.get("data", []), mode=mode)
         result["score_history_saved"] = saved
@@ -1632,6 +1764,7 @@ def technical_factors(symbol: str, frame: str = "1d", adjust: str = "qfq", limit
             "explanation": f.get("explanation"),
             "score_contribution": f.get("score_contribution", 0),
             "risk_penalty": f.get("risk_penalty", 0),
+            "score_note": _factor_score_note(f),
             "applicable_market": f.get("application") or "A股/ETF日K",
         })
     closes = [float(b.close) for b in bars if b.close]
@@ -1662,6 +1795,7 @@ def technical_factors(symbol: str, frame: str = "1d", adjust: str = "qfq", limit
             "explanation": f"{name}用于补充筛选页可见闭环字段，来自行情/K线缓存。",
             "score_contribution": 0,
             "risk_penalty": 0,
+            "score_note": "闭环展示项，默认不直接加扣分",
             "applicable_market": "A股/ETF",
         })
     payload = {
@@ -1687,6 +1821,33 @@ def _factor_category(key: str) -> str:
     if key in {"obv", "mfi", "vr", "volume_ma", "price_volume_state", "volume_divergence", "vwap", "vwap_strength"}:
         return "volume_capital"
     return "pattern_timing"
+
+
+def _factor_num(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _factor_score_note(f: dict) -> str:
+    score = _factor_num(f.get("score_contribution"), 0.0)
+    risk = _factor_num(f.get("risk_penalty"), 0.0)
+    signal = str(f.get("signal") or "")
+    value = f.get("value")
+    if score == 0 and risk == 0:
+        if value is None:
+            return "数据为空，未参与加扣分"
+        if signal == "中性":
+            return "中性未触发，不代表缺数据"
+        return "仅提示方向，本项未直接加扣分"
+    if score > 0 and risk > 0:
+        return "同时存在积极信号和风险提示"
+    if score > 0:
+        return "触发加分"
+    return "触发风险扣分"
 
 
 def _factor_params(key: str) -> dict:
@@ -1880,7 +2041,8 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
             data["snapshot_notice"] = "请求的筛选页快照不存在，详情页未自动重抓；请点击普通刷新或深度刷新。"
         else:
             data["snapshot_notice"] = "当前使用筛选页快照；如需深挖请点击深度刷新。" if used_snapshot else "当前使用最近信息快照。"
-    data = _ensure_info_visible_content(data, symbol, qname, limit)
+    allow_history_fallback = bool(not errors and str((data.get("cache_status") or cache_status or {}).get("status") or "") != "error")
+    data = _ensure_info_visible_content(data, symbol, qname, limit, allow_history_fallback=allow_history_fallback)
     data = _normalize_info_payload(data, symbol, qname, str(data.get("snapshot_id") or sid or ""), data.get("cache_status") or cache_status, used_snapshot=used_snapshot, mode=str(data.get("mode") or use_mode), errors=data.get("errors") or errors)
     if data.get("snapshot_id"):
         try:
@@ -1921,6 +2083,34 @@ def news_search(keyword: str, limit: int = 80, force: bool = False) -> dict:
     return {"ok": True, "data": data}
 
 
+def _paged_info_items_from_snapshot(cached, *, page: int, page_size: int, sort: str, category: str | None, source: str | None, include_unknown_date: bool) -> dict | None:
+    items = (cached.data or {}).get("items") or []
+    if not items:
+        return None
+    if not include_unknown_date:
+        items = [x for x in items if x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date")]
+    if category:
+        items = [x for x in items if str(x.get("category") or x.get("event_type") or "") == str(category)]
+    if source:
+        items = [x for x in items if str(x.get("source") or "") == str(source)]
+    reverse = str(sort).lower() != "asc"
+    items = sorted(items, key=lambda x: str(x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date") or ""), reverse=reverse)
+    total = len(items)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    if page > total_pages:
+        page = 1
+    offset = (page - 1) * page_size
+    return {
+        "data": items[offset:offset + page_size],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "stats": {"from_info_snapshot": True, "unknown_date_count": len([x for x in items if not (x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))])},
+        "cache_status": cached.cache_status,
+    }
+
+
 @app.get("/api/info/items/{symbol}")
 def info_items(
     symbol: str,
@@ -1937,34 +2127,18 @@ def info_items(
     if page is None:
         data = news_service.store.list_items(symbol, limit=limit, include_history_days=history_days)
         return {"ok": True, "symbol": symbol, "count": len(data), "data": data, "store": news_service.store.stats(symbol)}
+    cached = cache_state_service.latest_info_snapshot(symbol)
+    snapshot_page = _paged_info_items_from_snapshot(cached, page=page, page_size=page_size, sort=sort, category=category, source=source, include_unknown_date=include_unknown_date)
+    if snapshot_page:
+        return {"ok": True, "symbol": symbol, "data": snapshot_page}
     data = news_service.store.list_items_paged(
         symbol, page=page, page_size=page_size, include_history_days=history_days,
         sort=sort, category=category, source=source, include_unknown_date=include_unknown_date
     )
     if not data.get("data"):
-        cached = cache_state_service.latest_info_snapshot(symbol)
-        items = (cached.data or {}).get("items") or []
-        if items:
-            if not include_unknown_date:
-                items = [x for x in items if x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date")]
-            if category:
-                items = [x for x in items if str(x.get("category") or x.get("event_type") or "") == str(category)]
-            reverse = str(sort).lower() != "asc"
-            items = sorted(items, key=lambda x: str(x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date") or ""), reverse=reverse)
-            total = len(items)
-            total_pages = max(1, (total + page_size - 1) // page_size)
-            if page > total_pages:
-                page = 1
-            offset = (page - 1) * page_size
-            data = {
-                "data": items[offset:offset + page_size],
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": total_pages,
-                "stats": {"from_info_snapshot": True, "unknown_date_count": len([x for x in items if not (x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))])},
-                "cache_status": cached.cache_status,
-            }
+        snapshot_page = _paged_info_items_from_snapshot(cached, page=page, page_size=page_size, sort=sort, category=category, source=source, include_unknown_date=include_unknown_date)
+        if snapshot_page:
+            data = snapshot_page
     return {"ok": True, "symbol": symbol, "data": data}
 
 
@@ -1995,6 +2169,29 @@ def _tag_explain_from_result(item: dict, tag: str) -> dict:
         conclusion += f" 关联指标：{spec.get('name')}。"
     why = []
     annotations = []
+
+    def present(value) -> bool:
+        return value not in (None, "", "--")
+
+    def first_present(*values):
+        for value in values:
+            if present(value):
+                return value
+        return None
+
+    def add_or_fill_metric(name: str, value, unit: str = "", better: str = "", *, replace_zero: bool = False) -> None:
+        if not present(value):
+            return
+        for metric in metrics:
+            if metric.get("name") == name:
+                current = metric.get("value")
+                if not present(current) or (replace_zero and current == 0):
+                    metric["value"] = value
+                    metric["unit"] = metric.get("unit") or unit
+                    metric["better"] = metric.get("better") or better
+                return
+        metrics.append({"name": name, "value": value, "unit": unit, "better": better})
+
     if "低位" in tag or "回撤" in tag or "低点" in tag or "贴近低点" in tag:
         metrics = [
             {"name": "近60日位置", "value": item.get("pos60"), "unit": "%", "better": "越低表示越靠近阶段低位"},
@@ -2103,14 +2300,16 @@ def _tag_explain_from_result(item: dict, tag: str) -> dict:
         info = item.get("info") or {}
         news = item.get("news") or {}
         metrics = [
-            {"name": "信息面分", "value": info.get("info_score") or news.get("news_score"), "unit": "分"},
+            {"name": "信息面分", "value": first_present(info.get("info_score"), news.get("news_score"), item.get("info_score"), item.get("news_score")), "unit": "分"},
             {"name": "事件级正/负权重", "value": f"{news.get('weighted_positive','--')} / {news.get('weighted_negative','--')}", "unit": ""},
-            {"name": "新闻条数", "value": news.get("count"), "unit": "条"},
+            {"name": "新闻条数", "value": first_present(news.get("count"), item.get("info_effective_count"), item.get("news_count")), "unit": "条"},
             {"name": "官方/高可信", "value": (info.get("evidence_counts") or {}).get("high_confidence_items") or news.get("official_count"), "unit": "条"},
-            {"name": "重复事件组", "value": len(news.get("duplicate_groups") or []), "unit": "组"},
+            {"name": "重复事件组", "value": first_present(item.get("info_unique_event_count"), len(news.get("duplicate_groups") or [])), "unit": "组"},
         ]
         why.append("信息面采用事件级去重：同一亏损、问询、减持、订单等多源转载只计一次主权重，避免重复标题放大影响。")
         why.append("近期官方信息权重更高，社区/传闻只作为舆情观察，不进入核心利多利空。")
+        if item.get("risk_flags") or item.get("tags"):
+            why.append("当前解释优先使用本次筛选快照里的标签、风险提示和信息面字段；快照缺少新闻正文时，仍保留标签来源与核心计数字段。")
     else:
         metrics = [
             {"name": "低位分", "value": item.get("low_score"), "unit": "分"},
@@ -2126,11 +2325,37 @@ def _tag_explain_from_result(item: dict, tag: str) -> dict:
             {"name": "风险扣分", "value": item.get("risk_penalty"), "unit": "分"},
         ]
         why.append("该标签来自当前筛选结果的多因子评分矩阵；若某指标为空，通常是公开源没有返回对应字段或K线数量不足。")
+    info = item.get("info") or {}
+    news = item.get("news") or {}
+    add_or_fill_metric("综合评分", item.get("total_score"), "分")
+    add_or_fill_metric("复核评分", item.get("manual_review_score"), "分")
+    add_or_fill_metric("技术底分", first_present(item.get("technical_score"), item.get("score_before_strategy")), "分")
+    add_or_fill_metric("信息面分", first_present(info.get("info_score"), news.get("news_score"), item.get("info_score"), item.get("news_score")), "分")
+    add_or_fill_metric("信息面调分", first_present(item.get("info_score_delta"), item.get("info_delta"), item.get("news_score_delta")), "分")
+    add_or_fill_metric("个股有效条目", first_present(item.get("info_effective_count"), info.get("effective_count"), news.get("count")), "条", replace_zero=True)
+    add_or_fill_metric("去重事件组", first_present(item.get("info_unique_event_count"), len(news.get("duplicate_groups") or [])), "组", replace_zero=True)
+    add_or_fill_metric("快照ID", first_present(item.get("info_snapshot_id"), info.get("snapshot_id"), news.get("snapshot_id")), "")
+    if item.get("risk_flags"):
+        why.append("风险提示来自当前筛选快照：" + "；".join(str(x) for x in (item.get("risk_flags") or [])[:4]))
+    if item.get("missing_data_hints"):
+        why.append("缺失提示：" + "；".join(str(x) for x in (item.get("missing_data_hints") or [])[:3]))
     if spec:
         why.insert(0, f"指标知识库：公式={spec.get('formula')}；评判标准={spec.get('judgment')}；应用场景={spec.get('application')}。")
         if spec.get('caveat'):
             why.append(f"使用限制：{spec.get('caveat')}。")
     return {"tag": tag, "symbol": item.get("symbol"), "name": item.get("name"), "conclusion": conclusion, "why": why, "metrics": metrics, "indicator_spec": spec, "indicator_matrix": item.get("indicator_matrix"), "indicator_signals": item.get("indicator_signals", [])[:80], "annotations_preview": annotations, "future_interface": "后续可将 annotations_preview 写入 /api/annotations/{symbol}，在K线图上标注信号点、区间和买卖点。"}
+
+
+@app.post("/api/screener/explain-row")
+def screener_explain_row(payload: dict = Body(...)) -> dict:
+    item = payload.get("item") if isinstance(payload, dict) else {}
+    tag = str(payload.get("tag") or "") if isinstance(payload, dict) else ""
+    if not isinstance(item, dict) or not item.get("symbol"):
+        return {"ok": False, "message": "missing selected screener row"}
+    if tag:
+        return {"ok": True, "data": _tag_explain_from_result(item, tag), "result": item}
+    tags = (item.get("tags") or []) + (item.get("risk_flags") or [])
+    return {"ok": True, "symbol": item.get("symbol"), "count": len(tags), "data": [_tag_explain_from_result(item, t) for t in tags], "result": item}
 
 
 @app.get("/api/screener/explain/{symbol}")
@@ -2212,10 +2437,10 @@ def technical_page(symbol: str) -> str:
     return f"""<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>V3.18.3 技术因子矩阵</title>
 <style>body{{font-family:Segoe UI,Microsoft YaHei,Arial;background:#f8fafc;margin:0}}header{{background:#0f172a;color:#fff;padding:14px 18px}}main{{padding:16px}}table{{width:100%;border-collapse:collapse;background:#fff}}td,th{{border:1px solid #e5e7eb;padding:8px;font-size:13px;vertical-align:top}}th{{background:#e2e8f0}}.ok{{color:#166534}}</style></head>
 <body><header><b>Quant Data Gateway V3.18.3 技术因子矩阵</b> <a style='color:#bfdbfe;margin-left:12px' href='/screener'>筛选页</a></header>
-<main><h2 id='title'>{symbol} 技术因子矩阵</h2><div id='cache'>缓存状态读取中...</div><table><thead><tr><th>因子</th><th>类别</th><th>值</th><th>公式</th><th>信号</th><th>解释</th><th>贡献/扣分</th></tr></thead><tbody id='rows'><tr><td colspan='7'>加载中...</td></tr></tbody></table></main>
+<main><h2 id='title'>{symbol} 技术因子矩阵</h2><div id='cache'>缓存状态读取中...</div><p id='factorNote'>说明：这里是逐指标技术因子矩阵，不是策略库清单；0 / 0 表示该因子本次为中性或仅展示闭环字段，真正缺数据会进入数据质量/缺失提示。</p><table><thead><tr><th>因子</th><th>类别</th><th>值</th><th>公式</th><th>信号</th><th>解释</th><th>贡献/扣分</th></tr></thead><tbody id='rows'><tr><td colspan='7'>加载中...</td></tr></tbody></table></main>
 <script>
 const esc=s=>String(s??'').replace(/[&<>]/g,m=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[m]));
-fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18.3';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}</td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
+fetch('/api/technical/factors/{symbol}').then(r=>r.json()).then(js=>{{document.getElementById('cache').innerHTML='缓存状态：<b class=ok>'+esc(js.cache_status?.status||'--')+'</b>；因子数 '+esc(js.factor_count||0)+'；V3.18.3';document.getElementById('rows').innerHTML=(js.factors||[]).map(f=>`<tr><td>${{esc(f.name)}}<br><small>${{esc(f.key)}}</small></td><td>${{esc(f.category)}}</td><td>${{esc(JSON.stringify(f.value))}}</td><td>${{esc(f.formula)}}<br><small>${{esc(JSON.stringify(f.params||{{}}))}}</small></td><td>${{esc(f.signal)}}</td><td>${{esc(f.explanation)}}</td><td>${{esc(f.score_contribution)}} / ${{esc(f.risk_penalty)}}<br><small>${{esc(f.score_note||'')}}</small></td></tr>`).join('')||'<tr><td colspan=7>空状态：暂无因子，请检查K线缓存</td></tr>';}}).catch(e=>{{document.getElementById('rows').innerHTML='<tr><td colspan=7>空状态：技术因子读取失败 '+esc(e)+'</td></tr>'}})
 </script></body></html>"""
 
 
@@ -2237,6 +2462,11 @@ def info_page() -> str:
 @app.get("/screener", response_class=HTMLResponse)
 def screener_page() -> str:
     return build_screener_ui()
+
+
+@app.get("/backtest", response_class=HTMLResponse)
+def backtest_page() -> str:
+    return build_backtest_ui()
 
 
 @app.get("/chart/{symbol}", response_class=HTMLResponse)

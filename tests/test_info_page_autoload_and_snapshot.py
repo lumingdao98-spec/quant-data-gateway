@@ -11,7 +11,12 @@ def test_info_page_autoloads_snapshot_and_has_empty_states():
     assert "读取最近快照" in html or "最近快照" in html
     assert "source_logs" in html or "sources" in html
     assert "全球/行业映射" in html
+    assert "global-columns" in html
+    assert "信息映射" in html
+    assert "全球信息" in html
     assert "深度刷新" in html
+    assert "refreshSnapshot=force||deep" in html
+    assert "incompleteSnapshot" in html
 
 
 def test_info_analyze_empty_snapshot_id_returns_200():
