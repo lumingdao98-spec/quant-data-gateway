@@ -1264,6 +1264,9 @@ def backtest_strategies() -> dict:
 def backtest_run(
     symbol: str = "300750",
     strategy: str = "ma_cross",
+    strategy_combo: str = "",
+    combo_buy_rule: str = "at_least_2",
+    combo_sell_rule: str = "any",
     initial_cash: float = 100_000.0,
     fee_rate: float = 0.0003,
     slippage_rate: float = 0.0005,
@@ -1282,6 +1285,10 @@ def backtest_run(
     adjust = str(adjust or "qfq").lower()
     if adjust not in {"none", "qfq", "hfq"}:
         adjust = "qfq"
+    # The combo strategy is implemented in the single-symbol research backtester.
+    # Route it there even when callers omit legacy=true so API and UI behavior match.
+    if strategy == "combo_signal":
+        legacy = True
     try:
         q = service.get_quote(symbol, force_refresh=force)
     except Exception:
@@ -1323,6 +1330,9 @@ def backtest_run(
             [_legacy_bar_like(b) for b in bars],
             LegacyBacktestConfig(
                 strategy=strategy,
+                strategy_combo=tuple(x.strip() for x in str(strategy_combo or "").split(",") if x.strip()),
+                combo_buy_rule=combo_buy_rule,
+                combo_sell_rule=combo_sell_rule,
                 initial_cash=initial_cash,
                 fee_rate=fee_rate,
                 slippage_rate=slippage_rate,
@@ -1418,6 +1428,27 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
         "trade_events": trade_events,
         "trade_event_count": len(trade_events),
         "params": data.get("config", {}),
+        "params_cn": {
+            "策略": f"{strategy} · V3.20",
+            "初始资金": data.get("config", {}).get("initial_cash"),
+            "仓位比例": data.get("config", {}).get("position_pct"),
+            "手续费率": data.get("config", {}).get("commission_rate"),
+            "滑点基点": data.get("config", {}).get("slippage_bps"),
+            "止损": data.get("config", {}).get("stop_loss_pct"),
+            "止盈": data.get("config", {}).get("take_profit_pct"),
+            "复权口径": adjust,
+        },
+        "api_labels": {
+            "strategy": "策略",
+            "initial_cash": "初始资金",
+            "commission_rate": "手续费率",
+            "slippage_bps": "滑点基点",
+            "position_pct": "仓位比例",
+            "trade_events": "买卖流水",
+            "position_summary": "持仓与成本",
+            "cost_summary": "成本汇总",
+            "period": "回测区间",
+        },
         "assumptions": [
             "V3.20 科学回测：默认下一交易日成交，避免收盘后才知道的信号当日成交。",
             "滑点默认使用 price_adjusted_slippage：成交价已反映滑点，现金不再重复扣滑点。",

@@ -18,6 +18,9 @@ def test_screener_default_layout_is_compact_and_restorable():
     assert "tableMode==='debug'?rows:rows.filter" in html
     assert "qdg_screener_snapshot_id" in html
     assert "qdg_screener_view" in html
+    assert "normalizeStrategySelection" in html
+    assert "syncStrategyCheckboxes" in html
+    assert "本地内置策略" in html
 
 
 def test_screener_right_detail_card_contains_full_sections():

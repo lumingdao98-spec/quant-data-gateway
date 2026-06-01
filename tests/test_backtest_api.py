@@ -94,6 +94,26 @@ def test_backtest_api_run_uses_local_bars(monkeypatch):
         assert sell_event["realized_pnl"] == trade["pnl"]
 
 
+def test_backtest_combo_without_legacy_uses_combo_payload(monkeypatch):
+    monkeypatch.setattr(api.service, "get_quote", lambda *a, **k: _quote())
+    monkeypatch.setattr(api.service, "get_kline", lambda *a, **k: _bars(180))
+
+    data = TestClient(api.app).get(
+        "/api/backtest/run?symbol=300750&strategy=combo_signal"
+        "&strategy_combo=score_driven,ma_cross,macd_momentum"
+        "&combo_buy_rule=at_least_2&combo_sell_rule=any&limit=180"
+    ).json()
+
+    assert data["ok"] is True
+    result = data["data"]
+    assert result["strategy"] == "combo_signal"
+    assert result["engine_version"] == "legacy_single_symbol_backtest"
+    assert result["strategy_combo"] == ["score_driven", "ma_cross", "macd_momentum"]
+    assert result["combo_rules"] == {"buy": "at_least_2", "sell": "any"}
+    assert "params_cn" in result
+    assert "api_labels" in result
+
+
 def test_backtest_page_is_visible():
     html = TestClient(api.app).get("/backtest").text
 
@@ -123,6 +143,11 @@ def test_backtest_page_is_visible():
     assert "回测区间" in html
     assert "交易成本" in html
     assert "期末持仓" in html
+    assert "组合策略判断" in html
+    assert "strategy_combo" in html
+    assert "comboBuyRule" in html
+    assert "params_cn" in html
+    assert "trade-table" in html
 
 
 def test_backtest_trade_detail_page_is_visible():
@@ -135,3 +160,7 @@ def test_backtest_trade_detail_page_is_visible():
     assert "trade_events" in html
     assert "position_shares" in html
     assert "cash_after" in html
+    assert "mPeriod" in html
+    assert "mCost" in html
+    assert "期末现金/持仓" in html
+    assert "class=\"reason\"" in html

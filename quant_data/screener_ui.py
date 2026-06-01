@@ -428,8 +428,9 @@ function ensureSortControl(){
 function useFallbackStrategyLibrary(reason){
   strategyLibrary=FALLBACK_STRATEGIES.slice();
   defaultStrategyKeys=new Set(strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));
-  const saved=localStorage.getItem(LS_STRATEGIES)||localStorage.getItem(LS_Q_STRATEGIES);
-  selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
+  const savedRaw=localStorage.getItem(LS_STRATEGIES);
+  const saved=savedRaw!==null?savedRaw:localStorage.getItem(LS_Q_STRATEGIES);
+  selectedStrategyKeys=saved!==null?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
   currentStrategyCategory='全部';
   renderStrategyTabs();renderStrategyLibrary();
   if($('strategySummary'))$('strategySummary').insertAdjacentHTML('beforeend',` <span class="tag risk">fallback: ${htmlEsc(reason||'strategy api timeout')}</span>`);
@@ -444,8 +445,9 @@ async function loadStrategyLibrary(){
     const js=await r.json();
     strategyLibrary=Array.isArray(js.data)&&js.data.length?js.data:FALLBACK_STRATEGIES.slice();
     defaultStrategyKeys=new Set((js.default_keys&&js.default_keys.length?js.default_keys:strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key)));
-    const saved=localStorage.getItem(LS_STRATEGIES)||localStorage.getItem(LS_Q_STRATEGIES);
-    selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
+    const savedRaw=localStorage.getItem(LS_STRATEGIES);
+    const saved=savedRaw!==null?savedRaw:localStorage.getItem(LS_Q_STRATEGIES);
+    selectedStrategyKeys=saved!==null?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
     currentStrategyCategory='全部';
     renderStrategyTabs();renderStrategyLibrary();
   }catch(e){
@@ -736,6 +738,64 @@ runScreener=async function(){
   }finally{
     btn.disabled=false;btn.textContent='开始筛选';
   }
+}
+
+function normalizeStrategySelection(){
+  if(!Array.isArray(strategyLibrary)||!strategyLibrary.length){
+    strategyLibrary=FALLBACK_STRATEGIES.slice();
+  }
+  const valid=new Set(strategyLibrary.map(x=>String(x.key)));
+  const cleaned=Array.from(selectedStrategyKeys||[]).map(String).filter(k=>valid.has(k));
+  const savedRaw=localStorage.getItem(LS_STRATEGIES);
+  if(cleaned.length)selectedStrategyKeys=new Set(cleaned);
+  else if(savedRaw==='')selectedStrategyKeys=new Set();
+  else selectedStrategyKeys=new Set((defaultStrategyKeys&&defaultStrategyKeys.size?Array.from(defaultStrategyKeys):strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key)).filter(k=>valid.has(k)));
+  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
+  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+}
+function syncStrategyCheckboxes(){
+  document.querySelectorAll('.strategy-check,.strategy-inline-check').forEach(el=>{el.checked=selectedStrategyKeys.has(el.value)});
+}
+const renderStrategyLibraryStable=renderStrategyLibrary;
+renderStrategyLibrary=function(){
+  normalizeStrategySelection();
+  renderStrategyLibraryStable();
+  syncStrategyCheckboxes();
+}
+const updateStrategySummaryStable=updateStrategySummary;
+updateStrategySummary=function(){
+  normalizeStrategySelection();
+  updateStrategySummaryStable();
+  syncStrategyCheckboxes();
+}
+syncStrategySelection=function(key,checked){
+  if(checked)selectedStrategyKeys.add(key);
+  else selectedStrategyKeys.delete(key);
+  normalizeStrategySelection();
+  updateStrategySummary();
+}
+openStrategyModal=function(){
+  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
+  normalizeStrategySelection();
+  document.getElementById('strategyModal').classList.add('show');
+  renderStrategyTabs();
+  renderStrategyLibrary();
+}
+selectAllStrategies=function(flag){
+  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
+  selectedStrategyKeys=flag?new Set(strategyLibrary.map(x=>x.key)):new Set();
+  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
+  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+  renderStrategyLibrary();
+  updateStrategySummary();
+}
+selectDefaultStrategies=function(){
+  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
+  selectedStrategyKeys=new Set(defaultStrategyKeys&&defaultStrategyKeys.size?Array.from(defaultStrategyKeys):strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));
+  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
+  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+  renderStrategyLibrary();
+  updateStrategySummary();
 }
 
 (function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
