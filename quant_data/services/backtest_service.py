@@ -369,6 +369,7 @@ class BacktestService:
         annualized = (final_equity / cfg.initial_cash) ** (365 / day_span) - 1 if cfg.initial_cash > 0 and final_equity > 0 else 0.0
         daily_returns = self._daily_returns(equity_curve)
         wins = [t for t in trades if _num(t.get("pnl")) > 0]
+        trade_events = self._trade_events(trades)
         anomaly_markers = self._anomaly_markers(clean, score_series)
         total_return_pct = _pct(total_return)
         buy_hold_return_pct = _pct(buy_hold_return)
@@ -431,7 +432,9 @@ class BacktestService:
             "sharpe": self._sharpe(daily_returns),
             "win_rate_pct": round(len(wins) / len(trades) * 100, 2) if trades else 0.0,
             "trade_count": len(trades),
+            "trade_event_count": len(trade_events),
             "trades": trades,
+            "trade_events": trade_events,
             "markers": markers,
             "anomaly_markers": anomaly_markers,
             "kline": self._kline_payload(clean, score_series, markers, anomaly_markers),
@@ -933,6 +936,67 @@ class BacktestService:
             "exit_reason": exit_reason,
             "_cash_after": cash_after,
         }
+
+    def _trade_events(self, trades: list[dict]) -> list[dict]:
+        events: list[dict] = []
+        for idx, trade in enumerate(trades, 1):
+            shares = int(_num(trade.get("buy_shares"), _num(trade.get("shares"))))
+            entry_value = _num(trade.get("entry_value"))
+            entry_cost = _num(trade.get("entry_cost"), entry_value + _num(trade.get("entry_fee")))
+            entry_fee = _num(trade.get("entry_fee"))
+            entry_cash = _num(trade.get("cash_before_entry"))
+            exit_value = _num(trade.get("exit_value"))
+            exit_proceeds = _num(trade.get("exit_proceeds"), exit_value - _num(trade.get("exit_fee")))
+            exit_fee = _num(trade.get("exit_fee"))
+            cost_basis = _num(trade.get("cost_basis"))
+            buy_cash_after = entry_cash - entry_cost if entry_cash else None
+            events.append(
+                {
+                    "event_id": f"{idx}-B",
+                    "trade_index": idx,
+                    "date": trade.get("entry_date"),
+                    "side": "buy",
+                    "action": "买入",
+                    "price": trade.get("entry_price"),
+                    "shares": shares,
+                    "amount": round(entry_value, 2),
+                    "fee": round(entry_fee, 2),
+                    "cash_change": round(-entry_cost, 2),
+                    "cash_after": round(buy_cash_after, 2) if buy_cash_after is not None else None,
+                    "position_shares": shares,
+                    "cost_basis": round(cost_basis, 4),
+                    "realized_pnl": 0.0,
+                    "realized_pct": 0.0,
+                    "reason": trade.get("entry_reason"),
+                    "signal_date": trade.get("entry_signal_date"),
+                    "score": trade.get("entry_signal_score"),
+                    "paired_date": trade.get("exit_date"),
+                }
+            )
+            events.append(
+                {
+                    "event_id": f"{idx}-S",
+                    "trade_index": idx,
+                    "date": trade.get("exit_date"),
+                    "side": "sell",
+                    "action": "卖出",
+                    "price": trade.get("exit_price"),
+                    "shares": int(_num(trade.get("sell_shares"), shares)),
+                    "amount": round(exit_value, 2),
+                    "fee": round(exit_fee, 2),
+                    "cash_change": round(exit_proceeds, 2),
+                    "cash_after": trade.get("cash_after_exit"),
+                    "position_shares": 0,
+                    "cost_basis": round(cost_basis, 4),
+                    "realized_pnl": trade.get("pnl"),
+                    "realized_pct": trade.get("pnl_pct"),
+                    "reason": trade.get("exit_reason"),
+                    "signal_date": trade.get("exit_signal_date"),
+                    "score": trade.get("exit_signal_score"),
+                    "paired_date": trade.get("entry_date"),
+                }
+            )
+        return events
 
     def _daily_returns(self, equity_curve: list[dict]) -> list[float]:
         returns: list[float] = []

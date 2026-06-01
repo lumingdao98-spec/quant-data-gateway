@@ -75,12 +75,23 @@ def test_backtest_api_run_uses_local_bars(monkeypatch):
     assert "cash" in result["position_summary"]
     assert "max_shares" in result["position_summary"]
     assert "avg_cost_basis" in result["position_summary"]
+    assert "trade_events" in result
+    assert result["trade_event_count"] == len(result["trade_events"])
     if result["trades"]:
         trade = result["trades"][0]
         assert "entry_cost" in trade
         assert "exit_proceeds" in trade
         assert "buy_shares" in trade
         assert "cost_basis" in trade
+        assert result["trade_event_count"] == len(result["trades"]) * 2
+        buy_event, sell_event = result["trade_events"][0], result["trade_events"][1]
+        assert buy_event["side"] == "buy"
+        assert sell_event["side"] == "sell"
+        assert buy_event["date"] == trade["entry_date"]
+        assert sell_event["date"] == trade["exit_date"]
+        assert buy_event["position_shares"] == trade["buy_shares"]
+        assert sell_event["position_shares"] == 0
+        assert sell_event["realized_pnl"] == trade["pnl"]
 
 
 def test_backtest_page_is_visible():
@@ -105,6 +116,8 @@ def test_backtest_page_is_visible():
     assert "/backtest/trades" in html
     assert "平均成本/股" in html
     assert "止损/止盈" in html
+    assert "交易流水" in html
+    assert "trade_events" in html
     assert "tradeQuickList" not in html
     assert "完整表格" not in html
     assert "回测区间" in html
@@ -118,7 +131,7 @@ def test_backtest_trade_detail_page_is_visible():
     assert "Backtest Trades" in html
     assert "/api/backtest/run" in html
     assert "rows" in html
-    assert "entry_reason" in html
-    assert "exit_reason" in html
-    assert "entry_cost" in html
-    assert "exit_proceeds" in html
+    assert "完整交易流水" in html
+    assert "trade_events" in html
+    assert "position_shares" in html
+    assert "cash_after" in html
