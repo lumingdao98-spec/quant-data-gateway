@@ -185,3 +185,58 @@ load();
 </script>
 </body>
 </html>'''
+
+
+def build_paper_ui() -> str:
+    return r'''<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Paper Trading V3.19</title>
+<style>
+:root{--bg:#0b1020;--panel:#111827;--line:#283956;--text:#dbeafe;--muted:#91a7c7;--green:#22c55e}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif}header{height:58px;display:flex;align-items:center;gap:10px;padding:0 18px;background:#101827;border-bottom:1px solid var(--line)}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}.brand{font-weight:900;color:#bfdbfe;font-size:18px}.grow{flex:1}button{border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:800;padding:9px 12px;cursor:pointer}.btn2{background:#253149;color:#c7d2fe}main{padding:16px;display:grid;grid-template-columns:360px 1fr;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}.panel-h{min-height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#141f35;border-bottom:1px solid var(--line);font-weight:900}.panel-b{padding:12px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.section{font-size:13px;color:var(--muted);margin:12px 0 6px}input,select{width:100%;background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:10px;padding:9px 11px}.hint,.card{background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px;color:#b6c7e2;line-height:1.55}.cards{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:10px}.card span{display:block;color:var(--muted);font-size:12px}.card b{display:block;text-align:right;font-size:20px}pre{white-space:pre-wrap;word-break:break-word;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;max-height:520px;overflow:auto}.disclaimer{color:#fcd34d}@media(max-width:1000px){main{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header><span class="dot"></span><div class="brand">纸面交易系统 V3.19</div><span class="disclaimer">研究辅助，不构成投资建议；未接入真实券商</span><div class="grow"></div><button class="btn2" onclick="location.href='/backtest'">交易回测</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button></header>
+<main>
+  <section class="panel">
+    <div class="panel-h">纸面信号</div>
+    <div class="panel-b">
+      <div class="grid2">
+        <div><div class="section">代码</div><input id="symbol" value="300750"></div>
+        <div><div class="section">动作</div><select id="action"><option value="buy">买入</option><option value="sell">卖出</option></select></div>
+        <div><div class="section">评分</div><input id="score" value="68" type="number"></div>
+        <div><div class="section">目标仓位</div><input id="weight" value="0.2" type="number" step="0.01"></div>
+        <div><div class="section">成交价</div><input id="price" value="20" type="number" step="0.01"></div>
+        <div><div class="section">成交量</div><input id="volume" value="1000000" type="number"></div>
+      </div>
+      <div class="section">理由</div><input id="reason" value="手动纸面信号验证">
+      <div style="display:flex;gap:8px;margin-top:12px"><button onclick="sendSignal()">生成纸面订单</button><button class="btn2" onclick="fillLast()">模拟成交</button><button class="btn2" onclick="loadState()">刷新状态</button></div>
+      <div class="hint" style="margin-top:12px">纸面交易只接收策略信号、生成虚拟订单并按 V3.19 执行模型撮合，用于把回测逻辑延伸到仿真跟踪，不会提交真实委托。</div>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="panel-h">账户状态</div>
+    <div class="panel-b">
+      <div class="cards">
+        <div class="card"><span>现金</span><b id="cash">--</b></div>
+        <div class="card"><span>权益</span><b id="equity">--</b></div>
+        <div class="card"><span>订单</span><b id="orders">--</b></div>
+        <div class="card"><span>成交</span><b id="fills">--</b></div>
+      </div>
+      <pre id="state">Loading...</pre>
+    </div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id),money=n=>Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2});let lastOrder=null;
+async function loadState(){const r=await fetch('/api/paper/state',{cache:'no-store'});const js=await r.json();const d=js.data||{};$('cash').textContent=money(d.cash);$('equity').textContent=money(d.equity);$('orders').textContent=(d.orders||[]).length;$('fills').textContent=(d.fills||[]).length;$('state').textContent=JSON.stringify(js,null,2);lastOrder=(d.orders||[]).slice(-1)[0]||lastOrder}
+async function sendSignal(){const body={symbol:$('symbol').value,action:$('action').value,score:Number($('score').value),target_weight:Number($('weight').value),reason:$('reason').value,date:new Date().toISOString().slice(0,10)};const r=await fetch('/api/paper/signal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const js=await r.json();lastOrder=(js.data||{}).order;$('state').textContent=JSON.stringify(js,null,2);await loadState()}
+async function fillLast(){if(!lastOrder){await loadState()}if(!lastOrder){return}const price=Number($('price').value||0);const body={order_id:lastOrder.order_id,price,open:price,high:price*1.01,low:price*.99,close:price,volume:Number($('volume').value||1000000),date:new Date().toISOString().slice(0,10)};const r=await fetch('/api/paper/fill',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const js=await r.json();$('state').textContent=JSON.stringify(js,null,2);await loadState()}
+loadState();
+</script>
+</body>
+</html>'''

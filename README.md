@@ -171,6 +171,30 @@ docs/WORD_SOURCE_TRACE.md
 
 映射状态支持“已落地 / 部分落地 / 未落地”，不会把所有条目无条件标成已落地。
 
+## V3.19 Backtest / Paper Trading
+
+V3.19 adds a typed backtest foundation in `quant_data/backtest/` while keeping the existing `/backtest` visual replay page compatible.
+
+- `models.py`: BacktestConfig, StrategySignal, Order, Fill, Position, PortfolioState, Trade, BacktestResult.
+- `data_loader.py`: adjust mode, warmup, data quality checks and no-lookahead notes.
+- `signal_adapter.py`: screener snapshot signals, factor-rule signals and event-risk filtering.
+- `execution.py`: A-share T+1, 100-share lots, no shorting, suspended/limit checks, fees, stamp tax, transfer fee, slippage and volume caps.
+- `portfolio.py`: sizing, cash reserve, max positions, stops and daily portfolio states.
+- `risk.py`: return, annualized return, max drawdown, Sharpe, Sortino, Calmar, win rate, turnover, costs and excess return.
+- `optimizer.py` / `walk_forward.py`: parameter search and rolling out-of-sample validation.
+- `storage.py` / `report.py`: result persistence, export and report generation.
+- `paper_broker.py`: paper-only virtual broker; no real broker API is connected.
+
+V3.19 response shape:
+
+```json
+{"ok": true, "run_id": "...", "data": {}, "metrics": {}, "errors": [], "warnings": [], "cache_status": "..."}
+```
+
+Core endpoints: `POST /api/backtest/run`, `GET /api/backtest/result/{run_id}`, `GET /api/backtest/runs`, `POST /api/backtest/compare`, `POST /api/backtest/optimize`, `POST /api/backtest/walk-forward`, `GET /api/paper/state`, `POST /api/paper/signal`, `POST /api/paper/fill`.
+
+All outputs are research-only: `研究辅助，不构成投资建议`.
+
 ## 测试
 
 ```bash

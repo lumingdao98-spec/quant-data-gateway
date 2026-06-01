@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import datetime, time
 from pathlib import Path
 from statistics import mean
@@ -35,11 +35,18 @@ from quant_data.services.info_analysis_service import InfoAnalysisService
 from quant_data.services.company_profile_service import CompanyProfileService
 from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
-from quant_data.services.backtest_service import BacktestConfig, BacktestService
+from quant_data.services.backtest_service import BacktestConfig as LegacyBacktestConfig, BacktestService
+from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategySignal
+from quant_data.backtest.engine import BacktestEngine
+from quant_data.backtest.optimizer import ParameterOptimizer
+from quant_data.backtest.paper_broker import PaperBroker
+from quant_data.backtest.report import build_report
+from quant_data.backtest.storage import BacktestStorage
+from quant_data.backtest.walk_forward import WalkForwardValidator
 from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
-from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui
+from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui, build_paper_ui
 
 
 service = MarketDataService()
@@ -65,6 +72,9 @@ market_behavior_engine = MarketBehaviorEngine()
 cache_state_service = CacheStateService()
 technical_factor_engine = TechnicalFactorEngine()
 backtest_service = BacktestService()
+backtest_engine_v319 = BacktestEngine(service)
+backtest_storage_v319 = BacktestStorage()
+paper_broker_v319 = PaperBroker(V319BacktestConfig())
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -442,6 +452,11 @@ def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[
         latest = cache_state_service.latest("global_news_cache", allow_stale=True)
         if latest.data and latest.data.get("items"):
             return dict(latest.data), latest.cache_status
+        return {
+            "items": [],
+            "source_logs": [{"source": "global_news_cache", "status": "miss_no_sync_fetch", "count": 0}],
+            "cache_info": {"hit": False, "status": "miss_no_sync_fetch"},
+        }, cache_state_service.status("miss", key=f"global:{limit}", source="global_news_cache", error="no cached global news; skipped synchronous fetch")
     data = news_service.fetch_global_news(limit=limit, force=force)
     status = cache_state_service.put("global_news_cache", f"global:{limit}", {
         "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
@@ -1261,7 +1276,7 @@ def backtest_run(
         result = backtest_service.run(
             symbol,
             bars,
-            BacktestConfig(
+            LegacyBacktestConfig(
                 strategy=strategy,
                 initial_cash=initial_cash,
                 fee_rate=fee_rate,
@@ -1283,6 +1298,195 @@ def backtest_run(
         return {"ok": True, "data": result}
     except Exception as exc:
         return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}
+
+
+def _v319_response(ok: bool, **payload: object) -> dict:
+    base = {"ok": ok, "run_id": None, "data": None, "metrics": {}, "errors": [], "warnings": [], "cache_status": "memory"}
+    base.update(payload)
+    base.setdefault("errors", [])
+    base.setdefault("warnings", [])
+    base.setdefault("cache_status", "memory")
+    return base
+
+
+def _v319_config(payload: dict | None = None) -> V319BacktestConfig:
+    payload = payload or {}
+    raw = dict(payload.get("config") or payload)
+    if "symbol" in raw and "symbols" not in raw:
+        raw["symbols"] = [str(raw.get("symbol"))]
+    if isinstance(raw.get("symbols"), str):
+        raw["symbols"] = [x.strip() for x in raw["symbols"].replace("，", ",").split(",") if x.strip()]
+    allowed = {f.name for f in fields(V319BacktestConfig)}
+    data = {k: v for k, v in raw.items() if k in allowed}
+    return V319BacktestConfig(**data)
+
+
+def _v319_market_data(payload: dict, cfg: V319BacktestConfig) -> dict | None:
+    raw = payload.get("market_data")
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        symbol = cfg.symbols[0] if cfg.symbols else str(payload.get("symbol") or "300750")
+        return {symbol: raw}
+    return None
+
+
+@app.post("/api/backtest/run")
+def backtest_run_v319(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        cfg = _v319_config(payload)
+        result = backtest_engine_v319.run(
+            cfg,
+            market_data=_v319_market_data(payload, cfg),
+            screener_rows=payload.get("screener_rows") or payload.get("snapshot_rows"),
+        )
+        backtest_storage_v319.save(result)
+        return _v319_response(
+            True,
+            run_id=result.run_id,
+            data=result.to_dict(),
+            metrics=result.metrics,
+            errors=result.errors,
+            warnings=result.warnings,
+            cache_status=result.cache_status,
+        )
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]], message=str(exc)[:300])
+
+
+@app.get("/api/backtest/result/{run_id}")
+def backtest_result_v319(run_id: str) -> dict:
+    try:
+        data = backtest_storage_v319.load(run_id)
+        return _v319_response(True, run_id=run_id, data=data, metrics=data.get("metrics", {}), warnings=data.get("warnings", []), cache_status="disk")
+    except FileNotFoundError:
+        return _v319_response(False, run_id=run_id, errors=["run_id not found"], cache_status="miss")
+
+
+@app.get("/api/backtest/runs")
+def backtest_runs_v319(limit: int = 50) -> dict:
+    return _v319_response(True, data=backtest_storage_v319.list_runs(limit=max(1, min(int(limit or 50), 200))), cache_status="disk")
+
+
+@app.delete("/api/backtest/result/{run_id}")
+def backtest_delete_v319(run_id: str) -> dict:
+    ok = backtest_storage_v319.delete(run_id)
+    return _v319_response(ok, run_id=run_id, data={"deleted": ok}, errors=[] if ok else ["run_id not found"], cache_status="disk")
+
+
+@app.get("/api/backtest/export/{run_id}")
+def backtest_export_v319(run_id: str, fmt: str = "json") -> Response:
+    if fmt.lower() == "csv":
+        path = backtest_storage_v319.export_trades_csv(run_id)
+        return Response(path.read_text(encoding="utf-8-sig"), media_type="text/csv; charset=utf-8")
+    return Response(backtest_storage_v319.export_json(run_id), media_type="application/json; charset=utf-8")
+
+
+@app.post("/api/backtest/compare")
+def backtest_compare_v319(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        cfg = _v319_config(payload)
+        strategies = payload.get("strategies") or ["score_rank_rebalance", "factor_rule_strategy", "event_risk_filter"]
+        market_data = _v319_market_data(payload, cfg)
+        rows = []
+        for strategy in strategies:
+            result = backtest_engine_v319.run(replace(cfg, strategy=str(strategy), run_id=None), market_data=market_data)
+            rows.append({"strategy": strategy, "run_id": result.run_id, "metrics": result.metrics, "warnings": result.warnings})
+        return _v319_response(True, data=rows, cache_status="memory")
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]])
+
+
+@app.post("/api/backtest/optimize")
+def backtest_optimize_v319(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        cfg = _v319_config(payload)
+        grid = payload.get("param_grid") or {"buy_score": [58, 62, 66], "sell_score": [42, 48]}
+        objective = str(payload.get("objective") or "sharpe")
+        optimizer = ParameterOptimizer(backtest_engine_v319)
+        rows = optimizer.grid_search(cfg, grid, market_data=_v319_market_data(payload, cfg), objective=objective)
+        return _v319_response(True, data=rows, metrics={"best": rows[0] if rows else None}, cache_status="memory")
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]])
+
+
+@app.post("/api/backtest/walk-forward")
+def backtest_walk_forward_v319(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        cfg = _v319_config(payload)
+        market_data = _v319_market_data(payload, cfg)
+        if not market_data:
+            return _v319_response(False, errors=["walk-forward requires market_data in V3.19 API"], cache_status="missing")
+        validator = WalkForwardValidator(backtest_engine_v319)
+        data = validator.run(
+            market_data,
+            cfg,
+            train_size=int(payload.get("train_size") or 180),
+            test_size=int(payload.get("test_size") or 60),
+            expanding=bool(payload.get("expanding", True)),
+        )
+        return _v319_response(True, data=data, metrics={"stability_score": data["stability_score"]}, cache_status="memory")
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]])
+
+
+@app.get("/api/backtest/report/{run_id}")
+def backtest_report_v319(run_id: str) -> dict:
+    try:
+        data = backtest_storage_v319.load(run_id)
+        report = build_report(data)
+        return _v319_response(True, run_id=run_id, data=report, warnings=data.get("warnings", []), cache_status="disk")
+    except FileNotFoundError:
+        return _v319_response(False, run_id=run_id, errors=["run_id not found"], cache_status="miss")
+
+
+@app.get("/api/paper/state")
+def paper_state_v319() -> dict:
+    data = paper_broker_v319.snapshot()
+    return _v319_response(True, data=data, cache_status="memory")
+
+
+@app.post("/api/paper/signal")
+def paper_signal_v319(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        signal = StrategySignal(
+            symbol=str(payload.get("symbol") or "300750"),
+            date=str(payload.get("date") or datetime.now().date().isoformat()),
+            action=str(payload.get("action") or "buy"),
+            score=float(payload.get("score") or 0.0),
+            strength=float(payload.get("strength") or 0.0),
+            target_weight=float(payload.get("target_weight") or 0.0),
+            price=payload.get("price"),
+            reason=str(payload.get("reason") or "manual paper signal"),
+            source=str(payload.get("source") or "paper_api"),
+        )
+        order = paper_broker_v319.receive_signal(signal)
+        return _v319_response(True, data={"order": order.to_dict() if order else None, "snapshot": paper_broker_v319.snapshot()}, cache_status="memory")
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]])
+
+
+@app.post("/api/paper/fill")
+def paper_fill_v319(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        order_id = str(payload.get("order_id") or "")
+        order = next((x for x in paper_broker_v319.orders if x.order_id == order_id), None)
+        if order is None:
+            return _v319_response(False, errors=["order_id not found"], cache_status="memory")
+        bar = payload.get("bar") or {
+            "date": payload.get("date") or datetime.now().date().isoformat(),
+            "open": payload.get("open") or payload.get("price") or 0,
+            "high": payload.get("high") or payload.get("price") or 0,
+            "low": payload.get("low") or payload.get("price") or 0,
+            "close": payload.get("close") or payload.get("price") or 0,
+            "volume": payload.get("volume") or 1_000_000,
+        }
+        fill = paper_broker_v319.simulate_fill(order, bar)
+        return _v319_response(True, data={"fill": fill.to_dict() if fill else None, "snapshot": paper_broker_v319.snapshot()}, cache_status="memory")
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]])
 
 
 @app.get("/api/screener/run")
@@ -2472,6 +2676,11 @@ def backtest_page() -> str:
 @app.get("/backtest/trades", response_class=HTMLResponse)
 def backtest_trades_page() -> str:
     return build_backtest_trades_ui()
+
+
+@app.get("/paper", response_class=HTMLResponse)
+def paper_page() -> str:
+    return build_paper_ui()
 
 
 @app.get("/chart/{symbol}", response_class=HTMLResponse)
