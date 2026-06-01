@@ -1,1 +1,1 @@
-__version__ = "3.18.2-navigation-state-background-cache"
+__version__ = "3.18.3-stable-recovery"

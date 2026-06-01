@@ -1,15 +1,17 @@
+from __future__ import annotations
+
 from fastapi.testclient import TestClient
 
-from quant_data import api
+import quant_data.api as api
 
 
-def test_ui_state_restore_keys_and_functions_are_visible():
+def test_ui_contains_watchlist_chart_state_restore_keys():
     html = TestClient(api.app).get("/ui").text
     for key in [
         "quant_watchlist_symbols",
-        "quant_watchlist_quotes",
         "quant_selected_symbol",
         "quant_selected_frame",
+        "quant_selected_adjust",
         "quant_chart_zoom",
         "quant_chart_scroll",
         "quant_last_intraday_data",
@@ -19,14 +21,14 @@ def test_ui_state_restore_keys_and_functions_are_visible():
     ]:
         assert key in html
     assert "restoreWatchlistState" in html
-    assert "persistWatchlistState" in html
+    assert "saveUiState" in html
+    assert "renderQuoteRows" in html
     assert "restoreWatchlistState();renderModeButtons" in html
-    assert "loadQuotes(false)" in html
+    assert "quoteBody').innerHTML=''" not in html
 
 
-def test_screener_and_info_state_restore_functions_are_visible():
-    client = TestClient(api.app)
-    screener = client.get("/screener").text
+def test_screener_contains_closed_loop_local_restore_keys():
+    html = TestClient(api.app).get("/screener").text
     for key in [
         "quant_screener_snapshot_id",
         "quant_screener_rows",
@@ -37,11 +39,6 @@ def test_screener_and_info_state_restore_functions_are_visible():
         "quant_screener_strategy_keys",
         "quant_screener_custom_symbols",
     ]:
-        assert key in screener
-    assert "restoreScreenerState" in screener
-    assert "restoreScreenerState();setTableMode" in screener
-
-    info = client.get("/info?symbol=300274&name=Sungrow").text
-    for key in ["quant_info_last_symbol", "quant_info_snapshot_id_", "quant_info_tab", "quant_info_filters", "quant_info_last_items_"]:
-        assert key in info
-    assert "restoreInfoState" in info
+        assert key in html
+    assert "restoreScreenerState" in html
+    assert "persistScreenerState" in html

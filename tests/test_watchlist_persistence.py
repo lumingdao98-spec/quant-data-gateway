@@ -1,29 +1,28 @@
+from __future__ import annotations
+
 from fastapi.testclient import TestClient
 
-from quant_data import api
+import quant_data.api as api
 from quant_data.services.watchlist_service import WatchlistService
 
 
-def test_watchlist_service_persists_to_json(tmp_path):
-    path = tmp_path / "watchlist.json"
-    svc = WatchlistService(path)
-    svc.set(["300750", "600519"])
-    assert "300750" in WatchlistService(path).list()["symbols"]
-    assert path.exists()
-
-
-def test_watchlist_api_uses_backend_persistence(monkeypatch, tmp_path):
+def test_watchlist_is_persisted_on_backend(monkeypatch, tmp_path):
     svc = WatchlistService(tmp_path / "watchlist.json")
     monkeypatch.setattr(api, "watchlist_service", svc)
     client = TestClient(api.app)
+
     saved = client.post("/api/watchlist/set?symbols=300750,600519").json()
-    assert saved["ok"] is True
     loaded = client.get("/api/watchlist").json()
+
+    assert saved["ok"] is True
     assert loaded["data"]["symbols"] == ["300750", "600519"]
+    assert (tmp_path / "watchlist.json").exists()
 
 
-def test_ui_has_new_tab_detail_and_server_watchlist_sync():
+def test_ui_syncs_local_and_backend_watchlist_without_blank_reload():
     html = TestClient(api.app).get("/ui").text
-    assert "openStandaloneChart" in html
     assert "/api/watchlist" in html
-    assert "quant_watchlist_symbols" in html
+    assert "/api/watchlist/set" in html
+    assert "restoreWatchlistState" in html
+    assert "后台刷新" in html
+    assert "window.open('/chart/'" in html

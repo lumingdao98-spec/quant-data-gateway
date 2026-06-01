@@ -20,6 +20,9 @@ def test_screener_html_contains_local_state_restore_keys():
     ]:
         assert key in html
     assert "restoreLocalInputs()" in html
+    assert "restoreSavedQueryParams" in html
+    assert "showNoCacheState" in html
+    assert "未找到本地或后端筛选缓存" in html
     assert "/api/screener/snapshot/" in html
     assert "/api/cache/screener/latest" in html
     assert "watchlist/set" in html

@@ -199,17 +199,31 @@ class NewsAnalysisService:
             self._record_source("light mode历史库复用", stored_valid, "历史高质量证据已足够，筛选页停止补源")
         else:
             items = self._search_all(query=query, symbol=symbol, name=name, limit=limit, mode=mode)
-        self._log_progress(f"多源抓取完成：新抓取 {len(items)} 条，开始正文/公告补充")
-        items = self._enrich_announcement_content(items, max_items=8 if mode == "light" else 12 if mode == "normal" else 16)
-        # V16.2：新浪/同花顺等股票专页在抓取入口已做候选链接准入+详情页正文准入；
-        # 这里继续作为兜底补强，不再依赖“先抓一堆再清洗”的后置策略。
-        items = self._enrich_link_content(items, symbol=symbol, name=name, max_items=4 if mode == "light" else 12 if mode == "normal" else 20)
-        merged_items = self._filter_valid_items(stored_items + items, symbol=symbol, name=name)
-        before_dedup = len(stored_items) + len(items)
-        dropped_invalid = before_dedup - len(merged_items)
-        if dropped_invalid > 0:
-            self._log_progress(f"信息清洗完成：丢弃页头/页脚/JS/无关脏数据 {dropped_invalid} 条")
-        deduped = self._deduplicate(merged_items)
+        try:
+            self._log_progress(f"多源抓取完成：新抓取 {len(items)} 条，开始正文/公告补充")
+            try:
+                items = self._enrich_announcement_content(items, max_items=8 if mode == "light" else 12 if mode == "normal" else 16)
+            except Exception as exc:
+                self._record_source("公告正文补充", 0, "降级为标题级证据", skipped_reason=str(exc)[:160])
+            # V16.2：新浪/同花顺等股票专页在抓取入口已做候选链接准入+详情页正文准入；
+            # 这里继续作为兜底补强，不再依赖“先抓一堆再清洗”的后置策略。
+            try:
+                items = self._enrich_link_content(items, symbol=symbol, name=name, max_items=4 if mode == "light" else 12 if mode == "normal" else 20)
+            except Exception as exc:
+                self._record_source("新闻正文补充", 0, "降级为标题级证据", skipped_reason=str(exc)[:160])
+            merged_items = self._filter_valid_items(stored_items + items, symbol=symbol, name=name)
+            before_dedup = len(stored_items) + len(items)
+            dropped_invalid = before_dedup - len(merged_items)
+            if dropped_invalid > 0:
+                self._log_progress(f"信息清洗完成：丢弃页头/页脚/JS/无关脏数据 {dropped_invalid} 条")
+            deduped = self._deduplicate(merged_items)
+        except Exception as exc:
+            self._record_source("信息后处理", 0, "降级为标题级证据", skipped_reason=str(exc)[:160])
+            try:
+                merged_items = self._filter_valid_items(stored_items + items, symbol=symbol, name=name)
+            except Exception:
+                merged_items = [x for x in stored_items + items if isinstance(x, NewsItem)]
+            deduped = self._deduplicate(merged_items)
         self._log_progress(f"事件簇去重完成：{len(merged_items)} 条 -> {len(deduped)} 个事件/信息组")
         saved_items = self.store.upsert_items(symbol, name, deduped)
         aggregate = self._aggregate(symbol, name, deduped)
@@ -1758,7 +1772,15 @@ class NewsAnalysisService:
 
     def _item_priority(self, x: NewsItem) -> tuple:
         dt = self._parse_item_date(x.published_at_norm or x.published_at or x.date_display)
-        ts = dt.timestamp() if dt else 0
+        ts = 0.0
+        if dt:
+            try:
+                ts = dt.timestamp()
+            except (OSError, OverflowError, ValueError):
+                # Windows raises OSError for pre-1970 datetimes. Keep old or
+                # placeholder announcement dates sortable without failing the
+                # whole information refresh.
+                ts = float(dt.toordinal())
         official = 1 if x.source_type == "announcement" or x.credibility_score >= 85 else 0
         return (official, x.relevance_score, x.credibility_score, x.impact_score, x.recency_weight, ts)
 

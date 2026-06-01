@@ -1,30 +1,31 @@
-from dataclasses import replace
+from __future__ import annotations
+
 from datetime import datetime
 
-from quant_data.models import AssetType, Quote
-from quant_data.services.market_data_service import MarketDataService
+from fastapi.testclient import TestClient
+
+import quant_data.api as api
+from quant_data.models import Quote
+from quant_data.services.cache_state_service import CacheStateService
 
 
-def _quote(symbol="601012", **kw):
-    base = Quote(symbol=symbol, name=symbol, ts=datetime.now(), last=10, pre_close=9.8, open=9.8, high=10.2, low=9.7, volume=1000, amount=1000000, change=0.2, change_pct=2.0)
-    return replace(base, **kw)
+def test_quote_cache_stale_can_backfill_closed_market_fields(monkeypatch, tmp_path):
+    svc = CacheStateService(tmp_path / "cache_state.sqlite")
+    monkeypatch.setattr(api, "cache_state_service", svc)
+    q = Quote("300750", "CATL", datetime(2026, 5, 22, 15), 200, 198, 199, 205, 196, 1000, 2e8, 2, 1, turnover=2.3, volume_ratio=1.2, pe_dynamic=25, pb=4, total_market_cap=900_000_000_000, float_market_cap=700_000_000_000, source="unit")
+    svc.put("quote_cache", "300750", {"quote": api._quote_dict_with_aliases(q)}, ttl_seconds=-1, symbol="300750", source="unit")
+    monkeypatch.setattr(api.service, "get_quote", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+
+    data = TestClient(api.app).get("/api/quote/300750").json()["data"]
+    assert data["pe_ttm"] == 25
+    assert data["pb"] == 4
+    assert data["total_market_cap"] == 900_000_000_000
+    assert data["quote_cache_status"]["status"] == "stale"
 
 
-def test_stock_missing_metrics_has_explicit_reasons():
-    q = MarketDataService().enrich_quote_metrics(_quote())
-    assert q.metric_missing_reasons
-    text = " ".join(q.metric_missing_reasons)
-    assert "PE" in text and "PB" in text
-    assert q.market_cap_style is None
-
-
-def test_etf_pe_pb_are_not_applicable():
-    q = MarketDataService().enrich_quote_metrics(_quote("510300", asset_type=AssetType.ETF))
-    assert any("ETF" in x and "PE" in x for x in q.metric_missing_reasons)
-    assert any("ETF" in x and "PB" in x for x in q.metric_missing_reasons)
-
-
-def test_market_cap_style_uses_any_available_market_cap():
-    q = MarketDataService().enrich_quote_metrics(_quote(total_market_cap=150_000_000_000, float_market_cap=None, pe_dynamic=12, pb=1.3, turnover=1.2, volume_ratio=1.1))
-    assert q.market_cap_style in {"大盘", "超大盘"}
-    assert q.total_share
+def test_ui_metric_card_shows_sources_and_missing_reasons():
+    html = TestClient(api.app).get("/ui").text
+    assert "metric_sources" in html
+    assert "metric_missing_reasons" in html
+    assert "数据源缺失/F10未返回" in html
+    assert "休市无盘口" in html

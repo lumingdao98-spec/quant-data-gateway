@@ -129,6 +129,55 @@ class MarketDataService:
                 q = replace(q, **merged)
             except Exception:
                 pass
+        # ProviderManager returns the first source that has a quote. During closed
+        # sessions Sina can return a usable price snapshot without valuation fields,
+        # so explicitly ask EastMoney once when PE/PB/cap are still missing.
+        valuation_missing = any(
+            getattr(q, field, None) in (None, 0, "")
+            for field in ["pe_dynamic", "pb", "total_market_cap", "float_market_cap"]
+        )
+        if valuation_missing and str(q.source or "") != "unit":
+            for provider in getattr(self.providers, "providers", []):
+                if getattr(provider, "name", "") != "eastmoney":
+                    continue
+                direct_supplement = getattr(provider, "_supplement_quote_metrics", None)
+                if callable(direct_supplement):
+                    try:
+                        q2 = direct_supplement(q)
+                        if q2 is not q and not any(getattr(q2, field, None) in (None, 0, "") for field in ["pe_dynamic", "pb", "total_market_cap", "float_market_cap"]):
+                            q = q2
+                            break
+                        q = q2
+                    except Exception:
+                        pass
+                try:
+                    extras = provider.get_quotes([q.symbol])
+                    fresh = extras[0] if extras else None
+                except Exception:
+                    fresh = None
+                if not fresh:
+                    continue
+                merged = {}
+                for field in [
+                    "pe_dynamic", "pb", "total_market_cap", "float_market_cap",
+                    "circulating_market_cap", "total_share", "float_share",
+                    "turnover", "volume_ratio", "amount",
+                ]:
+                    current = getattr(q, field, None)
+                    value = getattr(fresh, field, None)
+                    if current in (None, 0, "") and value not in (None, 0, ""):
+                        merged[field] = value
+                if merged:
+                    metric_sources = dict(q.metric_sources or {})
+                    for field in merged:
+                        metric_sources.setdefault(
+                            "pe_ttm" if field == "pe_dynamic" else field,
+                            "eastmoney_quote_fallback",
+                        )
+                    merged["metric_sources"] = metric_sources
+                    merged["source"] = f"{q.source}+eastmoney_quote" if q.source else "eastmoney_quote"
+                    q = replace(q, **merged)
+                break
 
         bars = bars or []
         if q.amount in (None, 0) and bars:
@@ -187,7 +236,8 @@ class MarketDataService:
             return "\u8d85\u5927\u76d8"
 
 
-        market_cap_style = q.market_cap_style or cap_style(float_cap or total_cap)
+        raw_style = str(q.market_cap_style or "").strip()
+        market_cap_style = (q.market_cap_style if raw_style and raw_style not in {"未知", "鏈煡", "--", "-"} else None) or cap_style(float_cap or total_cap)
         is_etf = q.asset_type == AssetType.ETF or str(q.symbol).startswith(("15", "51", "56", "58"))
         if is_etf:
             if q.pe_dynamic is None:
@@ -417,6 +467,12 @@ class MarketDataService:
 
         if len(fresh) >= 2:
             fresh = self._normalize_intraday_flow(fresh)
+            if self._intraday_looks_incomplete(fresh):
+                rebuilt = self._normalize_intraday_flow(self._intraday_from_minute_bars(symbol))
+                if self._intraday_is_better(rebuilt, fresh):
+                    fresh = rebuilt
+                elif self._intraday_is_better(cached, fresh):
+                    return cached
             if len(cached) >= 30 and len(fresh) < max(10, int(len(cached) * 0.35)):
                 return cached
             self.cache.save_intraday(fresh)
@@ -430,6 +486,41 @@ class MarketDataService:
             self.cache.save_intraday(rebuilt)
             return rebuilt
         return []
+
+    @staticmethod
+    def _intraday_minutes(points: list[IntradayPoint]) -> int:
+        if not points:
+            return -1
+        try:
+            last = max(p.ts for p in points)
+            return last.hour * 60 + last.minute
+        except Exception:
+            return -1
+
+    def _intraday_looks_incomplete(self, points: list[IntradayPoint]) -> bool:
+        if len(points) < 2:
+            return True
+        last_minute = self._intraday_minutes(points)
+        # A normal CN full-day minute series should reach the late afternoon.
+        # If a closed-session refresh only returns morning data, do not overwrite
+        # a better cache with that half-day snapshot.
+        return len(points) < 180 or (0 <= last_minute < 14 * 60 + 45)
+
+    def _intraday_is_better(self, candidate: list[IntradayPoint], current: list[IntradayPoint]) -> bool:
+        if len(candidate) < 2:
+            return False
+        if len(current) < 2:
+            return True
+        try:
+            cand_date = max(p.ts for p in candidate).date()
+            cur_date = max(p.ts for p in current).date()
+            if cand_date != cur_date:
+                return cand_date > cur_date
+        except Exception:
+            pass
+        cand_last = self._intraday_minutes(candidate)
+        cur_last = self._intraday_minutes(current)
+        return cand_last > cur_last or len(candidate) >= max(len(current) + 30, int(len(current) * 1.25))
 
 
     def get_order_book(self, symbol: str, allow_external: bool = True) -> OrderBook | None:

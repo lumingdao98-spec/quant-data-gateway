@@ -1,6 +1,6 @@
-# Quant Data Gateway V3.18.2 / Navigation State & Background Cache Fix
+# Quant Data Gateway V3.18.3 / Stable Recovery
 
-面向 A 股和 ETF 的研究辅助系统。V3.18.2 把 WordSource、筛选快照、信息快照、K 线缓存、技术因子、全球行业映射、市场行为标注和前端恢复状态接成闭环：页面打开不再默认空白，返回筛选页不丢结果，详情页优先复用缓存。
+面向 A 股和 ETF 的研究辅助系统。V3.18.3 把 WordSource、筛选快照、信息快照、K 线缓存、技术因子、全球行业映射、市场行为标注和前端恢复状态接成闭环：页面打开不再默认空白，返回筛选页不丢结果，详情页优先复用缓存。
 
 ## 启动方式
 
@@ -8,16 +8,6 @@
 pip install -r requirements.txt
 python -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 ```
-
-## V3.18.2 导航状态与后台缓存
-
-- `/ui` 会先从 `localStorage` 恢复 `quant_watchlist_symbols`、`quant_watchlist_quotes`、`quant_selected_symbol`、`quant_selected_frame`、`quant_last_intraday_data`、`quant_last_kline_data`，再后台刷新 `/api/quotes` 和 `/api/background/refresh/watchlist`，页面切回来不先清空自选池和图表。
-- `/screener` 会保存并恢复 `quant_screener_snapshot_id`、`quant_screener_rows`、`quant_screener_params`、`quant_screener_selected_symbol`、`quant_screener_view_mode`、`quant_screener_strategy_keys`、`quant_screener_custom_symbols`。后端 `/api/screener/snapshot/{id}` 和 `/api/cache/screener/latest` 返回完整 results；过期快照仍显示旧结果并提示刷新。
-- `/info` 会保存 `quant_info_snapshot_id_{symbol}`、`quant_info_tab`、`quant_info_filters` 和 `quant_info_last_items_{symbol}`。打开页面时先展示本地/后端快照，再执行普通缓存读取；只有普通刷新、强制刷新、深度刷新按钮才重抓。
-- 策略库 `/api/strategy/library` 固定返回 `{ok,data,default_keys,errors}`。前端 3 秒超时后使用内置 fallback 策略，仍允许点击“开始筛选”。
-- K 线详情页等待容器尺寸稳定后再绘图，成功返回后写入 `kline_cache`，同时写入前端 `quant_last_kline_data`；数据不足时显示空状态，不画半截图。
-- 休市字段分层展示：盘口字段显示 closed market / midday no orderbook；换手率、量比、成交额优先用最近快照；PE/PB/市值优先行情、缓存、F10/画像兜底，ETF 显示不适用，缺失时显示 `metric_missing_reasons` 和 `metric_sources`。
-- 新增后台缓存接口：`/api/background/status`、`/api/background/refresh/watchlist`、`/api/background/refresh/screener`、`/api/background/refresh/kline/{symbol}`、`/api/background/refresh/info/{symbol}`。
 
 常用页面：
 
@@ -181,6 +171,30 @@ docs/WORD_SOURCE_TRACE.md
 
 映射状态支持“已落地 / 部分落地 / 未落地”，不会把所有条目无条件标成已落地。
 
+## V3.19 Backtest / Paper Trading
+
+V3.19 adds a typed backtest foundation in `quant_data/backtest/` while keeping the existing `/backtest` visual replay page compatible.
+
+- `models.py`: BacktestConfig, StrategySignal, Order, Fill, Position, PortfolioState, Trade, BacktestResult.
+- `data_loader.py`: adjust mode, warmup, data quality checks and no-lookahead notes.
+- `signal_adapter.py`: screener snapshot signals, factor-rule signals and event-risk filtering.
+- `execution.py`: A-share T+1, 100-share lots, no shorting, suspended/limit checks, fees, stamp tax, transfer fee, slippage and volume caps.
+- `portfolio.py`: sizing, cash reserve, max positions, stops and daily portfolio states.
+- `risk.py`: return, annualized return, max drawdown, Sharpe, Sortino, Calmar, win rate, turnover, costs and excess return.
+- `optimizer.py` / `walk_forward.py`: parameter search and rolling out-of-sample validation.
+- `storage.py` / `report.py`: result persistence, export and report generation.
+- `paper_broker.py`: paper-only virtual broker; no real broker API is connected.
+
+V3.19 response shape:
+
+```json
+{"ok": true, "run_id": "...", "data": {}, "metrics": {}, "errors": [], "warnings": [], "cache_status": "..."}
+```
+
+Core endpoints: `POST /api/backtest/run`, `GET /api/backtest/result/{run_id}`, `GET /api/backtest/runs`, `POST /api/backtest/compare`, `POST /api/backtest/optimize`, `POST /api/backtest/walk-forward`, `GET /api/paper/state`, `POST /api/paper/signal`, `POST /api/paper/fill`.
+
+All outputs are research-only: `研究辅助，不构成投资建议`.
+
 ## 测试
 
 ```bash
@@ -203,5 +217,4 @@ pytest -q
 
 ## 外部接口限制
 
-本系统依赖公开行情、公告、F10、新闻和社区页面。公开接口可能限流、改版、休市返回空、字段缺失或响应慢。V3.18.2 的处理原则是：优先复用缓存、展示缺失原因、保留 stale 结果、避免伪造 K 线和 Level-2 结论。当前 V3.x 不接真实券商实盘接口；交易接口只保留给 V4/V5/V6/V7 的结构演进。
-
+本系统依赖公开行情、公告、F10、新闻和社区页面。公开接口可能限流、改版、休市返回空、字段缺失或响应慢。V3.18.3 的处理原则是：优先复用缓存、展示缺失原因、保留 stale 结果、避免伪造 K 线和 Level-2 结论。当前 V3.x 不接真实券商实盘接口；交易接口只保留给 V4/V5/V6/V7 的结构演进。

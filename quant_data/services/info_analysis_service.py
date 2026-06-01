@@ -39,7 +39,7 @@ class InfoAnalysisService:
         news = self.news_service.analyze(symbol, name=qname, limit=limit, force=force or deep_refresh, mode=mode, budget_seconds=8.0 if mode == "deep" else 5.0 if mode == "normal" else 4.0)
         # 公司画像只在 force=true 或本地缓存过期时主动刷新；全球/国内要闻按短缓存自动刷新。
         profile = self.company_profile_service.get_profile(symbol, force=force)
-        global_news = self._safe_global_news(force=False) if mode in {"normal", "deep"} else {"items": [], "cache_info": {"skipped": "light_mode"}}
+        global_news = self._safe_global_news(force=bool(force or deep_refresh)) if mode in {"normal", "deep"} else {"items": [], "cache_info": {"skipped": "light_mode"}}
         global_mapping = self.global_mapper.map_items((global_news or {}).get("items", []), symbol, name=qname, profile=profile)
         finance = self._finance_snapshot(symbol, quote)
         policy = self._policy_summary(news, qname, symbol, global_news=global_news, profile=profile)
