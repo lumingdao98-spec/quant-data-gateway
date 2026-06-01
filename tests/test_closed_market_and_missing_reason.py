@@ -36,6 +36,17 @@ def test_orderbook_closed_market_explains_no_level1_book(monkeypatch):
     assert data["note"] == "\u4f11\u5e02\u65e0\u76d8\u53e3"
 
 
+def test_orderbook_open_market_explains_missing_public_level2_book(monkeypatch):
+    monkeypatch.setattr(api, "calendar_status", lambda symbol=None, market=None: {"data": {"status": "morning", "label": "\u4ea4\u6613\u4e2d", "can_refresh": True}})
+    monkeypatch.setattr(api.service, "get_order_book", lambda symbol, allow_external=True: None)
+
+    data = TestClient(api.app).get("/api/orderbook/300274").json()
+
+    assert data["skipped_external"] is False
+    assert "Level-2" in data["note"]
+    assert "\u516c\u5f00\u884c\u60c5\u6e90" in data["note"]
+
+
 def test_missing_quote_metrics_have_explicit_reasons(monkeypatch):
     monkeypatch.setattr(api.service.providers, "get_quote", lambda symbol: (_ for _ in ()).throw(RuntimeError("down")))
     enriched = api.service.enrich_quote_metrics(_quote())

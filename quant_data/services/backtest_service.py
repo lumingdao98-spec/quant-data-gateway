@@ -220,6 +220,7 @@ class BacktestService:
         markers: list[dict] = []
         equity_curve: list[dict] = []
         peak_equity = cash
+        forced_flat_at_end = False
 
         for idx, bar in enumerate(clean):
             open_price = _num(bar.open, _num(bar.close))
@@ -322,6 +323,7 @@ class BacktestService:
                 pending = signal
 
         if shares > 0:
+            forced_flat_at_end = True
             last_bar = clean[-1]
             sell_price = _num(last_bar.close) * (1 - cfg.slippage_rate)
             trade = self._close_trade(
@@ -369,6 +371,36 @@ class BacktestService:
         anomaly_markers = self._anomaly_markers(clean, score_series)
         total_return_pct = _pct(total_return)
         buy_hold_return_pct = _pct(buy_hold_return)
+        turnover_value = sum(_num(t.get("entry_price")) * _num(t.get("shares")) + _num(t.get("exit_price")) * _num(t.get("shares")) for t in trades)
+        total_entry_fee = sum(_num(t.get("entry_fee")) for t in trades)
+        total_exit_fee = sum(_num(t.get("exit_fee")) for t in trades)
+        slippage_cost_est = turnover_value * cfg.slippage_rate
+        total_cost = total_entry_fee + total_exit_fee + slippage_cost_est
+        final_position = equity_curve[-1] if equity_curve else {}
+        period = {
+            "start": clean[0].ts.date().isoformat(),
+            "end": clean[-1].ts.date().isoformat(),
+            "bars": len(clean),
+            "calendar_days": day_span,
+        }
+        cost_summary = {
+            "turnover": round(turnover_value, 2),
+            "entry_fee": round(total_entry_fee, 2),
+            "exit_fee": round(total_exit_fee, 2),
+            "commission": round(total_entry_fee + total_exit_fee, 2),
+            "slippage_cost_est": round(slippage_cost_est, 2),
+            "total_cost": round(total_cost, 2),
+            "fee_rate": cfg.fee_rate,
+            "slippage_rate": cfg.slippage_rate,
+        }
+        position_summary = {
+            "shares": int(_num(final_position.get("shares"), 0)),
+            "cash": round(_num(final_position.get("cash"), final_equity), 2),
+            "position_value": round(_num(final_position.get("position_value"), 0.0), 2),
+            "last_close": round(last_close, 4),
+            "forced_flat_at_end": forced_flat_at_end,
+            "note": "期末仍持仓时已按最后收盘价模拟平仓，便于统计闭合交易收益。" if forced_flat_at_end else "期末无持仓或已由策略信号卖出。",
+        }
 
         return {
             "symbol": symbol,
@@ -393,6 +425,9 @@ class BacktestService:
             "score_series": score_series,
             "score_formula": SCORE_FORMULA,
             "params": asdict(cfg),
+            "period": period,
+            "cost_summary": cost_summary,
+            "position_summary": position_summary,
             "data_quality": {
                 "bars": len(clean),
                 "kline_bars": len(clean),

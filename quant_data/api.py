@@ -1001,6 +1001,9 @@ def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
         q = None
     points = _timeline_with_fallback(symbol, q, force=force)
     market = q.market if q else _detect_market(symbol)
+    expected_date = _timeline_expected_date(q)
+    latest_date = _timeline_latest_date(points)
+    stale_rejected = bool(expected_date is not None and latest_date is None and force)
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -1010,6 +1013,13 @@ def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
         "quote": q.to_dict() if q else None,
         "quote_extra": _quote_extra(q) if q else {},
         "count": len(points),
+        "data_quality": {
+            "expected_date": expected_date.isoformat() if expected_date else None,
+            "latest_date": latest_date.isoformat() if latest_date else None,
+            "fresh_for_session": bool(expected_date is None or latest_date == expected_date),
+            "stale_cache_rejected": stale_rejected,
+            "note": "实时分时源暂无当日有效点，未使用跨日缓存" if stale_rejected else "",
+        },
         "data": [p.to_dict() for p in points],
     }
 
@@ -1860,6 +1870,10 @@ def orderbook(symbol: str, force: bool = False) -> dict:
             note = "休市无盘口"
         else:
             note = "非交易时段不适用"
+    elif not book:
+        note = "公开行情源未返回五档盘口；普通免费源通常没有稳定 Level-2 深度，交易时段会继续尝试。"
+    elif not ((book.asks or []) and (book.bids or [])):
+        note = "盘口字段不完整；仅展示公开源实际返回的档位。"
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),

@@ -102,6 +102,11 @@ def test_ui_starts_active_session_with_force_refresh_and_compact_subcharts():
     assert "max-height:52px" in html
     assert "MACD指标" in html
     assert "均线5/10/20" in html
+    assert "subCanvas3" in html
+    assert "副图3：KDJ" in html
+    assert "timelineCacheUsable" in html
+    assert "公开行情源未返回五档盘口" in html
+    assert "position:fixed" in html
 
 
 def _quote_with_ts(symbol: str, ts: datetime) -> Quote:
@@ -165,6 +170,24 @@ def test_timeline_rejects_stale_intraday_cache_if_refresh_still_old(monkeypatch)
     monkeypatch.setattr(api.service, "get_intraday", lambda symbol, force_refresh=False: stale)
 
     assert api._timeline_with_fallback("600438", q, force=False) == []
+
+
+def test_timeline_endpoint_reports_rejected_cross_day_cache(monkeypatch):
+    q = _quote_with_ts("600438", datetime(2026, 5, 28, 10, 30))
+    stale = [
+        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 15.0, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 15.2, source="unit_stale"),
+    ]
+    monkeypatch.setattr(api, "_market_session", lambda market="CN": {"status": "morning", "date": "2026-05-28", "can_refresh": True})
+    monkeypatch.setattr(api, "_enrich_quote_real", lambda *args, **kwargs: (q, q.to_dict(), {"status": "unit"}))
+    monkeypatch.setattr(api.service, "get_intraday", lambda symbol, force_refresh=False: stale)
+
+    data = TestClient(api.app).get("/api/timeline/600438?force=true").json()
+
+    assert data["count"] == 0
+    assert data["data_quality"]["expected_date"] == "2026-05-28"
+    assert data["data_quality"]["stale_cache_rejected"] is True
+    assert "未使用跨日缓存" in data["data_quality"]["note"]
 
 
 def test_screener_explain_row_keeps_snapshot_info_metrics():

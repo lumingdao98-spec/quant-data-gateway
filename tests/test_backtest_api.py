@@ -66,6 +66,13 @@ def test_backtest_api_run_uses_local_bars(monkeypatch):
     assert "kline" in result
     assert "markers" in result
     assert "anomaly_markers" in result
+    assert result["period"]["start"] == "2025-01-01"
+    assert result["period"]["bars"] == 120
+    assert "total_cost" in result["cost_summary"]
+    assert "commission" in result["cost_summary"]
+    assert "slippage_cost_est" in result["cost_summary"]
+    assert "shares" in result["position_summary"]
+    assert "cash" in result["position_summary"]
 
 
 def test_backtest_page_is_visible():
@@ -88,6 +95,9 @@ def test_backtest_page_is_visible():
     assert "openTradeDrawer" in html
     assert "openTradePage" in html
     assert "/backtest/trades" in html
+    assert "回测区间" in html
+    assert "交易成本" in html
+    assert "期末持仓" in html
 
 
 def test_backtest_trade_detail_page_is_visible():
