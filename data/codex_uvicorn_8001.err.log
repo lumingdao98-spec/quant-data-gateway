@@ -1,0 +1,77 @@
+INFO:     Started server process [92332]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_intraday failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] eastmoney.get_kline failed: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+[ProviderManager] tencent_kline.get_kline failed: 腾讯K线兜底仅支持日/周/月K线，不支持: 1m
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58&ut=7eea3edca...
+[ProviderManager] akshare.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Read timed out. (read timeout=15)
+[ProviderManager] eastmoney.get_kline failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?secid=0.300750&klt=1&fqt=1&end=20500101&lmt=360&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59...
+[ProviderManager] sina.get_kline failed: HTTPSConnectionPool(host='money.finance.sina.com.cn', port=443): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz300750&scale=1&ma=no&datalen=360 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_...
+[ProviderManager] eastmoney.get_intraday failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?secid=0.300750&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf...
+[ProviderManager] sina.get_intraday failed: HTTPSConnectionPool(host='money.finance.sina.com.cn', port=443): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz300750&scale=1&ma=no&datalen=360 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_...
+[ProviderManager] tencent_kline.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] all.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] eastmoney.get_intraday failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?secid=0.300750&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf...
+[ProviderManager] sina.get_intraday failed: HTTPSConnectionPool(host='money.finance.sina.com.cn', port=443): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz300750&scale=1&ma=no&datalen=360 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_...
+[ProviderManager] tencent_kline.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] all.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] eastmoney.get_intraday failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?secid=0.300750&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf...
+[ProviderManager] sina.get_intraday failed: HTTPSConnectionPool(host='money.finance.sina.com.cn', port=443): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz300750&scale=1&ma=no&datalen=360 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_...
+[ProviderManager] tencent_kline.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] eastmoney.get_intraday failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?secid=0.300750&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf...
+[ProviderManager] sina.get_intraday failed: HTTPSConnectionPool(host='money.finance.sina.com.cn', port=443): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz300750&scale=1&ma=no&datalen=360 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_...
+[ProviderManager] tencent_kline.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] all.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] eastmoney.get_intraday failed: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/trends2/get?secid=0.300750&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6%2Cf7%2Cf8%2Cf9%2Cf10%2Cf11%2Cf12%2Cf13&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf...
+[ProviderManager] sina.get_intraday failed: HTTPSConnectionPool(host='money.finance.sina.com.cn', port=443): Max retries exceeded with url: /quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz300750&scale=1&ma=no&datalen=360 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_...
+[ProviderManager] tencent_kline.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+[ProviderManager] all.get_intraday failed: HTTPSConnectionPool(host='ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/minute/query?code=sz300750 (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1006)')))
+  0%|          | 0/58 [00:00<?, ?it/s]                                      
