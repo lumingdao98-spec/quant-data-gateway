@@ -18,7 +18,7 @@ def build_backtest_ui() -> str:
 </head>
 <body>
 <div class="app">
-  <div class="top"><span class="dot"></span><div class="brand">交易回测系统</div><span class="pill">日线 · 下一开盘成交 · 手续费/滑点</span><div class="grow"></div><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></div>
+  <div class="top"><span class="dot"></span><div class="brand">交易回测系统</div><span class="pill">legacy 快速验证 · 科学组合回测走 V3.20 API</span><div class="grow"></div><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></div>
   <aside class="side">
     <div class="section">标的代码</div>
     <input id="symbol" value="300750" />
@@ -38,7 +38,7 @@ def build_backtest_ui() -> str:
     </div>
     <div class="row" style="margin-top:12px"><button id="runBtn" class="btn-green" onclick="runBacktest()">运行回测</button><button class="btn2" onclick="fillSelected()">使用筛选选中</button></div>
     <div class="row" style="margin-top:8px"><button class="btn2" onclick="compareStrategies()">比较策略收益</button><button class="btn2" onclick="applyScorePreset()">宽松评分</button></div>
-    <div class="hint">评分驱动策略会回放每日研究分：趋势、动量、量能、位置结构和风险扣分。收盘确认信号，下一交易日开盘成交；K线图会标出买入、卖出和异常点。</div>
+    <div class="hint">此页面保留为 legacy 快速单票验证，不作为科学组合回测。评分驱动策略会回放每日研究分：趋势、动量、量能、位置结构和风险扣分；K线图会标出买入、卖出和异常点。</div>
   </aside>
   <main class="main">
     <div class="cards">
@@ -96,7 +96,7 @@ let lastBacktest=null;
 function log(s){$('log').textContent=new Date().toLocaleTimeString()+'  '+s+'\n'+$('log').textContent}
 function cls(n){return Number(n)>=0?'up':'down'}
 function fillSelected(){try{const s=localStorage.getItem('qdg_screener_selected');if(s){$('symbol').value=s;log('已读取筛选页选中标的 '+s)}else{log('未找到筛选页选中标的')}}catch(e){log('读取失败 '+e)}}
-function params(){const p=new URLSearchParams();p.set('symbol',$('symbol').value.trim()||'300750');p.set('strategy',$('strategy').value);p.set('initial_cash',$('cash').value||'100000');p.set('position_pct',Number($('position').value||100)/100);p.set('fee_rate',Number($('fee').value||0)/100);p.set('slippage_rate',Number($('slip').value||0)/100);p.set('stop_loss_pct',$('stop').value||'8');p.set('take_profit_pct',$('take').value||'0');p.set('buy_score',$('buyScore').value||'62');p.set('sell_score',$('sellScore').value||'48');p.set('limit',$('limit').value||'520');p.set('adjust',$('adjust').value||'qfq');return p}
+function params(){const p=new URLSearchParams();p.set('legacy','true');p.set('symbol',$('symbol').value.trim()||'300750');p.set('strategy',$('strategy').value);p.set('initial_cash',$('cash').value||'100000');p.set('position_pct',Number($('position').value||100)/100);p.set('fee_rate',Number($('fee').value||0)/100);p.set('slippage_rate',Number($('slip').value||0)/100);p.set('stop_loss_pct',$('stop').value||'8');p.set('take_profit_pct',$('take').value||'0');p.set('buy_score',$('buyScore').value||'62');p.set('sell_score',$('sellScore').value||'48');p.set('limit',$('limit').value||'520');p.set('adjust',$('adjust').value||'qfq');return p}
 async function runBacktest(){const btn=$('runBtn');btn.disabled=true;btn.textContent='运行中...';try{log('开始回测');const resp=await fetch('/api/backtest/run?'+params().toString(),{cache:'no-store'});const js=await resp.json();if(!resp.ok||!js.ok)throw new Error(js.message||('HTTP '+resp.status));render(js.data);log('完成：'+js.data.symbol+' '+js.data.strategy_name)}catch(e){log('ERROR '+e);$('assumptions').innerHTML='<div class="warn">回测失败：'+esc(e)+'</div>'}finally{btn.disabled=false;btn.textContent='运行回测'}}
 function render(d){
   lastBacktest=d;
@@ -183,7 +183,7 @@ def build_backtest_trades_ui() -> str:
 <script>
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
 const money=n=>Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2}),pct=n=>(Number(n||0)).toFixed(2)+'%',cls=n=>Number(n)>=0?'up':'down';
-function params(){const p=new URLSearchParams(location.search);if(!p.get('symbol'))p.set('symbol','300750');p.delete('autorun');return p}
+function params(){const p=new URLSearchParams(location.search);if(!p.get('symbol'))p.set('symbol','300750');p.set('legacy','true');p.delete('autorun');return p}
 function tradeEvents(d){if(Array.isArray(d.trade_events)&&d.trade_events.length)return d.trade_events;return (d.trades||[]).flatMap((t,i)=>legacyTradeEvents(t,i))}
 function legacyTradeEvents(t,i){const shares=t.buy_shares??t.shares??0;return [{event_id:`${i+1}-B`,trade_index:i+1,date:t.entry_date,side:'buy',action:'买入',price:t.entry_price,shares,amount:t.entry_value,fee:t.entry_fee,cash_change:-(Number(t.entry_cost??0)),cash_after:Number(t.cash_before_entry||0)-Number(t.entry_cost||0),position_shares:shares,cost_basis:t.cost_basis,realized_pnl:0,realized_pct:0,reason:t.entry_reason,signal_date:t.entry_signal_date,score:t.entry_signal_score},{event_id:`${i+1}-S`,trade_index:i+1,date:t.exit_date,side:'sell',action:'卖出',price:t.exit_price,shares:t.sell_shares??shares,amount:t.exit_value,fee:t.exit_fee,cash_change:t.exit_proceeds,cash_after:t.cash_after_exit,position_shares:0,cost_basis:t.cost_basis,realized_pnl:t.pnl,realized_pct:t.pnl_pct,reason:t.exit_reason,signal_date:t.exit_signal_date,score:t.exit_signal_score}]}
 function row(e,i){const isSell=e.side==='sell';const sideCls=e.side==='buy'?'up':'down';const pnl=isSell?money(e.realized_pnl):'--';const pnlCls=isSell?cls(e.realized_pnl):'muted';const score=e.score==null?'--':e.score;return `<tr><td>${i+1}</td><td>${esc(e.date||'--')}</td><td class="${sideCls}">${esc(e.action||e.side||'--')}</td><td>${esc(e.price??'--')}</td><td>${esc(e.shares??0)}</td><td>${money(e.amount)}</td><td>${money(e.fee)}</td><td class="${cls(e.cash_change)}">${money(e.cash_change)}</td><td>${e.cash_after==null?'--':money(e.cash_after)}</td><td>${esc(e.position_shares??'--')}</td><td>${esc(e.cost_basis??'--')}</td><td class="${pnlCls}">${pnl}${isSell?' / '+pct(e.realized_pct):''}</td><td class="reason">${esc(e.reason||'--')}<br><small class="muted">信号日 ${esc(e.signal_date||'--')} · 评分 ${esc(score)} · 闭合#${esc(e.trade_index||'--')}</small></td></tr>`}

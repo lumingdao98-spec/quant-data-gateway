@@ -55,6 +55,14 @@ class ParameterOptimizer:
 
     @staticmethod
     def _objective_value(metrics: dict[str, Any], objective: str) -> float:
+        if objective == "composite_score":
+            ret = float(metrics.get("annualized_return", metrics.get("total_return", 0.0)) or 0.0)
+            sharpe = float(metrics.get("sharpe", 0.0) or 0.0)
+            calmar = float(metrics.get("calmar", 0.0) or 0.0)
+            expectancy = float(metrics.get("expectancy_pct_of_start", 0.0) or 0.0) / 100
+            dd = abs(float(metrics.get("max_drawdown", 0.0) or 0.0))
+            win = float(metrics.get("win_rate", 0.0) or 0.0)
+            return ret * 0.28 + sharpe * 0.18 + calmar * 0.18 + expectancy * 0.18 + win * 0.10 - dd * 0.22
         if objective in {"max_drawdown", "max_drawdown_pct"}:
             return -abs(float(metrics.get("max_drawdown", metrics.get("max_drawdown_pct", 0.0)) or 0.0))
         return float(metrics.get(objective, metrics.get(f"{objective}_pct", 0.0)) or 0.0)

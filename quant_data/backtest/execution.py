@@ -32,10 +32,13 @@ class ExecutionSimulator:
             return self._blocked(order, execution_date, "T+1：成交日必须晚于信号日")
         if field_value(execution_bar, "suspended", False) or number(field_value(execution_bar, "volume")) <= 0:
             return self._blocked(order, execution_date, "停牌或零成交量，无法成交")
-        if order.side == "buy" and self._is_limit_up(execution_bar):
+        if order.side == "buy" and self._is_limit_up(execution_bar, order.symbol, cfg) and not cfg.allow_limit_up_buy:
             return self._blocked(order, execution_date, "涨停无法买入")
-        if order.side == "sell" and self._is_limit_down(execution_bar):
+        if order.side == "sell" and self._is_limit_down(execution_bar, order.symbol, cfg) and not cfg.allow_limit_down_sell:
             return self._blocked(order, execution_date, "跌停无法卖出")
+        limit_decision = self._limit_touch_decision(order, execution_bar, execution_date, cfg)
+        if limit_decision is not None:
+            return limit_decision
 
         price = self._execution_price(order, execution_bar, cfg)
         if price <= 0:
@@ -44,6 +47,8 @@ class ExecutionSimulator:
         requested = self._round_lot(requested, cfg.lot_size)
         if requested <= 0:
             return self._blocked(order, execution_date, "数量不足一手或现金/持仓不足")
+        if cfg.min_trade_amount and requested * price < cfg.min_trade_amount:
+            return self._blocked(order, execution_date, "低于最小交易金额")
         max_qty = self._volume_cap(execution_bar, cfg)
         quantity = min(requested, max_qty)
         quantity = self._round_lot(quantity, cfg.lot_size)
@@ -54,14 +59,15 @@ class ExecutionSimulator:
             quantity = self._round_lot(min(quantity, available), cfg.lot_size)
             if quantity <= 0:
                 return self._blocked(order, execution_date, "T+1 可卖数量不足")
-        commission, stamp_tax, transfer_fee, slippage_cost = self._costs(order.side, quantity, price, cfg, field_value(execution_bar, "open"))
+        reference_price = self._base_execution_price(order, execution_bar, cfg)
+        commission, stamp_tax, transfer_fee, slippage_cost, cash_cost = self._costs(order.side, quantity, price, cfg, reference_price)
         gross = quantity * price
-        if order.side == "buy" and gross + commission + transfer_fee + slippage_cost > cash + 1e-6:
-            affordable = int((cash - cfg.min_commission) / max(price * (1 + cfg.slippage_bps / 10000), 1e-9))
+        if order.side == "buy" and gross + cash_cost > cash + 1e-6:
+            affordable = int((cash - cfg.min_commission) / max(price, 1e-9))
             quantity = self._round_lot(min(quantity, affordable), cfg.lot_size)
             if quantity <= 0:
                 return self._blocked(order, execution_date, "现金不足")
-            commission, stamp_tax, transfer_fee, slippage_cost = self._costs(order.side, quantity, price, cfg, field_value(execution_bar, "open"))
+            commission, stamp_tax, transfer_fee, slippage_cost, cash_cost = self._costs(order.side, quantity, price, cfg, reference_price)
             gross = quantity * price
         fill = Fill(
             fill_id=f"fill-{order.order_id}",
@@ -77,9 +83,13 @@ class ExecutionSimulator:
             stamp_tax=round(stamp_tax, 6),
             transfer_fee=round(transfer_fee, 6),
             slippage_cost=round(slippage_cost, 6),
+            cash_cost=round(cash_cost, 6),
+            slippage_mode=cfg.slippage_mode,
             reason=order.reason,
             partial=quantity < requested,
         )
+        order.status = "filled" if not fill.partial else "partial"
+        order.status_reason = "成交"
         return ExecutionDecision(fill=fill, status="filled" if not fill.partial else "partial", reason="成交")
 
     def _blocked(self, order: Order, date: str, reason: str) -> ExecutionDecision:
@@ -96,21 +106,71 @@ class ExecutionSimulator:
             reason=reason,
             blocked=True,
         )
+        order.status = "blocked"
+        order.status_reason = reason
         return ExecutionDecision(fill=fill, status="blocked", reason=reason)
 
     def _execution_price(self, order: Order, bar: Any, cfg: BacktestConfig) -> float:
-        if order.order_type == "next_close":
+        base = self._base_execution_price(order, bar, cfg)
+        if cfg.slippage_mode == "explicit_slippage_cost":
+            return base
+        slip = cfg.slippage_bps / 10000
+        price = base * (1 + slip if order.side == "buy" else 1 - slip)
+        if self._order_type(order, cfg) == "limit" and order.limit_price:
+            limit = float(order.limit_price)
+            price = min(price, limit) if order.side == "buy" else max(price, limit)
+        return price
+
+    def _base_execution_price(self, order: Order, bar: Any, cfg: BacktestConfig) -> float:
+        order_type = self._order_type(order, cfg)
+        if order_type == "next_close":
             base = number(field_value(bar, "close"))
-        elif order.order_type == "vwap":
+        elif order_type == "vwap":
             amount = number(field_value(bar, "amount"))
             volume = number(field_value(bar, "volume"))
             base = amount / max(volume * 100, 1.0) if amount > 0 and volume > 0 else number(field_value(bar, "open"))
-        elif order.order_type == "limit" and order.limit_price:
-            base = float(order.limit_price)
+        elif order_type == "limit" and order.limit_price:
+            limit = float(order.limit_price)
+            open_price = number(field_value(bar, "open"), limit)
+            if cfg.limit_open_better:
+                base = min(open_price, limit) if order.side == "buy" else max(open_price, limit)
+            else:
+                base = limit
         else:
             base = number(field_value(bar, "open"))
-        slip = cfg.slippage_bps / 10000
-        return base * (1 + slip if order.side == "buy" else 1 - slip)
+        return base
+
+    def _limit_touch_decision(self, order: Order, bar: Any, execution_date: str, cfg: BacktestConfig) -> ExecutionDecision | None:
+        if self._order_type(order, cfg) != "limit" or order.limit_price is None:
+            return None
+        limit = float(order.limit_price)
+        high = number(field_value(bar, "high"))
+        low = number(field_value(bar, "low"))
+        if low <= limit <= high:
+            return None
+        order.attempts += 1
+        valid_days = max(1, int(order.expires_after_days or cfg.order_valid_days or 1))
+        reason = f"限价未触达 {limit:.4f}，当日区间 {low:.4f}-{high:.4f}"
+        fill = Fill(
+            fill_id=f"pending-{order.order_id}-{order.attempts}",
+            order_id=order.order_id,
+            symbol=order.symbol,
+            date=execution_date,
+            side=order.side,
+            quantity=0,
+            requested_quantity=max(0, int(order.quantity or 0)),
+            price=0.0,
+            gross_amount=0.0,
+            reason=reason if order.attempts < valid_days else f"{reason}，订单过期",
+            blocked=True,
+        )
+        if order.attempts < valid_days:
+            order.status = "pending"
+            order.status_reason = reason
+            return ExecutionDecision(fill=fill, status="pending", reason=reason)
+        order.status = "expired"
+        order.status_reason = fill.reason
+        return ExecutionDecision(fill=fill, status="expired", reason=fill.reason)
 
     def _requested_quantity(self, order: Order, price: float, cash: float, position: Position | None, cfg: BacktestConfig) -> int:
         if order.quantity > 0:
@@ -134,24 +194,45 @@ class ExecutionSimulator:
         volume_shares = volume * 100 if volume < 50_000_000 else volume
         return max(0, int(volume_shares * max(0.0, min(cfg.volume_limit_pct, 1.0))))
 
-    @staticmethod
-    def _is_limit_up(bar: Any) -> bool:
+    def _is_limit_up(self, bar: Any, symbol: str = "", cfg: BacktestConfig | None = None) -> bool:
         if field_value(bar, "limit_up", False) or field_value(bar, "is_limit_up", False):
             return True
-        return number(field_value(bar, "change_pct")) >= 9.7
+        return number(field_value(bar, "change_pct")) >= self._limit_threshold(symbol, cfg) - 0.5
 
-    @staticmethod
-    def _is_limit_down(bar: Any) -> bool:
+    def _is_limit_down(self, bar: Any, symbol: str = "", cfg: BacktestConfig | None = None) -> bool:
         if field_value(bar, "limit_down", False) or field_value(bar, "is_limit_down", False):
             return True
-        return number(field_value(bar, "change_pct")) <= -9.7
+        return number(field_value(bar, "change_pct")) <= -(self._limit_threshold(symbol, cfg) - 0.5)
 
     @staticmethod
-    def _costs(side: str, quantity: int, price: float, cfg: BacktestConfig, raw_open: Any = None) -> tuple[float, float, float, float]:
+    def _order_type(order: Order, cfg: BacktestConfig) -> str:
+        if order.order_type == "next_open" and cfg.order_type != "next_open":
+            return cfg.order_type
+        return order.order_type
+
+    @staticmethod
+    def _limit_threshold(symbol: str, cfg: BacktestConfig | None = None) -> float:
+        cfg = cfg or BacktestConfig()
+        text = str(symbol or "")
+        if field_value(symbol, "is_st", False) or "ST" in text.upper():
+            return cfg.price_limit_st_pct
+        if text.startswith(("300", "301", "688", "689")):
+            return cfg.price_limit_chinext_star_pct
+        if text.startswith(("8", "4", "920")):
+            return cfg.price_limit_bse_pct
+        return cfg.price_limit_main_pct
+
+    @staticmethod
+    def _costs(side: str, quantity: int, price: float, cfg: BacktestConfig, reference_price: Any = None) -> tuple[float, float, float, float, float]:
         gross = quantity * price
         commission = max(cfg.min_commission, gross * cfg.commission_rate) if gross > 0 else 0.0
         stamp_tax = gross * cfg.stamp_tax_rate if side == "sell" else 0.0
         transfer_fee = gross * cfg.transfer_fee_rate
-        reference = number(raw_open, price)
-        slippage_cost = abs(price - reference) * quantity
-        return commission, stamp_tax, transfer_fee, slippage_cost
+        reference = number(reference_price, price)
+        if cfg.slippage_mode == "explicit_slippage_cost":
+            slippage_cost = abs(reference) * abs(quantity) * max(cfg.slippage_bps, 0.0) / 10000
+            cash_cost = commission + stamp_tax + transfer_fee + slippage_cost
+        else:
+            slippage_cost = abs(price - reference) * quantity
+            cash_cost = commission + stamp_tax + transfer_fee
+        return commission, stamp_tax, transfer_fee, slippage_cost, cash_cost

@@ -19,6 +19,22 @@ python -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 - `http://127.0.0.1:8001/technical/300750`：技术因子矩阵。
 - `http://127.0.0.1:8001/health`：数据源健康。
 - `http://127.0.0.1:8001/cache`：缓存状态。
+- `http://127.0.0.1:8001/backtest`：legacy 单票快速回测页，页面会显式提示不作为科学组合回测。
+- `http://127.0.0.1:8001/trading`：V3.20 纸面交易风控网关，不连接真实券商。
+
+## V3.20 回测体系说明
+
+V3.20 默认回测入口为 `quant_data/backtest/engine.py` 中的 `BacktestEngineV320`，API `POST /api/backtest/run` 以及未显式 `legacy=true` 的 `GET /api/backtest/run` 均走统一科学回测引擎。旧版 `quant_data/services/backtest_service.py` 保留为 legacy 单标的快速验证，用于前端兼容和肉眼检查 K 线，不作为科学组合回测或自动交易依据。
+
+关键差异：
+
+- V3.20 引擎使用信号日生成、下一交易日成交，默认避免未来函数。
+- 滑点默认 `price_adjusted_slippage`：成交价已体现滑点，现金不重复扣滑点。
+- 限价单必须 high/low 触达才成交，未触达会 pending 或 expired。
+- A 股 T+1、手数、涨跌停、停牌、成交量上限和最小成交额进入撮合约束。
+- 交易风控仅提供 paper trading 底座，不接真实券商、不真实下单。
+
+审计文档见 `docs/BACKTEST_V320_AUDIT.md`。
 
 ## 缓存与恢复
 

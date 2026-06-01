@@ -8,17 +8,19 @@ from .data_loader import BacktestDataLoader, date_text, field_value, number
 from .execution import ExecutionSimulator
 from .models import BacktestConfig, BacktestResult, Order, StrategySignal, Trade
 from .portfolio import PortfolioManager
+from .quality_filter import StrategyQualityFilter
 from .risk import calculate_metrics
 from .signal_adapter import SignalAdapter
 
 
 class BacktestEngine:
-    """Daily no-lookahead engine for V3.19 research backtests."""
+    """Daily no-lookahead engine for V3.20 research backtests."""
 
     def __init__(self, market_service: Any | None = None) -> None:
         self.loader = BacktestDataLoader(market_service)
         self.adapter = SignalAdapter()
         self.execution = ExecutionSimulator()
+        self.quality_filter = StrategyQualityFilter()
 
     def run(
         self,
@@ -78,8 +80,11 @@ class BacktestEngine:
                     if decision.fill:
                         all_fills.append(decision.fill)
                         day_fills.append(decision.fill)
-                        portfolio.apply_fill(decision.fill)
-                        self._update_trades(decision.fill, order, open_trades, trades)
+                        if decision.status in {"filled", "partial"}:
+                            portfolio.apply_fill(decision.fill)
+                            self._update_trades(decision.fill, order, open_trades, trades)
+                        elif decision.status == "pending":
+                            remaining.append(order)
                 pending_orders = remaining
             state = portfolio.mark_to_market(todays_bars, current_date, day_fills)
             states.append(state)
@@ -93,6 +98,10 @@ class BacktestEngine:
                 config,
                 screener_rows=screener_rows,
             )
+            filtered, attribution = self.quality_filter.apply(generated, context={"date": current_date})
+            generated = filtered
+            if attribution.get("blocked"):
+                warnings.extend(attribution["blocked"][:5])
             stop_orders = portfolio.stop_orders(current_date, todays_bars)
             orders = [*portfolio.build_orders(generated, current_date), *stop_orders]
             for order in orders:
@@ -101,6 +110,7 @@ class BacktestEngine:
                     warnings.append(msg)
                     continue
                 order.date = calendar[day_index + 1]
+                order.expires_after_days = config.order_valid_days
                 pending_orders.append(order)
                 all_orders.append(order)
         for symbol, trade in list(open_trades.items()):
@@ -225,7 +235,7 @@ class BacktestEngine:
                 quantity=fill.quantity,
                 entry_reason=order.reason,
                 entry_signal_score=order.signal_score,
-                costs=fill.total_cost,
+                costs=fill.cash_cost or fill.total_cost,
             )
         elif fill.symbol in open_trades:
             trade = open_trades.pop(fill.symbol)
@@ -233,7 +243,34 @@ class BacktestEngine:
             trade.exit_price = fill.price
             trade.exit_reason = order.reason
             trade.exit_signal_score = order.signal_score
-            trade.costs += fill.total_cost
+            trade.costs += fill.cash_cost or fill.total_cost
             trade.pnl = round((fill.price - trade.entry_price) * min(fill.quantity, trade.quantity) - trade.costs, 6)
             trade.pnl_pct = round((fill.price / trade.entry_price - 1) * 100 if trade.entry_price else 0.0, 4)
+            trade.exit_policy = self._exit_policy_from_reason(order.reason)
+            trade.risk_reward_realized = round((trade.pnl_pct / abs(self._stop_pct_from_reason(order.reason))) if self._stop_pct_from_reason(order.reason) else 0.0, 4)
             trades.append(trade)
+
+    @staticmethod
+    def _exit_policy_from_reason(reason: str) -> str:
+        text = str(reason or "")
+        if "止损" in text:
+            return "stop_loss"
+        if "止盈" in text:
+            return "take_profit"
+        if "跟踪" in text:
+            return "trailing_stop"
+        if "MA20" in text:
+            return "ma20_break"
+        if "评分" in text:
+            return "score_exit"
+        return "signal_exit" if text else ""
+
+    @staticmethod
+    def _stop_pct_from_reason(reason: str) -> float:
+        return 8.0 if "止损" in str(reason or "") else 0.0
+
+
+class BacktestEngineV320(BacktestEngine):
+    """Unified scientific backtest engine used by default from V3.20 onward."""
+
+    pass

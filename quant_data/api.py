@@ -5,6 +5,7 @@ from dataclasses import fields, replace
 from datetime import datetime, time
 from pathlib import Path
 from statistics import mean
+from types import SimpleNamespace
 
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,9 +37,9 @@ from quant_data.services.company_profile_service import CompanyProfileService
 from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.services.background_cache_service import BackgroundCacheService
-from quant_data.services.backtest_service import BacktestConfig as LegacyBacktestConfig, BacktestService
+from quant_data.services.backtest_service import BacktestConfig as LegacyBacktestConfig, BacktestService, SCORE_FORMULA
 from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategySignal
-from quant_data.backtest.engine import BacktestEngine
+from quant_data.backtest.engine import BacktestEngine, BacktestEngineV320
 from quant_data.backtest.optimizer import ParameterOptimizer
 from quant_data.backtest.paper_broker import PaperBroker
 from quant_data.backtest.report import build_report
@@ -48,6 +49,7 @@ from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
 from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui, build_paper_ui
+from quant_data.trading import PaperTradingGateway, TradingSignal
 
 
 service = MarketDataService()
@@ -75,8 +77,10 @@ background_cache_service = BackgroundCacheService(cache_state_service=cache_stat
 technical_factor_engine = TechnicalFactorEngine()
 backtest_service = BacktestService()
 backtest_engine_v319 = BacktestEngine(service)
+backtest_engine_v320 = BacktestEngineV320(service)
 backtest_storage_v319 = BacktestStorage()
 paper_broker_v319 = PaperBroker(V319BacktestConfig())
+paper_trading_gateway_v320 = PaperTradingGateway()
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -1271,6 +1275,7 @@ def backtest_run(
     limit: int = 520,
     adjust: str = "qfq",
     force: bool = False,
+    legacy: bool = False,
 ) -> dict:
     symbol = str(symbol or "300750").strip()
     limit = max(60, min(int(limit or 520), 1200))
@@ -1285,9 +1290,37 @@ def backtest_run(
         bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=force)
         if not force and len(bars) < min(limit, 120):
             bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=True)
+        if not legacy:
+            cfg = V319BacktestConfig(
+                strategy="factor_rule_strategy" if strategy in {x["key"] for x in backtest_service.strategies} else strategy,
+                symbols=[symbol],
+                initial_cash=initial_cash,
+                position_pct=position_pct,
+                commission_rate=fee_rate,
+                slippage_bps=slippage_rate * 10000,
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct,
+                buy_score=buy_score,
+                sell_score=sell_score,
+                adjust=adjust,
+                warmup_bars=min(60, max(10, limit // 5)),
+                volume_limit_pct=1.0,
+            )
+            result_v320 = backtest_engine_v320.run(cfg, market_data={symbol: bars})
+            data = _v320_compatible_backtest_payload(result_v320, symbol, strategy, bars, q, limit, adjust)
+            backtest_storage_v319.save(result_v320)
+            return _v319_response(
+                True,
+                run_id=result_v320.run_id,
+                data=data,
+                metrics=result_v320.metrics,
+                warnings=result_v320.warnings,
+                cache_status=result_v320.cache_status,
+                engine_version="v3.20",
+            )
         result = backtest_service.run(
             symbol,
-            bars,
+            [_legacy_bar_like(b) for b in bars],
             LegacyBacktestConfig(
                 strategy=strategy,
                 initial_cash=initial_cash,
@@ -1304,12 +1337,277 @@ def backtest_run(
         result["quote_source"] = getattr(q, "source", None) if q else None
         result["kline_source"] = sorted({getattr(b, "source", "") for b in bars if getattr(b, "source", "")})
         result["adjust"] = adjust
+        result["engine_version"] = "legacy_single_symbol_backtest"
+        result["legacy"] = True
+        result["legacy_warning"] = "legacy 快速验证，不作为科学组合回测。V3.20 科学回测请使用默认 API 或 POST /api/backtest/run。"
         result["requested_limit"] = limit
         result["data_quality"]["requested_bars"] = limit
         result["data_quality"]["short_kline"] = len(bars) < min(limit, 120)
         return {"ok": True, "data": result}
     except Exception as exc:
         return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}
+
+
+def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str, bars: list, quote: object | None, limit: int, adjust: str) -> dict:
+    data = result.to_dict()
+    metrics = data.get("metrics", {})
+    equity_curve = data.get("equity_curve", [])
+    final_equity = float(equity_curve[-1].get("equity", 0.0)) if equity_curve else float(data.get("config", {}).get("initial_cash", 0.0))
+    start_close = _bar_number(bars[0], "close") if bars else 0.0
+    end_close = _bar_number(bars[-1], "close") if bars else 0.0
+    buy_hold = (end_close / start_close - 1) * 100 if start_close else 0.0
+    trades = [_v320_compat_trade(t, idx + 1) for idx, t in enumerate(data.get("trades", []))]
+    fills = [x for x in data.get("fills", []) if not x.get("blocked") and int(x.get("quantity") or 0) > 0]
+    trade_events = _v320_trade_events_from_trades(trades) if trades else _v320_trade_events(fills)
+    cost_summary = {
+        "commission": round(sum(float(x.get("commission") or 0) for x in fills), 6),
+        "stamp_tax": round(sum(float(x.get("stamp_tax") or 0) for x in fills), 6),
+        "transfer_fee": round(sum(float(x.get("transfer_fee") or 0) for x in fills), 6),
+        "slippage_cost_est": round(sum(float(x.get("slippage_cost") or 0) for x in fills), 6),
+        "total_cost": round(sum(float(x.get("total_cost") or 0) for x in fills), 6),
+        "turnover": round(sum(abs(float(x.get("gross_amount") or 0)) for x in fills), 6),
+    }
+    last_state = data.get("portfolio_states", [])[-1] if data.get("portfolio_states") else {}
+    positions = last_state.get("positions") or {}
+    first_pos = next(iter(positions.values()), {}) if positions else {}
+    kline = [_bar_dict(x) for x in bars]
+    return {
+        "run_id": data.get("run_id"),
+        "engine_version": "v3.20",
+        "symbol": symbol,
+        "name": getattr(quote, "name", None) if quote else symbol,
+        "strategy": strategy,
+        "strategy_name": f"{strategy} · V3.20",
+        "final_equity": round(final_equity, 6),
+        "total_return_pct": metrics.get("total_return_pct", 0.0),
+        "annualized_return_pct": metrics.get("annualized_return_pct", 0.0),
+        "max_drawdown_pct": metrics.get("max_drawdown_pct", 0.0),
+        "sharpe": metrics.get("sharpe", 0.0),
+        "win_rate_pct": metrics.get("win_rate_pct", 0.0),
+        "trade_count": metrics.get("trade_count", len(trades)),
+        "buy_hold_return_pct": round(buy_hold, 4),
+        "excess_return_pct": round(float(metrics.get("total_return_pct", 0.0) or 0.0) - buy_hold, 4),
+        "equity_curve": equity_curve,
+        "score_series": [],
+        "score_formula": {**SCORE_FORMULA, "note": SCORE_FORMULA.get("note", "") + "；本次默认接口已切换到 V3.20 科学回测引擎。"},
+        "kline": kline,
+        "markers": _v320_markers(fills),
+        "anomaly_markers": [x for x in _v320_markers(data.get("fills", [])) if x.get("type") == "blocked"],
+        "period": {
+            "start": kline[0]["date"] if kline else None,
+            "end": kline[-1]["date"] if kline else None,
+            "bars": len(kline),
+            "calendar_days": len(kline),
+        },
+        "data_quality": {
+            "start": kline[0]["date"] if kline else None,
+            "end": kline[-1]["date"] if kline else None,
+            "bars": len(kline),
+            "requested_bars": limit,
+            "short_kline": len(kline) < min(limit, 120),
+        },
+        "cost_summary": cost_summary,
+        "position_summary": {
+            "cash": last_state.get("cash", final_equity),
+            "shares": first_pos.get("quantity", 0),
+            "max_shares": max([int(e.get("position_shares") or 0) for e in trade_events] or [0]),
+            "avg_cost_basis": first_pos.get("avg_cost", "--"),
+            "note": "V3.20 默认使用下一交易日执行、A股涨跌停/T+1/手数约束和滑点模式。",
+        },
+        "trades": trades,
+        "trade_events": trade_events,
+        "trade_event_count": len(trade_events),
+        "params": data.get("config", {}),
+        "assumptions": [
+            "V3.20 科学回测：默认下一交易日成交，避免收盘后才知道的信号当日成交。",
+            "滑点默认使用 price_adjusted_slippage：成交价已反映滑点，现金不再重复扣滑点。",
+            "本接口仍为研究辅助，不构成投资建议。",
+        ],
+        "metrics": metrics,
+        "warnings": data.get("warnings", []),
+    }
+
+
+def _bar_dict(bar: object) -> dict:
+    return {
+        "date": str(getattr(bar, "ts", None) or getattr(bar, "date", ""))[:10] if not isinstance(bar, dict) else str(bar.get("ts") or bar.get("date") or "")[:10],
+        "open": _bar_number(bar, "open"),
+        "high": _bar_number(bar, "high"),
+        "low": _bar_number(bar, "low"),
+        "close": _bar_number(bar, "close"),
+        "volume": _bar_number(bar, "volume"),
+        "amount": _bar_number(bar, "amount"),
+    }
+
+
+def _bar_number(bar: object, key: str) -> float:
+    try:
+        value = bar.get(key) if isinstance(bar, dict) else getattr(bar, key)
+        return float(value or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _v320_markers(fills: list[dict]) -> list[dict]:
+    markers = []
+    for fill in fills:
+        markers.append(
+            {
+                "date": fill.get("date"),
+                "type": "blocked" if fill.get("blocked") else fill.get("side"),
+                "price": fill.get("price"),
+                "label": "!" if fill.get("blocked") else ("B" if fill.get("side") == "buy" else "S"),
+                "reason": fill.get("reason"),
+            }
+        )
+    return markers
+
+
+def _v320_trade_events(fills: list[dict]) -> list[dict]:
+    events = []
+    cash_after = None
+    position = 0
+    cost_basis = 0.0
+    for idx, fill in enumerate(fills, start=1):
+        side = fill.get("side")
+        qty = int(fill.get("quantity") or 0)
+        gross = float(fill.get("gross_amount") or 0.0)
+        fee = float(fill.get("cash_cost") or fill.get("total_cost") or 0.0)
+        if side == "buy":
+            position += qty
+            cost_basis = float(fill.get("price") or 0.0)
+            cash_change = -(gross + fee)
+        else:
+            position = max(0, position - qty)
+            cash_change = gross - fee
+        events.append(
+            {
+                "event_id": f"{idx}-{side}",
+                "trade_index": (idx + 1) // 2,
+                "date": fill.get("date"),
+                "side": side,
+                "action": "买入" if side == "buy" else "卖出",
+                "price": fill.get("price"),
+                "shares": qty,
+                "amount": gross,
+                "fee": fee,
+                "cash_change": round(cash_change, 6),
+                "cash_after": cash_after,
+                "position_shares": position,
+                "cost_basis": cost_basis,
+                "realized_pnl": 0.0,
+                "realized_pct": 0.0,
+                "reason": fill.get("reason"),
+                "signal_date": None,
+                "score": None,
+            }
+        )
+    return events
+
+
+def _v320_compat_trade(trade: dict, index: int) -> dict:
+    qty = int(trade.get("quantity") or trade.get("shares") or 0)
+    entry_price = float(trade.get("entry_price") or 0.0)
+    exit_price = float(trade.get("exit_price") or entry_price or 0.0)
+    costs = float(trade.get("costs") or 0.0)
+    entry_fee = round(costs / 2, 6)
+    exit_fee = round(costs - entry_fee, 6)
+    entry_value = entry_price * qty
+    exit_value = exit_price * qty
+    row = dict(trade)
+    row.update(
+        {
+            "trade_index": index,
+            "entry_value": round(entry_value, 6),
+            "exit_value": round(exit_value, 6),
+            "entry_fee": entry_fee,
+            "exit_fee": exit_fee,
+            "entry_cost": round(entry_value + entry_fee, 6),
+            "exit_proceeds": round(exit_value - exit_fee, 6),
+            "buy_shares": qty,
+            "sell_shares": qty,
+            "cost_basis": round(entry_price + entry_fee / max(qty, 1), 6),
+            "entry_signal_date": trade.get("entry_date"),
+            "exit_signal_date": trade.get("exit_date"),
+            "cash_before_entry": None,
+            "cash_after_exit": None,
+        }
+    )
+    return row
+
+
+def _v320_trade_events_from_trades(trades: list[dict]) -> list[dict]:
+    events: list[dict] = []
+    for idx, trade in enumerate(trades, start=1):
+        qty = int(trade.get("buy_shares") or 0)
+        events.append(
+            {
+                "event_id": f"{idx}-B",
+                "trade_index": idx,
+                "date": trade.get("entry_date"),
+                "side": "buy",
+                "action": "买入",
+                "price": trade.get("entry_price"),
+                "shares": qty,
+                "amount": trade.get("entry_value"),
+                "fee": trade.get("entry_fee"),
+                "cash_change": -float(trade.get("entry_cost") or 0.0),
+                "cash_after": None,
+                "position_shares": qty,
+                "cost_basis": trade.get("cost_basis"),
+                "realized_pnl": 0.0,
+                "realized_pct": 0.0,
+                "reason": trade.get("entry_reason"),
+                "signal_date": trade.get("entry_signal_date"),
+                "score": trade.get("entry_signal_score"),
+            }
+        )
+        events.append(
+            {
+                "event_id": f"{idx}-S",
+                "trade_index": idx,
+                "date": trade.get("exit_date"),
+                "side": "sell",
+                "action": "卖出",
+                "price": trade.get("exit_price"),
+                "shares": int(trade.get("sell_shares") or qty),
+                "amount": trade.get("exit_value"),
+                "fee": trade.get("exit_fee"),
+                "cash_change": trade.get("exit_proceeds"),
+                "cash_after": trade.get("cash_after_exit"),
+                "position_shares": 0,
+                "cost_basis": trade.get("cost_basis"),
+                "realized_pnl": trade.get("pnl"),
+                "realized_pct": trade.get("pnl_pct"),
+                "reason": trade.get("exit_reason"),
+                "signal_date": trade.get("exit_signal_date"),
+                "score": trade.get("exit_signal_score"),
+            }
+        )
+    return events
+
+
+def _legacy_bar_like(bar: object) -> object:
+    if not isinstance(bar, dict):
+        return bar
+    raw_ts = bar.get("ts") or bar.get("date")
+    if isinstance(raw_ts, str):
+        try:
+            raw_ts = datetime.fromisoformat(raw_ts[:10])
+        except ValueError:
+            raw_ts = datetime.now()
+    return SimpleNamespace(
+        symbol=bar.get("symbol", ""),
+        frame=bar.get("frame", "1d"),
+        ts=raw_ts,
+        open=bar.get("open", 0.0),
+        high=bar.get("high", 0.0),
+        low=bar.get("low", 0.0),
+        close=bar.get("close", 0.0),
+        volume=bar.get("volume", 0.0),
+        amount=bar.get("amount", 0.0),
+        source=bar.get("source", "memory"),
+    )
 
 
 def _v319_response(ok: bool, **payload: object) -> dict:
@@ -1499,6 +1797,46 @@ def paper_fill_v319(payload: dict = Body(default_factory=dict)) -> dict:
         return _v319_response(True, data={"fill": fill.to_dict() if fill else None, "snapshot": paper_broker_v319.snapshot()}, cache_status="memory")
     except Exception as exc:
         return _v319_response(False, errors=[str(exc)[:300]])
+
+
+@app.post("/api/trading/signal")
+def trading_signal_v320(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        signal = TradingSignal(
+            symbol=str(payload.get("symbol") or "300750"),
+            side=str(payload.get("side") or payload.get("action") or "buy").lower(),
+            quantity=int(payload.get("quantity") or 0),
+            target_weight=float(payload.get("target_weight") or 0.0),
+            price=float(payload.get("price")) if payload.get("price") is not None else None,
+            score=float(payload.get("score") or 0.0),
+            reason=str(payload.get("reason") or "manual paper signal"),
+            source=str(payload.get("source") or "api"),
+        )
+        quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+        data = paper_trading_gateway_v320.submit_signal(signal, quote=quote)
+        return {"ok": True, "data": data, "disclaimer": "paper trading only; no real broker connected"}
+    except Exception as exc:
+        return {"ok": False, "errors": [str(exc)[:300]], "disclaimer": "paper trading only"}
+
+
+@app.get("/api/trading/paper/orders")
+def trading_paper_orders_v320() -> dict:
+    return {"ok": True, "data": paper_trading_gateway_v320.orders_snapshot(), "paper_only": True}
+
+
+@app.get("/api/trading/paper/positions")
+def trading_paper_positions_v320() -> dict:
+    return {"ok": True, "data": paper_trading_gateway_v320.positions_snapshot(), "paper_only": True}
+
+
+@app.get("/api/trading/risk/status")
+def trading_risk_status_v320() -> dict:
+    return {"ok": True, "data": paper_trading_gateway_v320.risk_gateway.status()}
+
+
+@app.get("/api/trading/audit")
+def trading_audit_v320(limit: int = 200) -> dict:
+    return {"ok": True, "data": paper_trading_gateway_v320.audit.list(limit=max(1, min(int(limit or 200), 1000)))}
 
 
 @app.get("/api/screener/run")
@@ -2759,6 +3097,15 @@ def backtest_trades_page() -> str:
 @app.get("/paper", response_class=HTMLResponse)
 def paper_page() -> str:
     return build_paper_ui()
+
+
+@app.get("/trading", response_class=HTMLResponse)
+def trading_page() -> str:
+    return """<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><title>Trading Risk Gateway V3.20</title>
+<style>body{margin:0;background:#0b1020;color:#dbeafe;font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif}header{height:58px;display:flex;align-items:center;gap:10px;padding:0 18px;background:#101827;border-bottom:1px solid #283956}.dot{width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 14px #22c55e}.brand{font-weight:900;color:#bfdbfe;font-size:18px}.pill{border:1px solid #30405d;background:#172033;border-radius:999px;padding:5px 9px;color:#fcd34d}.grow{flex:1}a{color:#bfdbfe}main{padding:16px;display:grid;grid-template-columns:360px 1fr;gap:14px}.panel{background:#111827;border:1px solid #283956;border-radius:14px;overflow:hidden}.h{padding:12px;background:#141f35;border-bottom:1px solid #283956;font-weight:900}.b{padding:12px}input,select{width:100%;background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:10px;padding:9px;margin:5px 0 10px}button{border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:800;padding:9px 12px;cursor:pointer}pre{white-space:pre-wrap;word-break:break-word;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;min-height:360px}.muted{color:#91a7c7}</style></head>
+<body><header><span class='dot'></span><div class='brand'>交易风控网关 V3.20</div><span class='pill'>paper only · 未接真实券商</span><div class='grow'></div><a href='/backtest'>回测</a><a href='/paper'>旧纸面页</a></header>
+<main><section class='panel'><div class='h'>提交纸面信号</div><div class='b'><label>代码</label><input id='symbol' value='300750'><label>动作</label><select id='side'><option value='buy'>buy</option><option value='sell'>sell</option></select><label>数量</label><input id='quantity' type='number' value='100'><label>价格</label><input id='price' type='number' value='20'><label>评分</label><input id='score' type='number' value='68'><label>理由</label><input id='reason' value='V3.20 风控网关验证'><button onclick='send()'>发送信号</button><button onclick='load()'>刷新</button><p class='muted'>所有请求只进入风控、纸面订单和审计日志，不会连接券商。</p></div></section><section class='panel'><div class='h'>状态</div><div class='b'><pre id='out'>Loading...</pre></div></section></main>
+<script>const $=id=>document.getElementById(id);async function send(){const p={symbol:$('symbol').value,side:$('side').value,quantity:Number($('quantity').value),price:Number($('price').value),score:Number($('score').value),reason:$('reason').value};const r=await fetch('/api/trading/signal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(p)});$('out').textContent=JSON.stringify(await r.json(),null,2)}async function load(){const a=await fetch('/api/trading/risk/status').then(r=>r.json());const b=await fetch('/api/trading/paper/orders').then(r=>r.json());const c=await fetch('/api/trading/paper/positions').then(r=>r.json());const d=await fetch('/api/trading/audit').then(r=>r.json());$('out').textContent=JSON.stringify({risk:a.data,orders:b.data,positions:c.data,audit:d.data},null,2)}load()</script></body></html>"""
 
 
 @app.get("/chart/{symbol}", response_class=HTMLResponse)

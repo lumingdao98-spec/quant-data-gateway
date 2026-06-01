@@ -31,6 +31,8 @@ def as_dict(value: Any) -> dict[str, Any]:
 @dataclass(slots=True)
 class BacktestConfig:
     run_id: str | None = None
+    engine_version: str = "v3.20"
+    legacy: bool = False
     strategy: str = "score_rank_rebalance"
     symbols: list[str] = field(default_factory=list)
     start: str | None = None
@@ -44,6 +46,7 @@ class BacktestConfig:
     rebalance_frequency: str = "daily"
     max_positions: int = 5
     max_single_position_pct: float = 0.25
+    max_industry_position_pct: float = 0.35
     cash_reserve_pct: float = 0.02
     position_pct: float = 1.0
     sizing: str = "score_weighted"
@@ -51,15 +54,28 @@ class BacktestConfig:
     t_plus_one: bool = True
     allow_short: bool = False
     order_type: str = "next_open"
+    order_valid_days: int = 1
+    limit_open_better: bool = True
     commission_rate: float = 0.0003
     min_commission: float = 5.0
     stamp_tax_rate: float = 0.001
     transfer_fee_rate: float = 0.00001
     slippage_bps: float = 5.0
+    slippage_mode: str = "price_adjusted_slippage"
     volume_limit_pct: float = 0.10
+    min_trade_amount: float = 0.0
+    allow_limit_up_buy: bool = False
+    allow_limit_down_sell: bool = False
+    price_limit_main_pct: float = 10.0
+    price_limit_st_pct: float = 5.0
+    price_limit_chinext_star_pct: float = 20.0
+    price_limit_bse_pct: float = 30.0
     stop_loss_pct: float = 8.0
     take_profit_pct: float = 0.0
     trailing_stop_pct: float = 0.0
+    max_holding_days: int = 0
+    atr_stop_multiplier: float = 0.0
+    partial_take_profit_pct: float = 0.0
     buy_score: float = 62.0
     sell_score: float = 48.0
     market_sentiment_weight: float = 0.06
@@ -107,6 +123,9 @@ class Order:
     signal_score: float | None = None
     reason: str = ""
     status: str = "pending"
+    expires_after_days: int | None = None
+    attempts: int = 0
+    status_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return as_dict(self)
@@ -127,6 +146,8 @@ class Fill:
     stamp_tax: float = 0.0
     transfer_fee: float = 0.0
     slippage_cost: float = 0.0
+    cash_cost: float = 0.0
+    slippage_mode: str = "price_adjusted_slippage"
     reason: str = ""
     partial: bool = False
     blocked: bool = False
@@ -138,6 +159,7 @@ class Fill:
     def to_dict(self) -> dict[str, Any]:
         data = as_dict(self)
         data["total_cost"] = round(self.total_cost, 6)
+        data["slippage_impact"] = round(self.slippage_cost, 6)
         return data
 
 
@@ -196,6 +218,8 @@ class Trade:
     costs: float = 0.0
     max_favorable_excursion_pct: float = 0.0
     max_adverse_excursion_pct: float = 0.0
+    exit_policy: str = ""
+    risk_reward_realized: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return as_dict(self)

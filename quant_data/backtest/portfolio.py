@@ -18,7 +18,7 @@ class PortfolioManager:
         if fill.blocked or fill.quantity <= 0:
             return
         pos = self.positions.get(fill.symbol, Position(symbol=fill.symbol))
-        cost = fill.commission + fill.stamp_tax + fill.transfer_fee + fill.slippage_cost
+        cost = fill.cash_cost or self._cash_cost(fill)
         if fill.side == "buy":
             total_cost = pos.avg_cost * pos.quantity + fill.gross_amount + cost
             pos.quantity += fill.quantity
@@ -110,6 +110,7 @@ class PortfolioManager:
                     signal_date=signal.date,
                     signal_score=signal.score,
                     reason=signal.reason,
+                    expires_after_days=self.config.order_valid_days,
                 )
             )
         return orders
@@ -139,6 +140,11 @@ class PortfolioManager:
                         order_type=self.config.order_type,
                         signal_date=date,
                         reason=reason,
+                        expires_after_days=self.config.order_valid_days,
                     )
                 )
         return orders
+
+    def _cash_cost(self, fill: Fill) -> float:
+        slippage_cash = fill.slippage_cost if self.config.slippage_mode == "explicit_slippage_cost" else 0.0
+        return fill.commission + fill.stamp_tax + fill.transfer_fee + slippage_cash
