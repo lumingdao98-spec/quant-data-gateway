@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from quant_data.models import AssetType, Bar, IntradayPoint, Quote
+from quant_data.models import AssetType, Bar, IntradayPoint, OrderBook, OrderBookLevel, Quote
 from quant_data.providers.base import MarketDataProvider
 from quant_data.utils import ThrottledSession, normalize_symbol, safe_float, to_sina_code
 
@@ -85,6 +85,55 @@ class SinaProvider(MarketDataProvider):
             except Exception:
                 continue
         return quotes
+
+    def get_order_book(self, symbol: str) -> OrderBook:
+        symbol = normalize_symbol(symbol)
+        resp = self.http.get(self.QUOTE_URL.format(codes=to_sina_code(symbol)))
+        try:
+            text = resp.content.decode("gbk", errors="ignore")
+        except Exception:
+            text = resp.text
+        payload = ""
+        for line in text.split(";"):
+            if "hq_str_" not in line or "=" not in line:
+                continue
+            payload = line.split("=", 1)[1].strip().strip('"')
+            break
+        parts = payload.split(",") if payload else []
+        if len(parts) < 30:
+            raise RuntimeError(f"{self.name} order book payload too short: {symbol}")
+
+        def level(volume_idx: int, price_idx: int) -> OrderBookLevel:
+            price = safe_float(parts[price_idx]) if price_idx < len(parts) else 0.0
+            volume_raw = safe_float(parts[volume_idx]) if volume_idx < len(parts) else 0.0
+            volume = volume_raw / 100.0 if volume_raw > 0 else None
+            return OrderBookLevel(price if price > 0 else None, volume)
+
+        bids = [
+            level(10, 11),
+            level(12, 13),
+            level(14, 15),
+            level(16, 17),
+            level(18, 19),
+        ]
+        asks = [
+            level(20, 21),
+            level(22, 23),
+            level(24, 25),
+            level(26, 27),
+            level(28, 29),
+        ]
+        bid_sum = sum((x.volume or 0.0) for x in bids)
+        ask_sum = sum((x.volume or 0.0) for x in asks)
+        order_diff = bid_sum - ask_sum if (bid_sum or ask_sum) else None
+        order_ratio = (order_diff / (bid_sum + ask_sum) * 100) if (bid_sum + ask_sum) else None
+        date_s = parts[30] if len(parts) > 30 else ""
+        time_s = parts[31] if len(parts) > 31 else ""
+        try:
+            ts = datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            ts = datetime.now()
+        return OrderBook(symbol=symbol, ts=ts, asks=asks, bids=bids, order_ratio=order_ratio, order_diff=order_diff, source=self.name)
 
     def _json_or_text_list(self, text: str) -> list[dict[str, Any]]:
         text = (text or "").strip()

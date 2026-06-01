@@ -170,11 +170,12 @@ class ProviderManager:
         last_error: BaseException | None = None
         # 五档盘口目前也只有东方财富公开接口可用；其他 Provider 不支持时不刷屏。
         for provider in self.providers:
-            if provider.name not in {"eastmoney"}:
+            if provider.name not in {"eastmoney", "sina"}:
                 continue
             try:
                 book = provider.get_order_book(symbol)
-                if book and (book.asks or book.bids):
+                levels = (list(book.asks or []) + list(book.bids or [])) if book else []
+                if any((x.price is not None and x.price > 0) or (x.volume is not None and x.volume > 0) for x in levels):
                     return book
             except Exception as exc:
                 last_error = exc

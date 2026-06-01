@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from statistics import mean, pstdev
 
 from quant_data.models import Bar
@@ -377,6 +378,12 @@ class BacktestService:
         slippage_cost_est = turnover_value * cfg.slippage_rate
         total_cost = total_entry_fee + total_exit_fee + slippage_cost_est
         final_position = equity_curve[-1] if equity_curve else {}
+        entry_value_sum = sum(_num(t.get("entry_value")) for t in trades)
+        entry_cost_sum = sum(_num(t.get("entry_cost")) for t in trades)
+        entry_shares_sum = sum(_num(t.get("buy_shares"), _num(t.get("shares"))) for t in trades)
+        avg_entry_price = entry_value_sum / entry_shares_sum if entry_shares_sum > 0 else 0.0
+        avg_cost_basis = entry_cost_sum / entry_shares_sum if entry_shares_sum > 0 else 0.0
+        max_position_shares = max([int(_num(x.get("shares"), 0)) for x in equity_curve] or [0])
         period = {
             "start": clean[0].ts.date().isoformat(),
             "end": clean[-1].ts.date().isoformat(),
@@ -392,12 +399,19 @@ class BacktestService:
             "total_cost": round(total_cost, 2),
             "fee_rate": cfg.fee_rate,
             "slippage_rate": cfg.slippage_rate,
+            "avg_entry_price": round(avg_entry_price, 4),
+            "avg_cost_basis": round(avg_cost_basis, 4),
+            "total_buy_shares": int(entry_shares_sum),
+            "max_position_shares": int(max_position_shares),
         }
         position_summary = {
             "shares": int(_num(final_position.get("shares"), 0)),
             "cash": round(_num(final_position.get("cash"), final_equity), 2),
             "position_value": round(_num(final_position.get("position_value"), 0.0), 2),
             "last_close": round(last_close, 4),
+            "max_shares": int(max_position_shares),
+            "avg_entry_price": round(avg_entry_price, 4),
+            "avg_cost_basis": round(avg_cost_basis, 4),
             "forced_flat_at_end": forced_flat_at_end,
             "note": "期末仍持仓时已按最后收盘价模拟平仓，便于统计闭合交易收益。" if forced_flat_at_end else "期末无持仓或已由策略信号卖出。",
         }
@@ -882,15 +896,32 @@ class BacktestService:
         exit_fee = value * fee_rate
         cash_after = cash + value - exit_fee
         cost = shares * entry_price
-        pnl = value - exit_fee - cost - entry_fee
+        entry_cost = cost + entry_fee
+        exit_proceeds = value - exit_fee
+        pnl = exit_proceeds - entry_cost
+        hold_days = 0
+        try:
+            hold_days = (bar.ts.date() - datetime.fromisoformat(entry_date).date()).days
+        except Exception:
+            hold_days = 0
         return {
             "entry_date": entry_date,
             "exit_date": bar.ts.date().isoformat(),
             "entry_price": round(entry_price, 4),
             "exit_price": round(sell_price, 4),
             "shares": shares,
+            "buy_shares": shares,
+            "sell_shares": shares,
+            "entry_value": round(cost, 2),
+            "entry_cost": round(entry_cost, 2),
+            "exit_value": round(value, 2),
+            "exit_proceeds": round(exit_proceeds, 2),
+            "cost_basis": round(entry_cost / shares, 4) if shares > 0 else 0.0,
+            "cash_before_entry": round(entry_cash, 2),
+            "cash_after_exit": round(cash_after, 2),
+            "holding_days": hold_days,
             "pnl": round(pnl, 2),
-            "pnl_pct": round(pnl / cost * 100, 2) if cost > 0 else 0.0,
+            "pnl_pct": round(pnl / entry_cost * 100, 2) if entry_cost > 0 else 0.0,
             "return_on_equity_pct": round((cash_after / entry_cash - 1) * 100, 2) if entry_cash > 0 else 0.0,
             "entry_fee": round(entry_fee, 2),
             "exit_fee": round(exit_fee, 2),

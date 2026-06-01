@@ -11,8 +11,10 @@ from fastapi.testclient import TestClient
 import pytest
 
 import quant_data.api as api
-from quant_data.models import IntradayPoint, Quote
+from quant_data.models import IntradayPoint, OrderBook, OrderBookLevel, Quote
 from quant_data.providers.eastmoney import EastmoneyProvider
+from quant_data.providers.provider_manager import ProviderManager
+from quant_data.providers.sina import SinaProvider
 from quant_data.screener_ui import build_screener_ui
 from quant_data.services.cache_state_service import CacheStateService
 
@@ -286,3 +288,57 @@ def test_eastmoney_stock_get_supplements_real_valuation_metrics(monkeypatch):
     assert enriched.turnover == 7.13
     assert enriched.total_market_cap == 371_084_112_781.76
     assert enriched.float_market_cap == 284_596_737_775.63
+
+
+def test_sina_order_book_parses_five_levels(monkeypatch):
+    provider = SinaProvider()
+
+    class Resp:
+        content = (
+            'var hq_str_sz300750="宁德时代,432.100,424.000,419.950,438.240,418.180,'
+            '419.950,419.990,38077136,16334676180.850,12790,419.950,100,419.940,'
+            '100,419.920,1500,419.900,1800,419.890,100,419.990,800,420.100,'
+            '1100,420.120,200,420.130,200,420.140,2026-06-01,14:55:54,00";'
+        ).encode("gbk")
+        text = content.decode("gbk")
+
+    monkeypatch.setattr(provider.http, "get", lambda *args, **kwargs: Resp())
+
+    book = provider.get_order_book("300750")
+
+    assert book.source == "sina"
+    assert book.bids[0].price == 419.95
+    assert book.bids[0].volume == 127.9
+    assert book.asks[0].price == 419.99
+    assert book.asks[4].price == 420.14
+    assert book.order_diff is not None
+
+
+def test_provider_manager_falls_back_when_eastmoney_depth_is_empty():
+    class EmptyEastmoney:
+        name = "eastmoney"
+
+        def get_order_book(self, symbol):
+            levels = [OrderBookLevel(None, None) for _ in range(5)]
+            return OrderBook(symbol, datetime(2026, 6, 1, 10), levels, levels, source="eastmoney")
+
+    class FullSina:
+        name = "sina"
+
+        def get_order_book(self, symbol):
+            return OrderBook(
+                symbol,
+                datetime(2026, 6, 1, 10),
+                [OrderBookLevel(10.02, 30)],
+                [OrderBookLevel(10.01, 20)],
+                source="sina",
+            )
+
+    manager = ProviderManager(enable_akshare=False)
+    manager.providers = [EmptyEastmoney(), FullSina()]
+
+    book = manager.get_order_book("300750")
+
+    assert book is not None
+    assert book.source == "sina"
+    assert book.bids[0].price == 10.01

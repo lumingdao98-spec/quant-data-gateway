@@ -73,6 +73,14 @@ def test_backtest_api_run_uses_local_bars(monkeypatch):
     assert "slippage_cost_est" in result["cost_summary"]
     assert "shares" in result["position_summary"]
     assert "cash" in result["position_summary"]
+    assert "max_shares" in result["position_summary"]
+    assert "avg_cost_basis" in result["position_summary"]
+    if result["trades"]:
+        trade = result["trades"][0]
+        assert "entry_cost" in trade
+        assert "exit_proceeds" in trade
+        assert "buy_shares" in trade
+        assert "cost_basis" in trade
 
 
 def test_backtest_page_is_visible():
@@ -95,6 +103,10 @@ def test_backtest_page_is_visible():
     assert "openTradeDrawer" in html
     assert "openTradePage" in html
     assert "/backtest/trades" in html
+    assert "平均成本/股" in html
+    assert "止损/止盈" in html
+    assert "tradeQuickList" not in html
+    assert "完整表格" not in html
     assert "回测区间" in html
     assert "交易成本" in html
     assert "期末持仓" in html
@@ -108,3 +120,5 @@ def test_backtest_trade_detail_page_is_visible():
     assert "rows" in html
     assert "entry_reason" in html
     assert "exit_reason" in html
+    assert "entry_cost" in html
+    assert "exit_proceeds" in html
