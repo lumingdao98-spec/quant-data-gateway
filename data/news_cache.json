@@ -12243,12 +12243,12 @@
     }
   },
   "cn_v318_light:300750:宁德时代:180": {
-    "_saved_at": 1779950997.6622376,
+    "_saved_at": 1780284009.2836115,
     "result": {
       "symbol": "300750",
       "name": "宁德时代",
       "query": "宁德时代 300750",
-      "updated_at": "2026-05-28T14:49:57",
+      "updated_at": "2026-06-01T11:20:09",
       "count": 57,
       "news_score": 47.06,
       "sentiment": "negative",
@@ -12285,11 +12285,11 @@
           "count": 3
         },
         {
-          "word": "业绩",
+          "word": "分红",
           "count": 1
         },
         {
-          "word": "分红",
+          "word": "业绩",
           "count": 1
         }
       ],
@@ -12332,13 +12332,13 @@
       "time_counts": [
         {
           "name": "近30天",
-          "count": 11,
-          "pct": 19.3
+          "count": 3,
+          "pct": 5.3
         },
         {
           "name": "近90天",
-          "count": 33,
-          "pct": 57.9
+          "count": 41,
+          "pct": 71.9
         },
         {
           "name": "更早历史",
@@ -14864,34 +14864,42 @@
         },
         {
           "source": "巨潮公告全文检索",
-          "count": 81,
-          "status": "ok",
-          "elapsed_ms": null,
-          "skipped_reason": null,
+          "count": 0,
+          "status": "源级超时>3.0s",
+          "elapsed_ms": 3000.0,
+          "skipped_reason": "timeout",
           "mode": "light"
         },
         {
           "source": "东方财富F10资讯公告",
           "count": 0,
-          "status": "源级超时>0.9s",
-          "elapsed_ms": 937.0,
+          "status": "源级超时>0.8s",
+          "elapsed_ms": 766.0,
           "skipped_reason": "timeout",
           "mode": "light"
         },
         {
           "source": "有效证据预估",
-          "count": 81,
+          "count": 0,
           "status": "目标有效证据≈80；按清洗准入后条目而不是原始条目判断是否继续补充",
           "elapsed_ms": null,
           "skipped_reason": null,
           "mode": "light"
         },
         {
-          "source": "light mode停止补源",
-          "count": 81,
-          "status": "公告/F10/巨潮有效证据已达80，筛选页立即停止补源",
+          "source": "light mode站内搜索关闭",
+          "count": 0,
+          "status": "筛选页不运行东方财富/新浪/同花顺/专业财经门户关键词矩阵",
           "elapsed_ms": null,
-          "skipped_reason": null,
+          "skipped_reason": "light mode禁用关键词矩阵",
+          "mode": "light"
+        },
+        {
+          "source": "总预算耗尽",
+          "count": 0,
+          "status": "总预算耗尽，停止后续任务队列",
+          "elapsed_ms": null,
+          "skipped_reason": "budget_exhausted",
           "mode": "light"
         }
       ],
