@@ -85,7 +85,12 @@ def test_v321_ui_entry_points_are_visible():
 
 def test_docs_are_chinese_and_link_core_apis():
     html = TestClient(api.app).get("/docs").text
-    assert "量化数据网关 API 文档" in html
-    assert "/api/backtest/run" in html
-    assert "/api/strategy/library" in html
-    assert "/openapi.json" in html
+    assert "量化数据网关 API 调试" in html
+    assert "swagger-ui" in html
+    assert "tryItOutEnabled" in html
+    openapi = TestClient(api.app).get("/openapi.json").json()
+    assert "/api/backtest/run" in openapi["paths"]
+    html_cn = TestClient(api.app).get("/docs-cn").text
+    assert "量化数据网关 API 文档" in html_cn
+    assert "/api/strategy/library" in html_cn
+    assert "/openapi.json" in html_cn

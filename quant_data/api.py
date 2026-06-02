@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from quant_data import __version__
@@ -123,7 +124,22 @@ app.add_middleware(
 )
 
 
-@app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/docs", include_in_schema=False)
+def swagger_api_docs() -> HTMLResponse:
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title="量化数据网关 API 调试",
+        swagger_ui_parameters={
+            "docExpansion": "none",
+            "defaultModelsExpandDepth": -1,
+            "displayRequestDuration": True,
+            "tryItOutEnabled": True,
+            "filter": True,
+        },
+    )
+
+
+@app.get("/docs-cn", response_class=HTMLResponse, include_in_schema=False)
 def chinese_api_docs() -> str:
     groups = [
         ("行情与盘口", [
@@ -181,7 +197,7 @@ table{width:100%;border-collapse:collapse}td{padding:10px 12px;border-bottom:1px
 td:first-child{width:72px;color:#93c5fd}td:nth-child(2){width:390px}code{color:#bfdbfe;background:#172033;border:1px solid #26364f;border-radius:8px;padding:3px 6px}
 .note{color:#9fb2d4;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;margin:12px 0}
 a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</h1></header><main>
-<div class="note">这是中文 API 说明页。程序化调试仍可使用 <a href="/openapi.json">/openapi.json</a>；页面入口包括 <a href="/ui">行情监控</a>、<a href="/screener">筛选系统</a>、<a href="/backtest">交易回测</a>。</div>
+<div class="note">这是中文 API 总览页。需要填写参数并直接调用接口时使用 <a href="/docs">/docs 交互调试页</a>；程序化调试可使用 <a href="/openapi.json">/openapi.json</a>；页面入口包括 <a href="/ui">行情监控</a>、<a href="/screener">筛选系统</a>、<a href="/backtest">交易回测</a>。</div>
 """ + "".join(sections) + "</main></body></html>"
 
 
