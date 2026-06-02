@@ -1,5 +1,19 @@
 # Quant Data Gateway V3.18.3 / Stable Recovery
 
+## V3.22 研究回测与纸面交易增强
+
+本分支继续保留 V3.20/V3.21 兼容入口，并新增 V3.22 核心能力：
+
+- 评分溯源：`BacktestResult.score_provenance` 记录因子贡献、门禁、策略 hash、PIT 覆盖率和 no-lookahead 状态。
+- 大盘/个股/策略适配：`quant_data/research/` 提供大盘状态、个股分类和策略族建议。
+- 交易规则配置：`config/market_rules/a_share_rules.yaml` 管理涨跌停、T+1、买入手数和卖出零股，执行层不再直接硬编码板块前缀。
+- 资金与仓位：支持固定、评分、波动率、ATR、定投、金字塔、Kelly 等模式，并输出仓位利用和现金拖累。
+- 历史筛选快照：`/api/screener/historical-snapshot` 按决策时点重建筛选结果，避免回测偷看未来。
+- 纸面交易：`/api/realtime-paper/*` 仍然只做模拟，新增人工确认队列，不连接真实券商。
+- 中文 API：`/docs-cn` 是中文总览，`/docs` 保留 Swagger Try it out，可直接调参数。
+
+配套文档见 `docs/QDG_AUTOTRADING_V1.md`、`docs/QDG_SCORE_PROVENANCE_SPEC.md`、`docs/QDG_PIT_DATA_REQUIREMENTS.md` 和 `docs/TEST_PLAN_V322.md`。
+
 面向 A 股和 ETF 的研究辅助系统。V3.18.3 把 WordSource、筛选快照、信息快照、K 线缓存、技术因子、全球行业映射、市场行为标注和前端恢复状态接成闭环：页面打开不再默认空白，返回筛选页不丢结果，详情页优先复用缓存。
 
 ## 启动方式

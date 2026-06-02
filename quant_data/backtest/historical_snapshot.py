@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Any
 
 from .data_loader import date_text, field_value, number
+from quant_data.factors.factor_engine import FactorEngine
+from quant_data.research.market_state_engine import MarketStateEngine
+from quant_data.research.stock_classifier import StockClassifier
+from quant_data.research.strategy_suitability import StrategySuitabilityEngine
 
 
 class HistoricalScreenerSnapshotBuilder:
     """Build point-in-time screener-like rows from historical bars only."""
+
+    def __init__(self) -> None:
+        self.factor_engine = FactorEngine()
+        self.market_engine = MarketStateEngine()
+        self.classifier = StockClassifier()
+        self.suitability = StrategySuitabilityEngine()
 
     def build(self, symbol: str, bars: list[Any]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -46,6 +57,56 @@ class HistoricalScreenerSnapshotBuilder:
                 }
             )
         return rows
+
+    def build_historical_snapshot(
+        self,
+        trade_date: Any,
+        decision_time: Any,
+        universe: list[str] | None = None,
+        *,
+        bars_by_symbol: dict[str, list[Any]] | None = None,
+        market_inputs: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        bars_by_symbol = bars_by_symbol or {}
+        symbols = universe or sorted(bars_by_symbol)
+        asof = str(decision_time)
+        market_state = self.market_engine.compute(market_inputs or {}, asof_time=asof)
+        rows: list[dict[str, Any]] = []
+        source_refs: list[str] = ["PIT:bars"]
+        for symbol in symbols:
+            history = [x for x in bars_by_symbol.get(symbol, []) if date_text(field_value(x, "ts", field_value(x, "date", ""))) <= str(trade_date)[:10]]
+            if not history:
+                continue
+            row = (self.build(symbol, history)[-1:] or [{}])[0]
+            factors = self.factor_engine.compute(symbol, history, asof_time=asof)
+            profile = self.classifier.classify(symbol, {**row, "technical_score": factors.score})
+            suitability = self.suitability.evaluate(symbol, asof, market_state, profile, factors, {})
+            row.update(
+                {
+                    "symbol": symbol,
+                    "asof_time": asof,
+                    "snapshot_trade_date": str(trade_date)[:10],
+                    "strategy_family": suitability.strategy_family,
+                    "suitability_reason": "；".join(suitability.reasons or suitability.warnings),
+                    "factor_score": factors.score,
+                    "market_regime": market_state.market_regime,
+                    "source_refs": sorted(set(source_refs + factors.source_refs)),
+                }
+            )
+            rows.append(row)
+        digest = sha256(repr([(r.get("symbol"), r.get("score"), r.get("strategy_family")) for r in rows]).encode("utf-8")).hexdigest()[:16]
+        return {
+            "snapshot_id": f"snap-{str(trade_date)[:10]}-{digest}",
+            "trade_date": str(trade_date)[:10],
+            "decision_time": asof,
+            "asof_time": asof,
+            "rows": rows,
+            "row_count": len(rows),
+            "market_state": market_state.to_dict(),
+            "source_refs": source_refs,
+            "immutable_hash": digest,
+            "pit_note": "只使用 trade_date/decision_time 之前可见的 bars；未指定的财报/公告/资金流以缺失处理。",
+        }
 
 
 def _clip(value: float) -> float:

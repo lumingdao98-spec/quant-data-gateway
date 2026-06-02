@@ -6,12 +6,15 @@ from typing import Any, Literal
 
 SizingMode = Literal[
     "fixed_percent",
+    "fixed_fractional",
     "equal_weight",
     "score_weighted",
     "volatility_target",
     "atr_risk",
     "fixed_risk_per_trade",
     "fractional_kelly",
+    "kelly_capped",
+    "equal_risk_contribution",
     "pyramid",
     "dca",
     "core_satellite",
@@ -93,7 +96,12 @@ class PositionSizingDecision:
     attribution: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["actual_weight"] = self.attribution.get("actual_weight", self.target_weight)
+        data["risk_budget_used"] = self.attribution.get("risk_budget_used", self.risk_per_trade_pct)
+        data["position_utilization"] = self.attribution.get("position_utilization", 0.0)
+        data["cash_drag"] = self.attribution.get("cash_drag", 0.0)
+        return data
 
 
 class PositionSizer:
@@ -128,6 +136,10 @@ class PositionSizer:
                 "win_streak": req.win_streak,
                 "total_exposure": req.total_exposure,
                 "industry_exposure": req.industry_exposure,
+                "actual_weight": round(target_value / max(equity, 1.0), 6),
+                "risk_budget_used": round(min(target_weight, risk_pct), 6),
+                "position_utilization": round(min(1.0, (req.total_exposure - req.current_weight + target_weight) / max(cfg.max_total_exposure, 1e-9)), 6),
+                "cash_drag": round(max(0.0, req.cash - max(0.0, order_value)) / max(equity, 1.0), 6),
             }
         )
         return PositionSizingDecision(
@@ -146,6 +158,12 @@ class PositionSizer:
     def _raw_weight(self, req: PositionSizingRequest, risk_pct: float) -> tuple[float, list[str], dict[str, Any]]:
         cfg = self.config
         mode = cfg.sizing_mode
+        if mode == "fixed_fractional":
+            mode = "fixed_percent"
+        elif mode == "kelly_capped":
+            mode = "fractional_kelly"
+        elif mode == "equal_risk_contribution":
+            mode = "atr_risk"
         notes: list[str] = []
         attrs: dict[str, Any] = {}
         base = req.signal_target_weight if req.signal_target_weight is not None else cfg.max_single_position_pct
@@ -255,3 +273,45 @@ class PositionSizer:
         if shares <= 0:
             return 0
         return int(shares // lot) * lot
+
+
+def size_position(
+    signal: Any,
+    portfolio: Any,
+    risk_budget: Any,
+    security_master: Any,
+    latest_bar: Any,
+    sizing_policy: PositionSizingConfig | dict[str, Any] | None,
+) -> PositionSizingDecision:
+    """V3.22 functional adapter matching the design-document signature."""
+
+    cfg = sizing_policy if isinstance(sizing_policy, PositionSizingConfig) else PositionSizingConfig(**(sizing_policy or {}))
+    symbol = str(_get(signal, "symbol") or _get(security_master, "symbol") or "")
+    price = float(_get(latest_bar, "close") or _get(latest_bar, "price") or _get(signal, "price") or 0.0)
+    equity = float(_get(portfolio, "equity") or _get(portfolio, "cash") or cfg.initial_cash)
+    cash = float(_get(portfolio, "cash") or 0.0)
+    current_value = float(_get(portfolio, "current_position_value") or _get(portfolio, "market_value") or 0.0)
+    current_weight = current_value / max(equity, 1.0)
+    req = PositionSizingRequest(
+        symbol=symbol,
+        price=price,
+        equity=equity,
+        cash=cash,
+        current_position_value=current_value,
+        current_weight=current_weight,
+        score=float(_get(signal, "final_score") or _get(signal, "score") or 50.0),
+        target_positions=int(_get(portfolio, "target_positions") or 1),
+        total_exposure=float(_get(portfolio, "exposure") or current_weight),
+        volatility_pct=_get(latest_bar, "volatility_pct"),
+        atr=_get(latest_bar, "atr"),
+        stop_distance_pct=_get(risk_budget, "stop_distance_pct"),
+        signal_target_weight=_get(signal, "target_weight"),
+        reason=str(_get(signal, "reason_summary") or _get(signal, "reason") or ""),
+    )
+    return PositionSizer(cfg).size(req)
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)

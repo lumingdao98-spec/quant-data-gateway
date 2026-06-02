@@ -42,6 +42,8 @@ from quant_data.services.backtest_service import BacktestConfig as LegacyBacktes
 from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategyHorizonConfig, StrategySignal
 from quant_data.backtest.position_sizing import PositionSizingConfig
 from quant_data.backtest.engine import BacktestEngine, BacktestEngineV320
+from quant_data.backtest.historical_snapshot import HistoricalScreenerSnapshotBuilder
+from quant_data.backtest.market_rules import MarketRuleEngine
 from quant_data.backtest.optimizer import ParameterOptimizer
 from quant_data.backtest.paper_broker import PaperBroker
 from quant_data.backtest.report import build_report
@@ -89,6 +91,8 @@ backtest_service = BacktestService()
 backtest_engine_v319 = BacktestEngine(service)
 backtest_engine_v320 = BacktestEngineV320(service)
 backtest_storage_v319 = BacktestStorage()
+historical_snapshot_builder_v322 = HistoricalScreenerSnapshotBuilder()
+market_rule_engine_v322 = MarketRuleEngine.default()
 paper_broker_v319 = PaperBroker(V319BacktestConfig())
 paper_trading_gateway_v320 = PaperTradingGateway()
 realtime_paper_engine_v321 = RealtimePaperEngine(
@@ -107,7 +111,7 @@ FALLBACK_STRATEGIES = [
     {"key": "atr_risk", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
     {"key": "position_stop", "name": "仓位与止损", "category": "回测/风控/执行", "description": "结合支撑、ATR 与等级输出仓位/止损建议。", "enabled": True, "default_weight": 1.0, "tags": ["position"]},
 ]
-app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与量化系统数据网关", docs_url=None, redoc_url=None)
+app = FastAPI(title="量化数据网关 API", version=__version__, description="A股/ETF 实时行情、筛选、回测、评分溯源与纸面交易系统。", docs_url=None, redoc_url=None)
 
 def _make_snapshot_id(symbol: str | None = None, limit: int | None = None) -> str:
     core = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -139,8 +143,96 @@ def swagger_api_docs() -> HTMLResponse:
     )
 
 
+def _render_chinese_api_docs() -> str:
+    groups = [
+        (
+            "行情与盘口",
+            [
+                ("GET", "/api/quotes?symbols=300750,600519&force=false", "批量实时行情。force=false 时优先使用交易时段缓存，休市后不反复刷新。"),
+                ("GET", "/api/timeline/{symbol}?force=false", "分时走势。只返回真实分时或同交易日缓存，不伪造分时线。"),
+                ("GET", "/api/orderbook/{symbol}?force=true", "五档盘口。公开源缺 Level-2 时返回缺失原因、委比和委差兜底字段。"),
+                ("GET", "/api/detail/{symbol}?frame=1d&limit=520&adjust=qfq", "K线详情，支持分时、日K、周K、月K、副图、行为标注和缓存状态。"),
+            ],
+        ),
+        (
+            "筛选与策略",
+            [
+                ("GET", "/api/strategy/library", "完整策略库。返回 key、中文名、分类、说明、默认权重和默认选中项。"),
+                ("GET", "/api/screener/run", "执行筛选，支持股票池、策略组合、排序、缓存快照、技术面和信息面字段。"),
+                ("GET", "/api/cache/screener/latest", "读取最近筛选快照，用于页面恢复和休市缓存兜底。"),
+                ("GET", "/api/technical/factors/{symbol}", "技术因子矩阵，返回指标分类、原始值、解释、方向和评分。"),
+            ],
+        ),
+        (
+            "回测系统",
+            [
+                ("GET", "/api/backtest/run", "单标的快速回测。参数可在 /docs 中直接调试，保留英文键名以兼容前端。"),
+                ("POST", "/api/backtest/run", "V3.20/V3.22 科学回测入口，支持多标的、订单撮合、成本、滑点、组合约束和评分溯源。"),
+                ("GET", "/api/backtest/v322/readiness", "V3.22 能力检查：评分溯源、规则引擎、资金管理、纸面交易和历史快照。"),
+                ("GET", "/api/market-rules/profiles", "交易规则配置，按生效日期返回涨跌停、T+1、买入手数、卖出零股等规则。"),
+                ("GET", "/backtest?symbol=300750", "回测可视化页面，K线标注买入、卖出、异常点，并提供买卖流水内置窗口。"),
+            ],
+        ),
+        (
+            "纸面交易",
+            [
+                ("POST", "/api/realtime-paper/start", "启动盘中纸面交易，只模拟不连真实券商。"),
+                ("GET", "/api/realtime-paper/status", "查看资金、持仓、最近信号、风险拦截和人工确认队列数量。"),
+                ("GET", "/api/realtime-paper/orders", "纸面订单流水。"),
+                ("GET", "/api/realtime-paper/confirmations", "需要人工确认的候选交易。"),
+            ],
+        ),
+        (
+            "信息面与大盘",
+            [
+                ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
+                ("GET", "/api/market/regime", "大盘环境分析，可用于评分里的市场情绪权重。"),
+                ("GET", "/api/screener/historical-snapshot?symbols=300750,600438", "按决策时点重建筛选快照，保证回测不偷看未来。"),
+            ],
+        ),
+    ]
+    params = [
+        ("symbol", "标的代码", "300750、600438、510300"),
+        ("strategy", "回测策略", "score_driven、score_reversal、combo_signal"),
+        ("strategy_combo", "组合策略 key，逗号分隔", "ma_repair,macd_cross,risk_control"),
+        ("initial_cash", "初始资金", "100000"),
+        ("position_pct", "仓位比例", "0.5 到 1.0"),
+        ("stop_loss_pct / take_profit_pct", "止损 / 止盈百分比", "8 / 20；0 表示关闭固定止盈"),
+        ("position_sizing", "仓位模式", "score_weighted、volatility_target、atr_risk、dca、pyramid"),
+        ("horizon", "交易周期", "short_term、swing、position、dca、hybrid"),
+        ("market_weight", "大盘情绪权重", "0.14，可与其他三面权重一起调"),
+        ("force", "是否强制刷新", "false；休市确认后建议保持 false"),
+    ]
+    sections = []
+    for title, rows in groups:
+        items = "".join(
+            f"<tr><td><b>{method}</b></td><td><code>{path}</code></td><td>{desc}</td></tr>"
+            for method, path, desc in rows
+        )
+        sections.append(f"<section><h2>{title}</h2><table><tbody>{items}</tbody></table></section>")
+    param_rows = "".join(
+        f"<tr><td><code>{key}</code></td><td>{desc}</td><td>{example}</td></tr>"
+        for key, desc, example in params
+    )
+    sections.append(f"<section><h2>常用参数中文说明</h2><table><tbody>{param_rows}</tbody></table></section>")
+    return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>量化数据网关 API 文档</title><style>
+body{margin:0;background:#0b1020;color:#dbeafe;font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif;line-height:1.55}
+header{position:sticky;top:0;background:#101827;border-bottom:1px solid #283956;padding:16px 22px;z-index:2}
+h1{margin:0;font-size:24px}main{max-width:1160px;margin:0 auto;padding:18px 18px 40px}
+section{background:#101827;border:1px solid #283956;border-radius:12px;margin:12px 0;overflow:hidden}
+h2{font-size:18px;margin:0;padding:12px 14px;background:#141e32;border-bottom:1px solid #283956}
+table{width:100%;border-collapse:collapse}td{padding:10px 12px;border-bottom:1px solid rgba(40,57,86,.72);vertical-align:top}
+td:first-child{width:180px;color:#93c5fd}td:nth-child(2){width:430px}code{color:#bfdbfe;background:#172033;border:1px solid #26364f;border-radius:8px;padding:3px 6px}
+.note{color:#9fb2d4;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;margin:12px 0}
+a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</h1></header><main>
+<div class="note">中文页用于快速理解接口。需要直接填写参数并调用时，请打开 <a href="/docs">/docs API 调试页</a>；它保留 Try it out，可调所有查询参数和 POST JSON。程序化调用可读取 <a href="/openapi.json">/openapi.json</a>。</div>
+""" + "".join(sections) + "</main></body></html>"
+
+
 @app.get("/docs-cn", response_class=HTMLResponse, include_in_schema=False)
 def chinese_api_docs() -> str:
+    return _render_chinese_api_docs()
     groups = [
         ("行情与盘口", [
             ("GET", "/api/quotes?symbols=300750,600519&force=false", "批量实时行情，返回最新价、涨跌幅、成交额、换手率、量比、市值、缺失原因。"),
@@ -1367,6 +1459,86 @@ def market_regime(max_pages: int = 2, page_size: int = 100) -> dict:
     regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
     return {"ok": True, "data": regime, "market_regime": regime, "count": len(quotes)}
 
+
+@app.get("/api/market-rules/profiles")
+def market_rule_profiles(symbol: str = "", asof: str = "") -> dict:
+    profiles = {key: value.to_dict() for key, value in market_rule_engine_v322.profiles.items()}
+    resolved = None
+    if symbol:
+        resolved = market_rule_engine_v322.resolve_profile(symbol, asof=asof or None).to_dict()
+    return {
+        "ok": True,
+        "version": market_rule_engine_v322.version,
+        "timezone": market_rule_engine_v322.timezone,
+        "count": len(profiles),
+        "profiles": profiles,
+        "resolved": resolved,
+        "note": "交易规则来自 config/market_rules/a_share_rules.yaml，执行撮合不再在 execution.py 里硬编码前缀。",
+    }
+
+
+@app.get("/api/backtest/v322/readiness")
+def backtest_v322_readiness() -> dict:
+    return {
+        "ok": True,
+        "version": "V3.22",
+        "capabilities": {
+            "score_provenance": True,
+            "pit_historical_snapshot": True,
+            "market_rule_engine": True,
+            "position_sizing": True,
+            "money_management": True,
+            "exit_policy": True,
+            "realtime_paper": True,
+            "human_confirm": True,
+            "paper_only_no_broker": True,
+        },
+        "endpoints": [
+            "/api/backtest/run",
+            "/api/backtest/v322/readiness",
+            "/api/market-rules/profiles",
+            "/api/screener/historical-snapshot",
+            "/api/realtime-paper/status",
+            "/api/realtime-paper/confirmations",
+        ],
+        "note": "V3.22 回测信号使用历史可见数据和评分溯源；真实交易仍需要人工复核，本系统只做纸面模拟。",
+    }
+
+
+@app.get("/api/screener/historical-snapshot")
+def screener_historical_snapshot(
+    symbols: str = "300750,600438",
+    trade_date: str = "",
+    decision_time: str = "",
+    limit: int = 260,
+    adjust: str = "qfq",
+) -> dict:
+    symbol_list = _parse_symbol_text(symbols) if symbols else []
+    symbol_list = symbol_list[: max(1, min(len(symbol_list) or 1, 80))]
+    today = datetime.now().strftime("%Y-%m-%d")
+    trade_date = str(trade_date or today)[:10]
+    decision_time = str(decision_time or f"{trade_date} 15:10:00")
+    bars_by_symbol = {}
+    for code in symbol_list:
+        try:
+            bars_by_symbol[code] = service.get_kline(
+                code,
+                frame="1d",
+                limit=max(60, min(int(limit or 260), 1200)),
+                adjust=adjust,
+                force_refresh=False,
+            )
+        except Exception:
+            bars_by_symbol[code] = []
+    snapshot = historical_snapshot_builder_v322.build_historical_snapshot(
+        trade_date,
+        decision_time,
+        symbol_list,
+        bars_by_symbol=bars_by_symbol,
+        market_inputs={"symbol_count": len(symbol_list)},
+    )
+    return {"ok": True, "data": snapshot, "snapshot": snapshot}
+
 @app.get("/api/screener/strategies")
 def screener_strategies() -> dict:
     return {
@@ -1694,6 +1866,27 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
     end_close = _bar_number(bars[-1], "close") if bars else 0.0
     buy_hold = (end_close / start_close - 1) * 100 if start_close else 0.0
     trades = [_v320_compat_trade(t, idx + 1) for idx, t in enumerate(data.get("trades", []))]
+    score_provenance = [dict(x) for x in (data.get("score_provenance") or []) if isinstance(x, dict)]
+    score_provenance_summary = [
+        x.get("summary") or {
+            "symbol": x.get("symbol"),
+            "score": x.get("final_score"),
+            "strategy_family": x.get("strategy_family"),
+            "no_lookahead": x.get("no_lookahead"),
+            "coverage_pct": x.get("coverage_pct"),
+        }
+        for x in score_provenance[:20]
+    ]
+    score_series = [
+        {
+            "date": str(x.get("decision_time") or "")[:10],
+            "symbol": x.get("symbol"),
+            "score": x.get("final_score"),
+            "strategy_family": x.get("strategy_family"),
+            "action": x.get("signal_action"),
+        }
+        for x in score_provenance
+    ]
     fills = [x for x in data.get("fills", []) if not x.get("blocked") and int(x.get("quantity") or 0) > 0]
     trade_events = _hydrate_trade_event_cash(
         _v320_trade_events_from_trades(trades) if trades else _v320_trade_events(fills),
@@ -1728,7 +1921,12 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
         "buy_hold_return_pct": round(buy_hold, 4),
         "excess_return_pct": round(float(metrics.get("total_return_pct", 0.0) or 0.0) - buy_hold, 4),
         "equity_curve": equity_curve,
-        "score_series": [],
+        "score_series": score_series,
+        "score_provenance": score_provenance,
+        "score_provenance_summary": score_provenance_summary,
+        "score_provenance_count": len(score_provenance),
+        "strategy_family": (score_provenance_summary[-1] or {}).get("strategy_family") if score_provenance_summary else "",
+        "market_regime": ((score_provenance[-1] or {}).get("market_state") or {}).get("market_regime") if score_provenance else "",
         "score_formula": {**SCORE_FORMULA, "note": SCORE_FORMULA.get("note", "") + "；本次默认接口已切换到 V3.20 科学回测引擎。"},
         "kline": kline,
         "markers": _v320_markers(fills),
@@ -1819,6 +2017,28 @@ def _augment_v321_backtest_payload(
     metrics.setdefault("MAE", metrics.get("avg_mae_pct", 0.0))
     metrics.setdefault("stop_loss_efficiency", metrics.get("stop_loss_efficiency", 0.0))
     metrics.setdefault("take_profit_efficiency", metrics.get("take_profit_efficiency", 0.0))
+    final_equity = float(data.get("final_equity") or 0.0)
+    cash = _safe_float((data.get("position_summary") or {}).get("cash"))
+    if final_equity > 0 and cash is not None:
+        metrics.setdefault("cash_drag_pct", round(max(0.0, min(cash / final_equity * 100.0, 100.0)), 4))
+        metrics.setdefault("position_utilization_pct", round(max(0.0, min(100.0 - metrics["cash_drag_pct"], 100.0)), 4))
+    else:
+        metrics.setdefault("cash_drag_pct", 0.0)
+        metrics.setdefault("position_utilization_pct", 0.0)
+    score_rows = [x for x in (data.get("score_provenance") or []) if isinstance(x, dict)]
+    data.setdefault(
+        "score_provenance_summary",
+        [
+            x.get("summary") or {
+                "symbol": x.get("symbol"),
+                "score": x.get("final_score"),
+                "strategy_family": x.get("strategy_family"),
+                "no_lookahead": x.get("no_lookahead"),
+                "coverage_pct": x.get("coverage_pct"),
+            }
+            for x in score_rows[:20]
+        ],
+    )
     horizon_cfg = StrategyHorizonConfig(horizon=horizon if horizon in {"intraday_paper", "short_term", "swing", "position", "dca", "hybrid"} else "swing")
     valid_sizing_modes = {
         "fixed_percent",
@@ -2371,6 +2591,39 @@ def realtime_paper_signals(limit: int = 200) -> dict:
 @app.get("/api/realtime-paper/audit")
 def realtime_paper_audit(limit: int = 300) -> dict:
     return realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000)))
+
+
+@app.get("/api/realtime-paper/confirmations")
+def realtime_paper_confirmations(status: str = "pending", limit: int = 200) -> dict:
+    rows = realtime_paper_engine_v321.human_confirm_queue.list(
+        status=status or None,
+        limit=max(1, min(int(limit or 200), 1000)),
+    )
+    return {"ok": True, "data": rows, "count": len(rows), "paper_only": True}
+
+
+@app.post("/api/realtime-paper/confirmations/{task_id}/approve")
+def realtime_paper_confirm_approve(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        task = realtime_paper_engine_v321.human_confirm_queue.approve(
+            task_id,
+            operator=str(payload.get("operator") or "paper_user"),
+        )
+        return {"ok": True, "data": task.to_dict(), "paper_only": True}
+    except KeyError as exc:
+        return {"ok": False, "message": str(exc), "paper_only": True}
+
+
+@app.post("/api/realtime-paper/confirmations/{task_id}/reject")
+def realtime_paper_confirm_reject(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        task = realtime_paper_engine_v321.human_confirm_queue.reject(
+            task_id,
+            operator=str(payload.get("operator") or "paper_user"),
+        )
+        return {"ok": True, "data": task.to_dict(), "paper_only": True}
+    except KeyError as exc:
+        return {"ok": False, "message": str(exc), "paper_only": True}
 
 
 @app.post("/api/realtime-paper/tick")

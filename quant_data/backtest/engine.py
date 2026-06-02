@@ -8,9 +8,15 @@ from .data_loader import BacktestDataLoader, date_text, field_value, number
 from .execution import ExecutionSimulator
 from .models import BacktestConfig, BacktestResult, Order, StrategySignal, Trade
 from .portfolio import PortfolioManager
+from .provenance_report import summarize_many
 from .quality_filter import StrategyQualityFilter
 from .risk import calculate_metrics
 from .signal_adapter import SignalAdapter
+from quant_data.factors.factor_engine import FactorEngine
+from quant_data.factors.score_provenance import ScoringPolicy, build_score_provenance
+from quant_data.research.market_state_engine import MarketStateEngine
+from quant_data.research.stock_classifier import StockClassifier
+from quant_data.research.strategy_suitability import StrategySuitabilityEngine
 
 
 class BacktestEngine:
@@ -21,6 +27,10 @@ class BacktestEngine:
         self.adapter = SignalAdapter()
         self.execution = ExecutionSimulator()
         self.quality_filter = StrategyQualityFilter()
+        self.factor_engine = FactorEngine()
+        self.market_engine = MarketStateEngine()
+        self.stock_classifier = StockClassifier()
+        self.suitability_engine = StrategySuitabilityEngine()
 
     def run(
         self,
@@ -57,6 +67,7 @@ class BacktestEngine:
         open_trades: dict[str, Trade] = {}
         pending_orders: list[Order] = []
         states = []
+        score_provenance: list[dict[str, Any]] = []
         if len(calendar) <= config.warmup_bars + 1:
             warnings.append("样本不足以完成 warmup 后回测")
         for day_index, current_date in enumerate(calendar):
@@ -102,6 +113,7 @@ class BacktestEngine:
             generated = filtered
             if attribution.get("blocked"):
                 warnings.extend(attribution["blocked"][:5])
+            score_provenance.extend(self._score_provenance_for_signals(generated, bars_by_symbol, current_date, day_index))
             stop_orders = portfolio.stop_orders(current_date, todays_bars)
             orders = [*portfolio.build_orders(generated, current_date), *stop_orders]
             for order in orders:
@@ -125,6 +137,8 @@ class BacktestEngine:
                 trades.append(trade)
         equity_curve = [s.to_dict() for s in states]
         metrics = calculate_metrics(equity_curve, trades, all_fills)
+        metrics["score_provenance_coverage"] = 100.0 if score_provenance else 0.0
+        metrics["score_provenance_count"] = len(score_provenance)
         ended = datetime.now().isoformat(timespec="seconds")
         return BacktestResult(
             run_id=run_id,
@@ -139,6 +153,7 @@ class BacktestEngine:
             portfolio_states=states,
             equity_curve=equity_curve,
             metrics=metrics,
+            score_provenance=score_provenance,
             data_quality={"symbols": reports, "no_lookahead": True, "pit_note": "信号日生成，下一交易日成交。"},
             warnings=warnings,
             errors=errors,
@@ -249,6 +264,42 @@ class BacktestEngine:
             trade.exit_policy = self._exit_policy_from_reason(order.reason)
             trade.risk_reward_realized = round((trade.pnl_pct / abs(self._stop_pct_from_reason(order.reason))) if self._stop_pct_from_reason(order.reason) else 0.0, 4)
             trades.append(trade)
+
+    def _score_provenance_for_signals(
+        self,
+        signals: list[StrategySignal],
+        bars_by_symbol: dict[str, list[Any]],
+        current_date: str,
+        day_index: int,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        market_state = self.market_engine.compute({"index_change_pct": 0}, asof_time=current_date)
+        for signal in signals:
+            history = bars_by_symbol.get(signal.symbol, [])[: day_index + 1]
+            factors = self.factor_engine.compute(signal.symbol, history, asof_time=current_date)
+            profile = self.stock_classifier.classify(signal.symbol, {**(signal.features or {}), "technical_score": factors.score})
+            suitability = self.suitability_engine.evaluate(signal.symbol, current_date, market_state, profile, factors, {})
+            policy = ScoringPolicy(
+                policy_id="v3.22-backtest-daily",
+                base_score=50.0,
+                weights={x.factor_key: x.weight for x in factors.factors},
+            )
+            provenance = build_score_provenance(
+                signal.symbol,
+                decision_time=current_date,
+                asof_time=current_date,
+                strategy_family=suitability.strategy_family,
+                factor_values=factors.factors,
+                gate_results=[],
+                scoring_policy=policy,
+            )
+            data = provenance.to_dict()
+            data["signal_action"] = signal.action
+            data["signal_reason"] = signal.reason
+            data["suitability"] = suitability.to_dict()
+            data["summary"] = summarize_many([data], limit=1)[0]
+            rows.append(data)
+        return rows
 
     @staticmethod
     def _exit_policy_from_reason(reason: str) -> str:

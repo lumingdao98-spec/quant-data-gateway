@@ -5,6 +5,7 @@ from .paper_gateway import PaperTradingGateway
 from .risk_gateway import RiskGateway, RiskGatewayConfig, RiskResult
 from .anomaly_guard import AnomalyGuard, AnomalyResult
 from .data_freshness import DataFreshnessConfig, DataFreshnessGuard, DataFreshnessResult
+from .human_confirm_queue import HumanConfirmQueue, HumanConfirmTask
 from .order_manager import ManagedOrder, OrderManager
 from .paper_account import PaperAccount, PaperAccountPosition, PaperFill
 from .realtime_paper_engine import RealtimePaperEngine
@@ -18,6 +19,8 @@ __all__ = [
     "DataFreshnessConfig",
     "DataFreshnessGuard",
     "DataFreshnessResult",
+    "HumanConfirmQueue",
+    "HumanConfirmTask",
     "ManagedOrder",
     "OrderManager",
     "PaperAccount",

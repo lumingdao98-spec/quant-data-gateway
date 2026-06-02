@@ -1,6 +1,5 @@
 """Backtest and paper-trading foundation for Quant Data Gateway V3.20."""
 
-from .engine import BacktestEngine, BacktestEngineV320
 from .models import (
     BacktestConfig,
     BacktestResult,
@@ -14,6 +13,15 @@ from .models import (
 from .money_management import AccountSnapshot, CashLedgerEntry, MoneyManager
 from .position_sizing import PositionSizingConfig, PositionSizingDecision, PositionSizingRequest, PositionSizer
 from .strategy_horizon import StrategyHorizonConfig
+
+
+def __getattr__(name: str):
+    if name in {"BacktestEngine", "BacktestEngineV320"}:
+        from .engine import BacktestEngine, BacktestEngineV320
+
+        return {"BacktestEngine": BacktestEngine, "BacktestEngineV320": BacktestEngineV320}[name]
+    raise AttributeError(name)
+
 
 __all__ = [
     "AccountSnapshot",

@@ -40,6 +40,31 @@ class CashLedgerEntry:
         return asdict(self)
 
 
+@dataclass(slots=True)
+class MoneyManagementPolicy:
+    mode: str = "full_compounding"
+    cap_multiple: float = 1.5
+    dca_amount: float = 1000.0
+    core_cash_reserve_pct: float = 0.05
+    anti_martingale_step: float = 0.12
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class CashPolicyResult:
+    mode: str
+    deployable_cash: float
+    reserved_cash: float
+    reinvestable_cash: float
+    cash_drag: float
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class MoneyManager:
     def __init__(
         self,
@@ -164,3 +189,43 @@ class MoneyManager:
 
     def ledger_dicts(self) -> list[dict[str, Any]]:
         return [x.to_dict() for x in self.ledger]
+
+    def cash_policy(self, policy: MoneyManagementPolicy | dict[str, Any] | None = None, *, win_streak: int = 0, loss_streak: int = 0) -> CashPolicyResult:
+        policy = policy if isinstance(policy, MoneyManagementPolicy) else MoneyManagementPolicy(**(policy or {}))
+        mode = policy.mode
+        notes: list[str] = []
+        base_available = self.available_cash
+        if mode == "static_notional":
+            deployable = max(0.0, min(base_available, self.initial_cash - self.market_value))
+            notes.append("静态本金：盈利不自动扩大可用本金")
+        elif mode == "full_compounding":
+            deployable = base_available
+            notes.append("全复利：盈利进入下一次仓位计算")
+        elif mode == "capped_compounding":
+            cap = self.initial_cash * max(1.0, policy.cap_multiple)
+            deployable = max(0.0, min(base_available, cap - self.market_value))
+            notes.append(f"封顶复利：权益使用上限 {policy.cap_multiple:.2f} 倍初始本金")
+        elif mode == "dca_schedule":
+            deployable = min(base_available, max(0.0, policy.dca_amount))
+            notes.append("定投节奏：每次只释放固定金额")
+        elif mode == "core_satellite":
+            reserve = max(self.reserved_cash, self.equity * policy.core_cash_reserve_pct)
+            deployable = max(0.0, self.cash - reserve)
+            notes.append("核心卫星：保留核心现金缓冲")
+        elif mode == "anti_martingale":
+            scale = 1 + max(0, win_streak) * policy.anti_martingale_step
+            scale = max(0.35, scale - max(0, loss_streak) * policy.anti_martingale_step)
+            deployable = min(base_available, base_available * scale)
+            notes.append("反马丁：盈利后小幅放大风险，亏损后缩小")
+        else:
+            deployable = base_available
+            notes.append("未知资金模式回退全复利")
+        cash_drag = self.cash / max(self.equity, 1.0)
+        return CashPolicyResult(
+            mode=mode,
+            deployable_cash=round(max(0.0, deployable), 6),
+            reserved_cash=round(max(self.reserved_cash, self.cash - max(0.0, deployable)), 6),
+            reinvestable_cash=round(self.reinvestable_cash, 6),
+            cash_drag=round(cash_drag, 6),
+            notes=notes,
+        )

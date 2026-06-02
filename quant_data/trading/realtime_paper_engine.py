@@ -6,6 +6,7 @@ from typing import Any
 from .anomaly_guard import AnomalyGuard
 from .audit_log import AuditLog
 from .data_freshness import DataFreshnessGuard
+from .human_confirm_queue import HumanConfirmQueue
 from .order_manager import OrderManager
 from .paper_account import PaperAccount
 from .realtime_state import RealtimePaperConfig, RealtimePaperState
@@ -23,6 +24,7 @@ class RealtimePaperEngine:
         signal_fusion: SignalFusionEngine | None = None,
         anomaly_guard: AnomalyGuard | None = None,
         freshness_guard: DataFreshnessGuard | None = None,
+        human_confirm_queue: HumanConfirmQueue | None = None,
     ) -> None:
         self.account = account or PaperAccount()
         self.audit_log = audit_log or AuditLog()
@@ -31,6 +33,7 @@ class RealtimePaperEngine:
         self.signal_fusion = signal_fusion or SignalFusionEngine()
         self.anomaly_guard = anomaly_guard or AnomalyGuard()
         self.freshness_guard = freshness_guard or DataFreshnessGuard()
+        self.human_confirm_queue = human_confirm_queue or HumanConfirmQueue()
         self.state = RealtimePaperState()
         self.signals: list[UnifiedSignal] = []
         self.tick_log: list[dict[str, Any]] = []
@@ -69,6 +72,7 @@ class RealtimePaperEngine:
             "portfolio": self.account.snapshot(),
             "order_count": len(self.order_manager.orders),
             "signal_count": len(self.signals),
+            "human_confirm_pending": len(self.human_confirm_queue.list(status="pending")),
         }
 
     def portfolio(self) -> dict[str, Any]:
@@ -158,17 +162,31 @@ class RealtimePaperEngine:
                 now=now,
                 manual_replay=manual_replay,
             )
+            confirm_task = None
             if risk["approved"] and risk["decision"] == "allow":
                 self.order_manager.simulate_fill(order, fill_price=price, fee_rate=self.state.config.fee_rate, slippage_rate=self.state.config.slippage_rate)
+                self.audit_log.record("fill_arrived", {"order": order.to_dict(), "paper_only": True})
             else:
                 self.order_manager.reject(order, "；".join(risk.get("risk_reasons") or risk.get("warnings") or ["风控未通过"]))
+                self.audit_log.record("risk_blocked", {"order": order.to_dict(), "risk": risk, "paper_only": True})
+                if risk.get("required_confirm") or risk.get("require_human_confirmation"):
+                    confirm_task = self.human_confirm_queue.enqueue(
+                        symbol=symbol,
+                        action=signal.action,
+                        reason="；".join(risk.get("warnings") or ["需要人工确认"]),
+                        risk_flags=list(risk.get("warnings") or []),
+                        payload={"order": order.to_dict(), "risk": risk, "signal": signal.to_dict()},
+                    )
             row = order.to_dict()
             row["risk"] = risk
+            if confirm_task is not None:
+                row["human_confirm_task"] = confirm_task.to_dict()
             orders.append(row)
         self.account.mark_to_market({symbol: price})
         curve = {"timestamp": now.isoformat(timespec="seconds"), **self.account.snapshot()}
         self.portfolio_curve.append(curve)
         self.audit_log.record("realtime_paper_tick", {"symbol": symbol, "signal": signal.to_dict(), "orders": orders, "paper_only": True})
+        self.audit_log.record("signal_generated", {"symbol": symbol, "signal": signal.to_dict(), "paper_only": True})
         return {
             "ok": True,
             "state": self.state.to_dict(),
