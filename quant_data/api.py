@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from quant_data import __version__
 from quant_data.market_calendar import MarketCalendar
-from quant_data.models import AssetType, Bar, IntradayPoint, Quote
+from quant_data.models import AssetType, Bar, IntradayPoint, OrderBook, Quote
 from quant_data.services.market_data_service import MarketDataService
 from quant_data.services.screener_service import ScreenerConfig, ScreenerService
 from quant_data.services.watchlist_service import WatchlistService
@@ -38,7 +38,8 @@ from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.services.background_cache_service import BackgroundCacheService
 from quant_data.services.backtest_service import BacktestConfig as LegacyBacktestConfig, BacktestService, SCORE_FORMULA
-from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategySignal
+from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategyHorizonConfig, StrategySignal
+from quant_data.backtest.position_sizing import PositionSizingConfig
 from quant_data.backtest.engine import BacktestEngine, BacktestEngineV320
 from quant_data.backtest.optimizer import ParameterOptimizer
 from quant_data.backtest.paper_broker import PaperBroker
@@ -49,7 +50,15 @@ from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
 from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui, build_paper_ui
-from quant_data.trading import PaperTradingGateway, TradingSignal
+from quant_data.realtime_paper_ui import build_realtime_paper_ui
+from quant_data.trading import (
+    AnomalyGuard,
+    DataFreshnessGuard,
+    PaperTradingGateway,
+    RealtimePaperEngine,
+    SignalFusionEngine,
+    TradingSignal,
+)
 
 
 service = MarketDataService()
@@ -81,6 +90,11 @@ backtest_engine_v320 = BacktestEngineV320(service)
 backtest_storage_v319 = BacktestStorage()
 paper_broker_v319 = PaperBroker(V319BacktestConfig())
 paper_trading_gateway_v320 = PaperTradingGateway()
+realtime_paper_engine_v321 = RealtimePaperEngine(
+    signal_fusion=SignalFusionEngine(),
+    anomaly_guard=AnomalyGuard(),
+    freshness_guard=DataFreshnessGuard(),
+)
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -1279,6 +1293,21 @@ def backtest_run(
     adjust: str = "qfq",
     force: bool = False,
     legacy: bool = False,
+    position_sizing: str = "score_weighted",
+    sizing_mode: str | None = None,
+    horizon: str = "swing",
+    compound_returns: bool = True,
+    dca_amount: float = 1000.0,
+    dca_frequency: str = "monthly",
+    pyramid_step_pct: float = 5.0,
+    pyramid_max_adds: int = 3,
+    atr_risk_pct: float = 2.0,
+    anomaly_filter: bool = True,
+    quality_filter: bool = True,
+    fundamental_weight: float = 0.28,
+    technical_weight: float = 0.34,
+    information_weight: float = 0.24,
+    market_weight: float = 0.14,
 ) -> dict:
     symbol = str(symbol or "300750").strip()
     limit = max(60, min(int(limit or 520), 1200))
@@ -1297,12 +1326,14 @@ def backtest_run(
         bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=force)
         if not force and len(bars) < min(limit, 120):
             bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=True)
+        sizing_mode = str(sizing_mode or position_sizing or "score_weighted")
         if not legacy:
             cfg = V319BacktestConfig(
                 strategy="factor_rule_strategy" if strategy in {x["key"] for x in backtest_service.strategies} else strategy,
                 symbols=[symbol],
                 initial_cash=initial_cash,
                 position_pct=position_pct,
+                sizing=sizing_mode,
                 commission_rate=fee_rate,
                 slippage_bps=slippage_rate * 10000,
                 stop_loss_pct=stop_loss_pct,
@@ -1315,6 +1346,25 @@ def backtest_run(
             )
             result_v320 = backtest_engine_v320.run(cfg, market_data={symbol: bars})
             data = _v320_compatible_backtest_payload(result_v320, symbol, strategy, bars, q, limit, adjust)
+            data = _augment_v321_backtest_payload(
+                data,
+                sizing_mode=sizing_mode,
+                horizon=horizon,
+                compound_returns=compound_returns,
+                dca_amount=dca_amount,
+                dca_frequency=dca_frequency,
+                pyramid_step_pct=pyramid_step_pct,
+                pyramid_max_adds=pyramid_max_adds,
+                atr_risk_pct=atr_risk_pct,
+                anomaly_filter=anomaly_filter,
+                quality_filter=quality_filter,
+                weights={
+                    "fundamental": fundamental_weight,
+                    "technical": technical_weight,
+                    "information": information_weight,
+                    "market": market_weight,
+                },
+            )
             backtest_storage_v319.save(result_v320)
             return _v319_response(
                 True,
@@ -1353,6 +1403,25 @@ def backtest_run(
         result["requested_limit"] = limit
         result["data_quality"]["requested_bars"] = limit
         result["data_quality"]["short_kline"] = len(bars) < min(limit, 120)
+        result = _augment_v321_backtest_payload(
+            result,
+            sizing_mode=sizing_mode,
+            horizon=horizon,
+            compound_returns=compound_returns,
+            dca_amount=dca_amount,
+            dca_frequency=dca_frequency,
+            pyramid_step_pct=pyramid_step_pct,
+            pyramid_max_adds=pyramid_max_adds,
+            atr_risk_pct=atr_risk_pct,
+            anomaly_filter=anomaly_filter,
+            quality_filter=quality_filter,
+            weights={
+                "fundamental": fundamental_weight,
+                "technical": technical_weight,
+                "information": information_weight,
+                "market": market_weight,
+            },
+        )
         return {"ok": True, "data": result}
     except Exception as exc:
         return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}
@@ -1362,13 +1431,17 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
     data = result.to_dict()
     metrics = data.get("metrics", {})
     equity_curve = data.get("equity_curve", [])
-    final_equity = float(equity_curve[-1].get("equity", 0.0)) if equity_curve else float(data.get("config", {}).get("initial_cash", 0.0))
+    initial_cash = float(data.get("config", {}).get("initial_cash", 0.0) or 0.0)
+    final_equity = float(equity_curve[-1].get("equity", 0.0)) if equity_curve else initial_cash
     start_close = _bar_number(bars[0], "close") if bars else 0.0
     end_close = _bar_number(bars[-1], "close") if bars else 0.0
     buy_hold = (end_close / start_close - 1) * 100 if start_close else 0.0
     trades = [_v320_compat_trade(t, idx + 1) for idx, t in enumerate(data.get("trades", []))]
     fills = [x for x in data.get("fills", []) if not x.get("blocked") and int(x.get("quantity") or 0) > 0]
-    trade_events = _v320_trade_events_from_trades(trades) if trades else _v320_trade_events(fills)
+    trade_events = _hydrate_trade_event_cash(
+        _v320_trade_events_from_trades(trades) if trades else _v320_trade_events(fills),
+        initial_cash,
+    )
     cost_summary = {
         "commission": round(sum(float(x.get("commission") or 0) for x in fills), 6),
         "stamp_tax": round(sum(float(x.get("stamp_tax") or 0) for x in fills), 6),
@@ -1457,6 +1530,129 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
         "metrics": metrics,
         "warnings": data.get("warnings", []),
     }
+
+
+def _augment_v321_backtest_payload(
+    data: dict,
+    *,
+    sizing_mode: str,
+    horizon: str,
+    compound_returns: bool,
+    dca_amount: float,
+    dca_frequency: str,
+    pyramid_step_pct: float,
+    pyramid_max_adds: int,
+    atr_risk_pct: float,
+    anomaly_filter: bool,
+    quality_filter: bool,
+    weights: dict[str, float],
+) -> dict:
+    data = dict(data or {})
+    metrics = dict(data.get("metrics") or {})
+    trades = data.get("trades") or []
+    returns = [float(t.get("pnl_pct") or 0.0) for t in trades if isinstance(t, dict)]
+    wins = [x for x in returns if x > 0]
+    losses = [x for x in returns if x < 0]
+    metrics.setdefault("expectancy", round((sum(returns) / len(returns)) if returns else 0.0, 6))
+    metrics.setdefault("payoff_ratio", round((abs(sum(wins) / len(wins)) / abs(sum(losses) / len(losses))) if wins and losses else 0.0, 6))
+    metrics.setdefault("avg_win", round(sum(wins) / len(wins), 6) if wins else 0.0)
+    metrics.setdefault("avg_loss", round(sum(losses) / len(losses), 6) if losses else 0.0)
+    metrics.setdefault("max_consecutive_losses", _max_consecutive_losses(returns))
+    metrics.setdefault("MFE", metrics.get("avg_mfe_pct", 0.0))
+    metrics.setdefault("MAE", metrics.get("avg_mae_pct", 0.0))
+    metrics.setdefault("stop_loss_efficiency", metrics.get("stop_loss_efficiency", 0.0))
+    metrics.setdefault("take_profit_efficiency", metrics.get("take_profit_efficiency", 0.0))
+    horizon_cfg = StrategyHorizonConfig(horizon=horizon if horizon in {"intraday_paper", "short_term", "swing", "position", "dca", "hybrid"} else "swing")
+    valid_sizing_modes = {
+        "fixed_percent",
+        "equal_weight",
+        "score_weighted",
+        "volatility_target",
+        "atr_risk",
+        "fixed_risk_per_trade",
+        "fractional_kelly",
+        "pyramid",
+        "dca",
+        "core_satellite",
+    }
+    sizing_cfg = PositionSizingConfig(
+        sizing_mode=sizing_mode if sizing_mode in valid_sizing_modes else "score_weighted",
+        compound_returns=bool(compound_returns),
+        dca_amount=float(dca_amount or 0.0),
+        dca_frequency=str(dca_frequency or "monthly"),
+        pyramid_step_pct=float(pyramid_step_pct or 0.0) / (100.0 if float(pyramid_step_pct or 0.0) > 1 else 1.0),
+        pyramid_max_adds=int(pyramid_max_adds or 0),
+        risk_per_trade_pct=float(atr_risk_pct or 0.0) / (100.0 if float(atr_risk_pct or 0.0) > 1 else 1.0),
+    )
+    metrics["position_sizing_attribution"] = {
+        "mode": sizing_mode,
+        "compound_returns": bool(compound_returns),
+        "reinvestment_basis": "equity" if compound_returns else "initial_cash",
+        "atr_risk_pct": atr_risk_pct,
+    }
+    metrics["filter_attribution"] = {
+        "quality_filter": bool(quality_filter),
+        "anomaly_filter": bool(anomaly_filter),
+        "weights": weights,
+    }
+    metrics["horizon_attribution"] = horizon_cfg.resolved_rules()
+    data["metrics"] = metrics
+    data["position_sizing_config"] = sizing_cfg.to_dict()
+    data["horizon_config"] = horizon_cfg.to_dict()
+    data["compound_returns"] = bool(compound_returns)
+    data["research_disclaimer"] = "研究辅助，不构成投资建议；回测和实时模拟均不连接真实券商。"
+    data.setdefault("api_labels", {})
+    data["api_labels"].update(
+        {
+            "position_sizing": "资金管理模式",
+            "horizon": "交易周期",
+            "compound_returns": "收益再投资",
+            "expectancy": "期望收益",
+            "payoff_ratio": "赔率",
+            "MFE": "最大有利波动",
+            "MAE": "最大不利波动",
+        }
+    )
+    data.setdefault("params", {})
+    data["params"].update(
+        {
+            "position_sizing": sizing_mode,
+            "horizon": horizon,
+            "compound_returns": bool(compound_returns),
+            "dca_amount": dca_amount,
+            "dca_frequency": dca_frequency,
+            "pyramid_step_pct": pyramid_step_pct,
+            "pyramid_max_adds": pyramid_max_adds,
+            "atr_risk_pct": atr_risk_pct,
+            "quality_filter": bool(quality_filter),
+            "anomaly_filter": bool(anomaly_filter),
+            "three_dimension_weights": weights,
+        }
+    )
+    data.setdefault("params_cn", {})
+    data["params_cn"].update(
+        {
+            "资金管理": sizing_mode,
+            "交易周期": horizon,
+            "收益再投资": "开启" if compound_returns else "关闭",
+            "定投金额": dca_amount,
+            "金字塔加仓": f"{pyramid_step_pct}% / {pyramid_max_adds}次",
+            "ATR风险": f"{atr_risk_pct}%",
+            "三面权重": f"基本{weights.get('fundamental')} / 技术{weights.get('technical')} / 信息{weights.get('information')} / 大盘{weights.get('market')}",
+        }
+    )
+    return data
+
+
+def _max_consecutive_losses(values: list[float]) -> int:
+    best = cur = 0
+    for value in values:
+        if value < 0:
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    return best
 
 
 def _bar_dict(bar: object) -> dict:
@@ -1616,6 +1812,21 @@ def _v320_trade_events_from_trades(trades: list[dict]) -> list[dict]:
             }
         )
     return events
+
+
+def _hydrate_trade_event_cash(events: list[dict], initial_cash: float) -> list[dict]:
+    cash = float(initial_cash or 0.0)
+    hydrated: list[dict] = []
+    for event in events:
+        row = dict(event)
+        try:
+            cash += float(row.get("cash_change") or 0.0)
+        except (TypeError, ValueError):
+            pass
+        if row.get("cash_after") in (None, ""):
+            row["cash_after"] = round(cash, 6)
+        hydrated.append(row)
+    return hydrated
 
 
 def _legacy_bar_like(bar: object) -> object:
@@ -1868,6 +2079,51 @@ def trading_risk_status_v320() -> dict:
 @app.get("/api/trading/audit")
 def trading_audit_v320(limit: int = 200) -> dict:
     return {"ok": True, "data": paper_trading_gateway_v320.audit.list(limit=max(1, min(int(limit or 200), 1000)))}
+
+
+@app.post("/api/realtime-paper/start")
+def realtime_paper_start(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v321.start(payload)
+
+
+@app.post("/api/realtime-paper/stop")
+def realtime_paper_stop() -> dict:
+    return realtime_paper_engine_v321.stop()
+
+
+@app.get("/api/realtime-paper/status")
+def realtime_paper_status() -> dict:
+    return realtime_paper_engine_v321.status()
+
+
+@app.get("/api/realtime-paper/portfolio")
+def realtime_paper_portfolio() -> dict:
+    return realtime_paper_engine_v321.portfolio()
+
+
+@app.get("/api/realtime-paper/orders")
+def realtime_paper_orders(limit: int = 200) -> dict:
+    return realtime_paper_engine_v321.orders(limit=max(1, min(int(limit or 200), 1000)))
+
+
+@app.get("/api/realtime-paper/signals")
+def realtime_paper_signals(limit: int = 200) -> dict:
+    return realtime_paper_engine_v321.signal_rows(limit=max(1, min(int(limit or 200), 1000)))
+
+
+@app.get("/api/realtime-paper/audit")
+def realtime_paper_audit(limit: int = 300) -> dict:
+    return realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000)))
+
+
+@app.post("/api/realtime-paper/tick")
+def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v321.tick(payload)
+
+
+@app.post("/api/realtime-paper/replay")
+def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v321.replay(payload)
 
 
 @app.get("/api/screener/run")
@@ -2294,19 +2550,35 @@ def orderbook(symbol: str, force: bool = False) -> dict:
     allow_external = bool(force or session.get("can_refresh"))
     book = service.get_order_book(symbol, allow_external=allow_external)
     note = ""
+    if book is None:
+        try:
+            q = service.get_quote(symbol, force_refresh=bool(force and allow_external))
+            if getattr(q, "order_ratio", None) is not None or getattr(q, "order_diff", None) is not None:
+                book = OrderBook(
+                    symbol=symbol,
+                    ts=datetime.now(),
+                    asks=[],
+                    bids=[],
+                    order_ratio=getattr(q, "order_ratio", None),
+                    order_diff=getattr(q, "order_diff", None),
+                    source=f"{getattr(q, 'source', 'quote')}:quote-metrics",
+                )
+                note = "公开行情源未返回五档价量，仅返回委比/委差；五档档位需要等待盘口源可用。"
+        except Exception:
+            pass
     if not allow_external:
         status = str(session.get("status") or "")
         label = str(session.get("label") or "")
         if status == "lunch" or "午" in label:
-            note = "午休无盘口"
+            note = note or "午休无盘口"
         elif status == "closed" or "休" in label:
-            note = "休市无盘口"
+            note = note or "休市无盘口"
         else:
-            note = "非交易时段不适用"
+            note = note or "非交易时段不适用"
     elif not book:
-        note = "公开行情源未返回五档盘口；普通免费源通常没有稳定 Level-2 深度，交易时段会继续尝试。"
+        note = note or "公开行情源未返回五档盘口；普通免费源通常没有稳定 Level-2 深度，交易时段会继续尝试。"
     elif not ((book.asks or []) and (book.bids or [])):
-        note = "盘口字段不完整；仅展示公开源实际返回的档位。"
+        note = note or "盘口字段不完整；仅展示公开源实际返回的档位。"
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -2377,6 +2649,162 @@ def strategy_library() -> dict:
     if not default_keys:
         default_keys = [str(x["key"]) for x in FALLBACK_STRATEGIES]
     return {"ok": True, "data": data, "default_keys": default_keys, "errors": errors}
+
+
+def _latest_screener_rows() -> list[dict]:
+    try:
+        cached = cache_state_service.latest_screener_snapshot()
+        data = cached.data or {}
+        rows = data.get("results") or data.get("data") or data.get("snapshot", {}).get("results") or []
+        return [dict(x) for x in rows if isinstance(x, dict)]
+    except Exception:
+        return []
+
+
+def _screener_rows_from_payload(payload: dict | None = None) -> list[dict]:
+    payload = payload or {}
+    rows = payload.get("rows") or payload.get("data") or payload.get("results")
+    if isinstance(rows, list):
+        return [dict(x) for x in rows if isinstance(x, dict)]
+    return _latest_screener_rows()
+
+
+def _screener_symbols_from_payload(payload: dict | None = None) -> list[str]:
+    payload = payload or {}
+    raw = payload.get("symbols") or payload.get("watchlist") or payload.get("symbol") or ""
+    symbols: list[str] = []
+    if isinstance(raw, list):
+        symbols = [str(x).strip() for x in raw if str(x).strip()]
+    elif isinstance(raw, str):
+        symbols = _parse_symbol_text(raw)
+    for row in _screener_rows_from_payload(payload):
+        sym = str(row.get("symbol") or "").strip()
+        if sym and sym not in symbols:
+            symbols.append(sym)
+    return symbols[: max(1, min(int(payload.get("limit") or 30), 200))]
+
+
+def _screener_row_for_signal(symbol: str, payload: dict | None = None) -> dict:
+    payload = payload or {}
+    if isinstance(payload.get("row"), dict):
+        row = dict(payload["row"])
+        row.setdefault("symbol", symbol)
+        return row
+    for row in _screener_rows_from_payload(payload):
+        if str(row.get("symbol") or "").strip() == str(symbol).strip():
+            return row
+    try:
+        q = service.get_quote(symbol, force_refresh=bool(payload.get("force")))
+        return {
+            "symbol": getattr(q, "symbol", symbol),
+            "name": getattr(q, "name", symbol),
+            "last": getattr(q, "last", None),
+            "amount": getattr(q, "amount", None),
+            "change_pct": getattr(q, "change_pct", None),
+            "turnover": getattr(q, "turnover", None),
+            "volume_ratio": getattr(q, "volume_ratio", None),
+            "total_score": payload.get("score", 50),
+        }
+    except Exception:
+        return {"symbol": symbol, "total_score": payload.get("score", 50)}
+
+
+def _screener_anomaly_features(row: dict) -> dict:
+    risk_items = row.get("risk_warnings") or row.get("risk_tags") or row.get("risk_flags") or []
+    if not isinstance(risk_items, list):
+        risk_items = [risk_items]
+    return {
+        "high_position_pct": _safe_float(row.get("pos250"), _safe_float(row.get("pos20"), 0.0)),
+        "volume_ratio": _safe_float(row.get("volume_ratio"), 0.0),
+        "change_pct": _safe_float(row.get("change_pct"), 0.0),
+        "turnover": _safe_float(row.get("turnover"), 0.0),
+        "ma20_deviation_pct": _safe_float(row.get("ma20_deviation_pct"), 0.0),
+        "vwap_distance_pct": _safe_float(row.get("vwap_distance_pct"), 0.0),
+        "negative_news": "负面" in " ".join(str(x) for x in risk_items),
+        "sector_score": _safe_float(row.get("sector_score"), 50.0),
+        "amount_change_pct": _safe_float(row.get("amount_change_pct"), 0.0),
+        "stale_data": bool(row.get("cache_status", {}).get("stale")) if isinstance(row.get("cache_status"), dict) else False,
+    }
+
+
+def _screener_signal_preview(symbol: str, payload: dict | None = None) -> dict:
+    row = _screener_row_for_signal(symbol, payload)
+    anomaly = realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row))
+    now = datetime.now()
+    freshness = realtime_paper_engine_v321.freshness_guard.check(
+        {
+            "quote": now,
+            "intraday": now,
+            "news": now,
+            "technical": now,
+            "company_profile": now,
+        },
+        now=now,
+        missing_fields=list(row.get("missing_data_hints") or row.get("missing_data") or []),
+    )
+    signal = realtime_paper_engine_v321.signal_fusion.fuse(
+        symbol=symbol,
+        horizon=str((payload or {}).get("horizon") or "swing"),
+        fundamental_score=_safe_float(row.get("fundamental_score"), _safe_float(row.get("manual_review_score"), 55.0)),
+        technical_score=_safe_float(row.get("technical_score"), _safe_float(row.get("total_score"), 50.0)),
+        information_score=_safe_float(row.get("information_score"), _safe_float(row.get("info_score"), 50.0)),
+        market_score=_safe_float(row.get("market_score"), _safe_float(row.get("market_mood_score"), 50.0)),
+        anomaly_score=anomaly.anomaly_score,
+        anomaly_action=anomaly.action_suggestion,
+        evidence=list(row.get("tags") or row.get("upgrade_reasons") or row.get("hit_tags") or ["来自当前筛选快照"]),
+        data_freshness=freshness.to_dict(),
+        missing_data=list(row.get("missing_data_hints") or row.get("missing_data") or []),
+        now=now,
+    )
+    return {"ok": True, "symbol": symbol, "row": row, "signal": signal.to_dict(), "anomaly": anomaly.to_dict(), "freshness": freshness.to_dict(), "paper_only": True}
+
+
+@app.post("/api/screener/realtime-paper/add")
+def screener_realtime_paper_add(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _screener_symbols_from_payload(payload)
+    watchlist = watchlist_service.add(symbols)
+    return {"ok": True, "message": "已加入实时模拟池/监控列表", "symbols": symbols, "watchlist": watchlist, "paper_only": True}
+
+
+@app.post("/api/screener/realtime-paper/start")
+def screener_realtime_paper_start(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _screener_symbols_from_payload(payload)
+    if not symbols:
+        return {"ok": False, "message": "没有可用于实时模拟的筛选标的"}
+    watchlist_service.add(symbols)
+    start_payload = {
+        "symbols": symbols,
+        "initial_cash": payload.get("initial_cash", 100000),
+        "interval_seconds": payload.get("interval_seconds", 15),
+        "horizon": payload.get("horizon", "intraday_paper"),
+        "strategy": payload.get("strategy", "three_dimension_score"),
+    }
+    data = realtime_paper_engine_v321.start(start_payload)
+    data["symbols"] = symbols
+    data["message"] = "已用当前筛选结果启动盘中实时模拟"
+    return data
+
+
+@app.get("/api/screener/signal-preview/{symbol}")
+def screener_signal_preview_get(symbol: str, horizon: str = "swing") -> dict:
+    return _screener_signal_preview(symbol, {"horizon": horizon})
+
+
+@app.post("/api/screener/signal-preview/{symbol}")
+def screener_signal_preview_post(symbol: str, payload: dict = Body(default_factory=dict)) -> dict:
+    return _screener_signal_preview(symbol, payload)
+
+
+@app.get("/api/screener/anomaly-preview/{symbol}")
+def screener_anomaly_preview_get(symbol: str) -> dict:
+    row = _screener_row_for_signal(symbol)
+    return {"ok": True, "symbol": symbol, "row": row, "anomaly": realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row)).to_dict()}
+
+
+@app.post("/api/screener/anomaly-preview/{symbol}")
+def screener_anomaly_preview_post(symbol: str, payload: dict = Body(default_factory=dict)) -> dict:
+    row = _screener_row_for_signal(symbol, payload)
+    return {"ok": True, "symbol": symbol, "row": row, "anomaly": realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row)).to_dict()}
 
 
 @app.get("/api/technical/indicators")
@@ -3128,6 +3556,11 @@ def backtest_trades_page() -> str:
 @app.get("/paper", response_class=HTMLResponse)
 def paper_page() -> str:
     return build_paper_ui()
+
+
+@app.get("/realtime-paper", response_class=HTMLResponse)
+def realtime_paper_page() -> str:
+    return build_realtime_paper_ui()
 
 
 @app.get("/trading", response_class=HTMLResponse)
