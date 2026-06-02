@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import json
+
+from quant_data.services.strategy_library_service import StrategyLibraryService
+
+
+def _fallback_strategies_json() -> str:
+    try:
+        data = StrategyLibraryService().list()
+    except Exception:
+        data = []
+    return json.dumps(data or [], ensure_ascii=False)
+
 
 def build_screener_ui() -> str:
-    return r'''<!doctype html>
+    html = r'''<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -379,17 +391,7 @@ function drawTrend(data){const canvas=$('trendCanvas');const empty=$('trendEmpty
 
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='symbol'||k==='name'||k==='grade')?1:-1}sortRows(false);render()});
 
-const FALLBACK_STRATEGIES=[
-  {key:'low_position',name:'低位修复',category:'低位/价值',description:'低位结构、回踩修复和趋势确认的兜底策略。',enabled:true,default_weight:1,tags:['fallback','low']},
-  {key:'avoid_chasing_high',name:'高位追高过滤',category:'风控过滤',description:'过滤高位放量滞涨、假突破和追高风险。',enabled:true,default_weight:1,tags:['fallback','risk']},
-  {key:'ma_repair',name:'均线修复',category:'K线趋势',description:'MA5/10/20 修复和多头排列观察。',enabled:true,default_weight:1,tags:['ma']},
-  {key:'macd_cross',name:'MACD金叉/多头',category:'趋势跟随',description:'MACD DIF/DEA 和柱体方向确认。',enabled:true,default_weight:1,tags:['macd']},
-  {key:'macd_hist_turn',name:'MACD柱改善',category:'动量/反转',description:'弱转强时的柱体改善观察。',enabled:true,default_weight:1,tags:['macd']},
-  {key:'volume_breakout',name:'温和放量',category:'量价/盘口',description:'量能温和配合，避免异常巨量。',enabled:true,default_weight:1,tags:['volume']},
-  {key:'risk_control',name:'风险扣分',category:'风控过滤',description:'行为风险、技术破位、消息风险扣分。',enabled:true,default_weight:1,tags:['risk']},
-  {key:'atr_risk',name:'ATR波动过滤',category:'回测/风控/执行',description:'过滤异常波动和不可控振幅。',enabled:true,default_weight:1,tags:['atr']},
-  {key:'position_stop',name:'仓位与止损',category:'回测/风控/执行',description:'输出仓位、止损和人工复核建议。',enabled:true,default_weight:1,tags:['position']}
-];
+const FALLBACK_STRATEGIES=__FALLBACK_STRATEGIES_JSON__;
 const LS_Q_SNAPSHOT='quant_screener_snapshot_id',LS_Q_ROWS='quant_screener_rows',LS_Q_PARAMS='quant_screener_params',LS_Q_SELECTED='quant_screener_selected_symbol',LS_Q_VIEW='quant_screener_view_mode',LS_Q_SCROLL='quant_screener_scroll_position',LS_Q_STRATEGIES='quant_screener_strategy_keys',LS_Q_CUSTOM='quant_screener_custom_symbols';
 function persistScreenerState(){
   try{
@@ -814,3 +816,4 @@ selectDefaultStrategies=function(){
 </script>
 </body>
 </html>'''
+    return html.replace("__FALLBACK_STRATEGIES_JSON__", _fallback_strategies_json())

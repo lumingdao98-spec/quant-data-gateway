@@ -106,7 +106,7 @@ FALLBACK_STRATEGIES = [
     {"key": "atr_risk", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
     {"key": "position_stop", "name": "仓位与止损", "category": "回测/风控/执行", "description": "结合支撑、ATR 与等级输出仓位/止损建议。", "enabled": True, "default_weight": 1.0, "tags": ["position"]},
 ]
-app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与后续量化系统的数据网关")
+app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与量化系统数据网关", docs_url=None, redoc_url=None)
 
 def _make_snapshot_id(symbol: str | None = None, limit: int | None = None) -> str:
     core = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -121,6 +121,68 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
+def chinese_api_docs() -> str:
+    groups = [
+        ("行情与盘口", [
+            ("GET", "/api/quotes?symbols=300750,600519&force=false", "批量实时行情，返回最新价、涨跌幅、成交额、换手率、量比、市值、缺失原因。"),
+            ("GET", "/api/timeline/{symbol}?force=false", "分时走势。只返回真实分时或同交易日缓存，不伪造分时线。"),
+            ("GET", "/api/orderbook/{symbol}?force=true", "五档盘口。公开源缺 Level-2 时返回委比、委差和缺失说明。"),
+            ("GET", "/api/detail/{symbol}?frame=1d&limit=520&adjust=qfq", "K线详情，支持日K、周K、月K、复权、行为标注和缓存状态。"),
+        ]),
+        ("筛选与策略", [
+            ("GET", "/api/strategy/library", "完整策略库，包含低位、趋势、量价、风控、基本面、消息面、宏观等策略元数据。"),
+            ("GET", "/api/screener/run", "执行筛选，支持自选池、策略组合、排序、信息面/技术面字段。"),
+            ("GET", "/api/cache/screener/latest", "读取最近筛选快照，用于页面恢复和缓存兜底。"),
+            ("GET", "/api/technical/factors/{symbol}", "技术因子矩阵，返回指标分类、原始值、解释、方向和评分。"),
+        ]),
+        ("回测系统", [
+            ("GET", "/api/backtest/run", "单标的回测。支持组合策略、仓位模式、交易周期、止损止盈、复利、ATR风险、金字塔和定投。"),
+            ("POST", "/api/backtest/run", "V3.20科学回测入口，支持多标的、订单撮合、成本、滑点和组合约束。"),
+            ("GET", "/api/backtest/strategies", "回测策略列表。"),
+            ("GET", "/backtest?symbol=300750", "回测可视化页面，K线标注买入、卖出、异常点，并提供买卖流水内置窗口。"),
+        ]),
+        ("盘中模拟交易", [
+            ("POST", "/api/realtime-paper/start", "启动纸面盘中模拟，使用信号融合、异常防护和风险网关。"),
+            ("GET", "/api/realtime-paper/status", "查看模拟交易状态、资金、持仓和最近信号。"),
+            ("GET", "/api/realtime-paper/orders", "订单流水。"),
+            ("GET", "/api/realtime-paper/audit", "风险与执行审计记录。"),
+        ]),
+        ("信息面与大盘", [
+            ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
+            ("GET", "/api/wordsource/report/{symbol}", "信息面/技术面/资金面映射报告。"),
+            ("GET", "/api/market/regime", "大盘环境分析，用于评分中的市场情绪权重。"),
+            ("GET", "/api/source-knowledge", "数据源知识库和覆盖说明。"),
+        ]),
+        ("系统与缓存", [
+            ("GET", "/api/calendar/status", "交易时段、午休、休市和下一次刷新时间。"),
+            ("GET", "/api/cache/status", "缓存健康状态。"),
+            ("POST", "/api/background/refresh/watchlist", "后台刷新监控列表。"),
+            ("GET", "/openapi.json", "机器可读 OpenAPI JSON。"),
+        ]),
+    ]
+    sections = []
+    for title, rows in groups:
+        items = "".join(
+            f"<tr><td><b>{method}</b></td><td><code>{path}</code></td><td>{desc}</td></tr>"
+            for method, path, desc in rows
+        )
+        sections.append(f"<section><h2>{title}</h2><table><tbody>{items}</tbody></table></section>")
+    return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>量化数据网关 API 文档</title><style>
+body{margin:0;background:#0b1020;color:#dbeafe;font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif;line-height:1.55}
+header{position:sticky;top:0;background:#101827;border-bottom:1px solid #283956;padding:16px 22px;z-index:2}
+h1{margin:0;font-size:24px}main{max-width:1160px;margin:0 auto;padding:18px 18px 40px}
+section{background:#101827;border:1px solid #283956;border-radius:12px;margin:12px 0;overflow:hidden}
+h2{font-size:18px;margin:0;padding:12px 14px;background:#141e32;border-bottom:1px solid #283956}
+table{width:100%;border-collapse:collapse}td{padding:10px 12px;border-bottom:1px solid rgba(40,57,86,.72);vertical-align:top}
+td:first-child{width:72px;color:#93c5fd}td:nth-child(2){width:390px}code{color:#bfdbfe;background:#172033;border:1px solid #26364f;border-radius:8px;padding:3px 6px}
+.note{color:#9fb2d4;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;margin:12px 0}
+a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</h1></header><main>
+<div class="note">这是中文 API 说明页。程序化调试仍可使用 <a href="/openapi.json">/openapi.json</a>；页面入口包括 <a href="/ui">行情监控</a>、<a href="/screener">筛选系统</a>、<a href="/backtest">交易回测</a>。</div>
+""" + "".join(sections) + "</main></body></html>"
 
 
 
@@ -1251,6 +1313,18 @@ def wordsource_candidates(max_pages: int = 2, page_size: int = 100, max_items: i
     regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
     return {"ok": True, "market_regime": regime, "candidate_pool": pool}
 
+
+@app.get("/api/market/regime")
+def market_regime(max_pages: int = 2, page_size: int = 100) -> dict:
+    quotes = []
+    for page in range(1, max(1, min(int(max_pages or 2), 10)) + 1):
+        try:
+            quotes.extend(service.get_market_snapshot(page=page, page_size=max(20, min(int(page_size or 100), 500))) or [])
+        except Exception:
+            break
+    regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
+    return {"ok": True, "data": regime, "market_regime": regime, "count": len(quotes)}
+
 @app.get("/api/screener/strategies")
 def screener_strategies() -> dict:
     return {
@@ -1272,6 +1346,133 @@ def screener_strategies() -> dict:
 @app.get("/api/backtest/strategies")
 def backtest_strategies() -> dict:
     return {"ok": True, "data": backtest_service.strategies}
+
+
+def _v321_effective_legacy_params(
+    *,
+    position_pct: float,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    buy_score: float,
+    sell_score: float,
+    initial_cash: float,
+    sizing_mode: str,
+    horizon: str,
+    dca_amount: float,
+    atr_risk_pct: float,
+) -> dict:
+    valid_horizon = horizon if horizon in {"intraday_paper", "short_term", "swing", "position", "dca", "hybrid"} else "swing"
+    rules = StrategyHorizonConfig(horizon=valid_horizon).resolved_rules()
+    base_position = max(0.01, min(float(position_pct or 0.0), 1.0))
+    stop = float(stop_loss_pct or 0.0)
+    take = float(take_profit_pct or 0.0)
+    buy = float(buy_score or 0.0)
+    sell = float(sell_score or 0.0)
+    notes: list[str] = []
+    horizon_cap = base_position
+    if valid_horizon == "short_term":
+        horizon_cap = min(horizon_cap, 0.45)
+        stop = min(stop or 4.0, 4.0)
+        take = take or 8.0
+        sell = max(sell, 52.0)
+        notes.append("短线周期：仓位上限45%，止损收紧到4%，卖出评分阈值不低于52")
+    elif valid_horizon == "swing":
+        stop = 7.0 if not stop or abs(stop - 8.0) < 1e-9 else stop
+        take = take or 15.0
+        notes.append("波段周期：默认使用7%止损、15%止盈")
+    elif valid_horizon == "position":
+        horizon_cap = min(horizon_cap, 0.75)
+        stop = max(stop, 12.0)
+        take = 0.0 if take <= 0 else take
+        sell = min(sell, 42.0) if sell else 42.0
+        notes.append("长线周期：仓位上限75%，止损放宽到12%，降低评分卖出频率")
+    elif valid_horizon == "dca":
+        dca_weight = max(0.01, min(float(dca_amount or 0.0) / max(float(initial_cash or 1.0), 1.0), 0.20))
+        horizon_cap = min(horizon_cap, dca_weight)
+        stop = 0.0
+        take = 0.0
+        notes.append("定投周期：按定投金额折算单次仓位，默认不启用固定止损止盈")
+    elif valid_horizon == "hybrid":
+        horizon_cap = min(horizon_cap, 0.60)
+        stop = stop or 8.0
+        take = take or 12.0
+        notes.append("组合周期：核心/卫星上限60%，保留止损止盈")
+    mode = str(sizing_mode or "score_weighted")
+    mode_cap = base_position
+    if mode == "equal_weight":
+        mode_cap = min(mode_cap, 0.25)
+        notes.append("等权仓位：单票按25%上限参与")
+    elif mode == "score_weighted":
+        mode_cap = min(mode_cap, 0.70)
+        notes.append("评分加权：legacy回测用70%上限近似评分仓位")
+    elif mode == "volatility_target":
+        mode_cap = min(mode_cap, 0.35)
+        notes.append("波动率目标：高波动标的仓位上限35%")
+    elif mode in {"atr_risk", "fixed_risk_per_trade"}:
+        risk_budget = max(0.001, float(atr_risk_pct or 0.0) / 100.0)
+        stop_distance = max(0.01, (stop or rules.get("stop_loss_pct") or 8.0) / 100.0)
+        mode_cap = min(mode_cap, max(0.03, min(0.55, risk_budget / stop_distance)))
+        notes.append("ATR/固定风险：按风险预算 ÷ 止损距离反推仓位")
+    elif mode == "fractional_kelly":
+        mode_cap = min(mode_cap, 0.50)
+        notes.append("分数凯利：legacy回测先按50%上限保守近似")
+    elif mode == "pyramid":
+        mode_cap = min(mode_cap, 0.40)
+        notes.append("金字塔：首笔仓位按40%上限，后续加仓由报告提示")
+    elif mode == "dca":
+        dca_weight = max(0.01, min(float(dca_amount or 0.0) / max(float(initial_cash or 1.0), 1.0), 0.20))
+        mode_cap = min(mode_cap, dca_weight)
+        notes.append("定投仓位：按定投金额折算单次买入比例")
+    elif mode == "core_satellite":
+        mode_cap = min(mode_cap, 0.65)
+        notes.append("核心卫星：单票上限65%")
+    effective_position = max(0.01, min(base_position, horizon_cap, mode_cap))
+    return {
+        "position_pct": round(effective_position, 6),
+        "stop_loss_pct": round(float(stop or 0.0), 6),
+        "take_profit_pct": round(float(take or 0.0), 6),
+        "buy_score": round(float(buy), 6),
+        "sell_score": round(float(sell), 6),
+        "horizon_rules": rules,
+        "notes": list(dict.fromkeys(notes)),
+    }
+
+
+def _attach_v321_effective_controls(data: dict, effective: dict) -> dict:
+    data = dict(data or {})
+    data["v321_effective_controls"] = effective
+    data.setdefault("params", {})
+    data["params"].update(
+        {
+            "effective_position_pct": effective.get("position_pct"),
+            "effective_stop_loss_pct": effective.get("stop_loss_pct"),
+            "effective_take_profit_pct": effective.get("take_profit_pct"),
+            "effective_buy_score": effective.get("buy_score"),
+            "effective_sell_score": effective.get("sell_score"),
+        }
+    )
+    data.setdefault("params_cn", {})
+    data["params_cn"].update(
+        {
+            "实际仓位比例": f"{float(effective.get('position_pct') or 0.0) * 100:.2f}%",
+            "实际止损/止盈": f"{effective.get('stop_loss_pct')}% / {effective.get('take_profit_pct')}%",
+            "实际买入/卖出评分": f"{effective.get('buy_score')} / {effective.get('sell_score')}",
+            "资金与周期说明": "；".join(effective.get("notes") or []),
+        }
+    )
+    data.setdefault("metrics", {})
+    data["metrics"].update(
+        {
+            "effective_position_pct": effective.get("position_pct"),
+            "effective_stop_loss_pct": effective.get("stop_loss_pct"),
+            "effective_take_profit_pct": effective.get("take_profit_pct"),
+        }
+    )
+    if isinstance(data.get("position_summary"), dict):
+        note = data["position_summary"].get("note") or ""
+        extra = "；".join(effective.get("notes") or [])
+        data["position_summary"]["note"] = (note + ("；" if note and extra else "") + extra)[:600]
+    return data
 
 
 @app.get("/api/backtest/run")
@@ -1327,19 +1528,31 @@ def backtest_run(
         if not force and len(bars) < min(limit, 120):
             bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=True)
         sizing_mode = str(sizing_mode or position_sizing or "score_weighted")
+        effective = _v321_effective_legacy_params(
+            position_pct=position_pct,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            buy_score=buy_score,
+            sell_score=sell_score,
+            initial_cash=initial_cash,
+            sizing_mode=sizing_mode,
+            horizon=horizon,
+            dca_amount=dca_amount,
+            atr_risk_pct=atr_risk_pct,
+        )
         if not legacy:
             cfg = V319BacktestConfig(
                 strategy="factor_rule_strategy" if strategy in {x["key"] for x in backtest_service.strategies} else strategy,
                 symbols=[symbol],
                 initial_cash=initial_cash,
-                position_pct=position_pct,
+                position_pct=effective["position_pct"],
                 sizing=sizing_mode,
                 commission_rate=fee_rate,
                 slippage_bps=slippage_rate * 10000,
-                stop_loss_pct=stop_loss_pct,
-                take_profit_pct=take_profit_pct,
-                buy_score=buy_score,
-                sell_score=sell_score,
+                stop_loss_pct=effective["stop_loss_pct"],
+                take_profit_pct=effective["take_profit_pct"],
+                buy_score=effective["buy_score"],
+                sell_score=effective["sell_score"],
                 adjust=adjust,
                 warmup_bars=min(60, max(10, limit // 5)),
                 volume_limit_pct=1.0,
@@ -1365,6 +1578,7 @@ def backtest_run(
                     "market": market_weight,
                 },
             )
+            data = _attach_v321_effective_controls(data, effective)
             backtest_storage_v319.save(result_v320)
             return _v319_response(
                 True,
@@ -1386,11 +1600,11 @@ def backtest_run(
                 initial_cash=initial_cash,
                 fee_rate=fee_rate,
                 slippage_rate=slippage_rate,
-                position_pct=position_pct,
-                stop_loss_pct=stop_loss_pct,
-                take_profit_pct=take_profit_pct,
-                buy_score=buy_score,
-                sell_score=sell_score,
+                position_pct=effective["position_pct"],
+                stop_loss_pct=effective["stop_loss_pct"],
+                take_profit_pct=effective["take_profit_pct"],
+                buy_score=effective["buy_score"],
+                sell_score=effective["sell_score"],
             ),
             name=getattr(q, "name", None) if q else symbol,
         )
@@ -1422,6 +1636,7 @@ def backtest_run(
                 "market": market_weight,
             },
         )
+        result = _attach_v321_effective_controls(result, effective)
         return {"ok": True, "data": result}
     except Exception as exc:
         return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}

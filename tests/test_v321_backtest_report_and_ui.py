@@ -58,6 +58,9 @@ def test_backtest_api_exposes_v321_report_fields(monkeypatch):
     assert result["compound_returns"] is False
     assert "position_sizing_config" in result
     assert "horizon_config" in result
+    assert result["params"]["effective_position_pct"] == 0.375
+    assert result["params"]["effective_stop_loss_pct"] == 4.0
+    assert "资金与周期说明" in result["params_cn"]
     assert "expectancy" in result["metrics"]
     assert "position_sizing_attribution" in result["metrics"]
     assert "filter_attribution" in result["metrics"]
@@ -78,3 +81,11 @@ def test_v321_ui_entry_points_are_visible():
     assert "viewThreeDimSignal" in screener_html
     assert "/api/realtime-paper/start" in paper_html
     assert "paper_only" in paper_html
+
+
+def test_docs_are_chinese_and_link_core_apis():
+    html = TestClient(api.app).get("/docs").text
+    assert "量化数据网关 API 文档" in html
+    assert "/api/backtest/run" in html
+    assert "/api/strategy/library" in html
+    assert "/openapi.json" in html
