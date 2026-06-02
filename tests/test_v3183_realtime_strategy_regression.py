@@ -107,6 +107,9 @@ def test_ui_starts_active_session_with_force_refresh_and_compact_subcharts():
     assert "subCanvas3" in html
     assert "副图3：KDJ" in html
     assert "timelineCacheUsable" in html
+    assert "marketClosedWithQuoteCache" in html
+    assert "cleanTimelineRows" in html
+    assert "休市，使用收盘缓存；已暂停自动拉取" in html
     assert "公开行情源未返回五档盘口" in html
     assert "position:fixed" in html
 
@@ -139,12 +142,12 @@ def _quote_with_ts(symbol: str, ts: datetime) -> Quote:
 def test_timeline_refreshes_stale_intraday_cache_during_lunch(monkeypatch):
     q = _quote_with_ts("600438", datetime(2026, 5, 28, 11, 30))
     stale = [
-        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 15.0, source="unit_stale"),
-        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 15.2, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 402.0, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 403.2, source="unit_stale"),
     ]
     fresh = [
-        IntradayPoint("600438", datetime(2026, 5, 28, 9, 30), 15.1, source="unit_fresh"),
-        IntradayPoint("600438", datetime(2026, 5, 28, 11, 30), 15.0, source="unit_fresh"),
+        IntradayPoint("600438", datetime(2026, 5, 28, 9, 30), 403.1, source="unit_fresh"),
+        IntradayPoint("600438", datetime(2026, 5, 28, 11, 30), 403.0, source="unit_fresh"),
     ]
     calls = []
 
@@ -165,11 +168,42 @@ def test_timeline_refreshes_stale_intraday_cache_during_lunch(monkeypatch):
 def test_timeline_rejects_stale_intraday_cache_if_refresh_still_old(monkeypatch):
     q = _quote_with_ts("600438", datetime(2026, 5, 28, 11, 30))
     stale = [
-        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 15.0, source="unit_stale"),
-        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 15.2, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 402.0, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 403.2, source="unit_stale"),
     ]
     monkeypatch.setattr(api, "_market_session", lambda market="CN": {"status": "lunch", "date": "2026-05-28"})
     monkeypatch.setattr(api.service, "get_intraday", lambda symbol, force_refresh=False: stale)
+
+    assert api._timeline_with_fallback("600438", q, force=False) == []
+
+
+def test_timeline_rejects_cross_day_cache_after_close(monkeypatch):
+    q = _quote_with_ts("600438", datetime(2026, 5, 28, 15, 0))
+    stale = [
+        IntradayPoint("600438", datetime(2026, 5, 26, 9, 30), 402.0, source="unit_stale"),
+        IntradayPoint("600438", datetime(2026, 5, 26, 15, 0), 403.2, source="unit_stale"),
+    ]
+    calls = []
+    monkeypatch.setattr(api, "_market_session", lambda market="CN": {"status": "closed", "label": "休市", "date": "2026-05-28", "can_refresh": False})
+
+    def fake_intraday(symbol, force_refresh=False):
+        calls.append(force_refresh)
+        return stale
+
+    monkeypatch.setattr(api.service, "get_intraday", fake_intraday)
+
+    assert api._timeline_with_fallback("600438", q, force=False) == []
+    assert calls == [False, True]
+
+
+def test_timeline_rejects_prices_outside_quote_range(monkeypatch):
+    q = _quote_with_ts("600438", datetime(2026, 5, 28, 15, 0))
+    bad = [
+        IntradayPoint("600438", datetime(2026, 5, 28, 9, 30) + timedelta(minutes=i), 450.0, source="unit_bad")
+        for i in range(30)
+    ]
+    monkeypatch.setattr(api, "_market_session", lambda market="CN": {"status": "closed", "label": "休市", "date": "2026-05-28", "can_refresh": False})
+    monkeypatch.setattr(api.service, "get_intraday", lambda symbol, force_refresh=False: bad)
 
     assert api._timeline_with_fallback("600438", q, force=False) == []
 

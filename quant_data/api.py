@@ -854,13 +854,13 @@ def _timeline_latest_date(points: list[IntradayPoint]) -> object | None:
 
 
 def _timeline_expected_date(q: Quote | None) -> object | None:
+    if q and getattr(q, "ts", None):
+        return q.ts.date()
     market = q.market if q else "CN"
     session = _market_session(market)
     status = str(session.get("status") or "")
     if status not in {"pre_open_auction", "morning", "lunch", "afternoon", "closing_auction", "call_auction_cooldown"}:
         return None
-    if q and getattr(q, "ts", None):
-        return q.ts.date()
     try:
         return datetime.fromisoformat(str(session.get("date"))).date()
     except Exception:
@@ -872,6 +872,31 @@ def _filter_timeline_date(points: list[IntradayPoint], expected) -> list[Intrada
         return points
     same_day = [p for p in points if getattr(getattr(p, "ts", None), "date", lambda: None)() == expected]
     return same_day or points
+
+
+def _filter_timeline_quote_range(points: list[IntradayPoint], q: Quote | None) -> list[IntradayPoint]:
+    if not points or q is None:
+        return points
+    highs = [_safe_float(v) for v in [q.high, q.open, q.last, q.pre_close] if _safe_float(v) > 0]
+    lows = [_safe_float(v) for v in [q.low, q.open, q.last, q.pre_close] if _safe_float(v) > 0]
+    if not highs or not lows:
+        return points
+    hi = max(highs)
+    lo = min(lows)
+    if hi <= 0 or lo <= 0 or hi < lo:
+        return points
+    pad = max((hi - lo) * 0.08, hi * 0.015, 0.02)
+    upper = hi + pad
+    lower = max(0.01, lo - pad)
+    clean: list[IntradayPoint] = []
+    for p in points:
+        price = _safe_float(getattr(p, "price", None))
+        if lower <= price <= upper:
+            avg = _safe_float(getattr(p, "avg_price", None))
+            if avg and not (lower <= avg <= upper):
+                p = replace(p, avg_price=price)
+            clean.append(p)
+    return clean
 
 
 def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -> list[IntradayPoint]:
@@ -895,6 +920,7 @@ def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -
     if expected_date is not None and latest is not None and latest < expected_date:
         return []
     clean = _filter_timeline_date(clean, expected_date)
+    clean = _filter_timeline_quote_range(clean, q)
     if len(clean) < 2:
         return []
     return clean
@@ -1085,7 +1111,7 @@ def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
     market = q.market if q else _detect_market(symbol)
     expected_date = _timeline_expected_date(q)
     latest_date = _timeline_latest_date(points)
-    stale_rejected = bool(expected_date is not None and latest_date is None and force)
+    stale_rejected = bool(expected_date is not None and latest_date is None)
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -1100,7 +1126,7 @@ def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
             "latest_date": latest_date.isoformat() if latest_date else None,
             "fresh_for_session": bool(expected_date is None or latest_date == expected_date),
             "stale_cache_rejected": stale_rejected,
-            "note": "实时分时源暂无当日有效点，未使用跨日缓存" if stale_rejected else "",
+            "note": "实时分时源暂无当日有效点，未使用跨日缓存或异常价格缓存" if stale_rejected else "",
         },
         "data": [p.to_dict() for p in points],
     }
