@@ -28,6 +28,7 @@ from quant_data.services.source_registry import SourceRegistryService
 from quant_data.services.technical_factor_registry import TechnicalFactorRegistryService
 from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
+from quant_data.services.orderbook_behavior_service import OrderBookBehaviorService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot
 from quant_data.services.market_behavior_engine import MarketBehaviorEngine
 from quant_data.services.cache_state_service import CacheStateService
@@ -84,6 +85,7 @@ technical_factor_registry_service = TechnicalFactorRegistryService()
 candidate_pool_service = CandidatePoolService()
 market_regime_service = MarketRegimeService()
 market_behavior_engine = MarketBehaviorEngine()
+orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
 technical_factor_engine = TechnicalFactorEngine()
@@ -781,7 +783,7 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
             bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
         else:
             synced, sync_reason = False, "quote_unavailable"
-        behavior = market_behavior_engine.analyze(q, bars) if len(bars) >= 5 else market_behavior_engine.analyze(q, [])
+        behavior = market_behavior_engine.analyze(q, bars, recent_days=7) if len(bars) >= 5 else market_behavior_engine.analyze(q, [])
         payload = {
             "ok": True,
             "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -1249,25 +1251,37 @@ def kline(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none"
 
 
 @app.get("/api/detail/{symbol}")
-def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, include_timeline: bool = False, refresh: bool = False) -> dict:
+def detail(
+    symbol: str,
+    frame: str = "1d",
+    limit: int = 260,
+    adjust: str = "none",
+    force: bool = False,
+    include_timeline: bool = False,
+    refresh: bool = False,
+    include_quote: bool = True,
+) -> dict:
     force = bool(force or refresh)
     if frame not in {"1d", "1w", "1M", "1mo"}:
         frame = "1d"
     if frame == "1mo":
         frame = "1M"
     quote_error = None
-    try:
-        q = _enrich_quote_real(symbol, force=force)[0]
-    except Exception as exc:
-        q = None
-        quote_error = str(exc)
+    q = None
+    if include_quote:
+        try:
+            q = _enrich_quote_real(symbol, force=force)[0]
+        except Exception as exc:
+            quote_error = str(exc)
     kpayload = _safe_kline_payload(symbol, frame=frame, limit=limit, adjust=adjust, force=force, sync_quote=False)
     bars_data = kpayload.get("bars") or []
+    if limit and len(bars_data) > limit:
+        bars_data = bars_data[-max(1, int(limit)):]
     bars = [Bar(symbol=x.get("symbol") or symbol, frame=frame, ts=datetime.fromisoformat(str(x.get("ts")).replace("Z", "+00:00")).replace(tzinfo=None) if x.get("ts") else datetime.now(), open=float(x.get("open") or 0), high=float(x.get("high") or 0), low=float(x.get("low") or 0), close=float(x.get("close") or 0), volume=float(x.get("volume") or 0), amount=float(x.get("amount") or 0), turnover=x.get("turnover"), change_pct=x.get("change_pct"), source=x.get("source") or "cache_state") for x in bars_data]
     if q is None and bars:
         b = bars[-1]
         q = Quote(symbol=symbol, name=symbol, ts=b.ts, last=b.close, pre_close=b.open, open=b.open, high=b.high, low=b.low, volume=b.volume, amount=b.amount, change=b.close-b.open, change_pct=b.change_pct, turnover=b.turnover, source="bar_snapshot")
-    if q is not None:
+    if q is not None and include_quote:
         q, qd, quote_cache_status = _enrich_quote_real(symbol, force=False, quote_obj=q, bars=bars)
         bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
         points = _timeline_with_fallback(symbol, q, force=force) if include_timeline else []
@@ -1275,9 +1289,16 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
         qd["cache_status"] = quote_cache_status
         session = _market_session(q.market)
         out_symbol = q.symbol
+    elif q is not None:
+        synced, sync_reason, points = False, "quote_skipped", []
+        qd = q.to_dict()
+        qd["extra"] = _quote_extra(q)
+        qd["cache_status"] = {"status": "skipped", "source": "include_quote=false"}
+        session = _market_session(q.market)
+        out_symbol = q.symbol
     else:
         synced, sync_reason, points, qd, session, out_symbol = False, "quote_unavailable", [], None, _market_session(_detect_market(symbol)), symbol
-    behavior = market_behavior_engine.analyze(q, bars, intraday=points) if len(bars) >= 5 else kpayload.get("behavior_analysis") or market_behavior_engine.analyze(q, [])
+    behavior = market_behavior_engine.analyze(q, bars, intraday=points, recent_days=7) if len(bars) >= 5 else kpayload.get("behavior_analysis") or market_behavior_engine.analyze(q, [])
     return {
         "ok": bool(kpayload.get("ok", True)),
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -2628,7 +2649,10 @@ def realtime_paper_confirm_reject(task_id: str, payload: dict = Body(default_fac
 
 @app.post("/api/realtime-paper/tick")
 def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
-    return realtime_paper_engine_v321.tick(payload)
+    return realtime_paper_engine_v321.tick(
+        payload,
+        manual_replay=bool(payload.get("manual_replay") or payload.get("paper_replay")),
+    )
 
 
 @app.post("/api/realtime-paper/replay")
@@ -3089,6 +3113,25 @@ def orderbook(symbol: str, force: bool = False) -> dict:
         note = note or "公开行情源未返回五档盘口；普通免费源通常没有稳定 Level-2 深度，交易时段会继续尝试。"
     elif not ((book.asks or []) and (book.bids or [])):
         note = note or "盘口字段不完整；仅展示公开源实际返回的档位。"
+    behavior = orderbook_behavior_service.analyze(
+        book,
+        symbol=symbol,
+        skipped_external=not allow_external,
+        note=note,
+    )
+    if book:
+        payload = book.to_dict()
+    else:
+        payload = {
+            "symbol": symbol,
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "asks": [],
+            "bids": [],
+            "order_ratio": None,
+            "order_diff": None,
+            "source": "none",
+        }
+    payload["behavior"] = behavior
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -3097,7 +3140,7 @@ def orderbook(symbol: str, force: bool = False) -> dict:
         "market_label": session.get("label"),
         "skipped_external": not allow_external,
         "note": note,
-        "data": book.to_dict() if book else None,
+        "data": payload,
     }
 
 

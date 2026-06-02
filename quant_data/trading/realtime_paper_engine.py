@@ -36,6 +36,7 @@ class RealtimePaperEngine:
         self.human_confirm_queue = human_confirm_queue or HumanConfirmQueue()
         self.state = RealtimePaperState()
         self.signals: list[UnifiedSignal] = []
+        self.signal_meta: list[dict[str, Any]] = []
         self.tick_log: list[dict[str, Any]] = []
         self.portfolio_curve: list[dict[str, Any]] = []
 
@@ -82,7 +83,10 @@ class RealtimePaperEngine:
         return {"ok": True, "data": self.order_manager.list_orders(limit)}
 
     def signal_rows(self, limit: int = 200) -> dict[str, Any]:
-        return {"ok": True, "data": [x.to_dict() for x in self.signals[-max(1, int(limit or 200)) :]][::-1]}
+        size = max(1, int(limit or 200))
+        if self.signal_meta:
+            return {"ok": True, "data": list(self.signal_meta[-size:])[::-1]}
+        return {"ok": True, "data": [x.to_dict() for x in self.signals[-size:]][::-1]}
 
     def audit(self, limit: int = 300) -> dict[str, Any]:
         return {"ok": True, "data": self.audit_log.list(limit)}
@@ -141,7 +145,17 @@ class RealtimePaperEngine:
             now=now,
         )
         self.signals.append(signal)
-        self.tick_log.append({"timestamp": now.isoformat(timespec="seconds"), "symbol": symbol, "price": price, "signal": signal.to_dict(), "anomaly": anomaly.to_dict(), "freshness": freshness.to_dict()})
+        signal_row = signal.to_dict()
+        signal_row.update(
+            {
+                "name": str(quote.get("name") or payload.get("name") or symbol),
+                "quote_price": price,
+                "session_mode": "盘中实时" if is_trading else ("休市回放" if manual_replay else "休市观察"),
+                "paper_only": True,
+            }
+        )
+        self.signal_meta.append(signal_row)
+        self.tick_log.append({"timestamp": now.isoformat(timespec="seconds"), "symbol": symbol, "name": signal_row["name"], "price": price, "signal": signal_row, "anomaly": anomaly.to_dict(), "freshness": freshness.to_dict()})
         orders: list[dict[str, Any]] = []
         if signal.action in {"buy", "add", "sell", "reduce"} and price > 0:
             order = self.order_manager.build_order(
@@ -155,7 +169,7 @@ class RealtimePaperEngine:
             risk = self.risk_gateway.evaluate_order(
                 order.to_dict(),
                 portfolio=self.account.snapshot(),
-                signal=signal.to_dict(),
+                signal=signal_row,
                 quote=quote,
                 anomaly=anomaly.to_dict(),
                 freshness=freshness.to_dict(),
@@ -175,7 +189,7 @@ class RealtimePaperEngine:
                         action=signal.action,
                         reason="；".join(risk.get("warnings") or ["需要人工确认"]),
                         risk_flags=list(risk.get("warnings") or []),
-                        payload={"order": order.to_dict(), "risk": risk, "signal": signal.to_dict()},
+                        payload={"order": order.to_dict(), "risk": risk, "signal": signal_row},
                     )
             row = order.to_dict()
             row["risk"] = risk
@@ -185,12 +199,12 @@ class RealtimePaperEngine:
         self.account.mark_to_market({symbol: price})
         curve = {"timestamp": now.isoformat(timespec="seconds"), **self.account.snapshot()}
         self.portfolio_curve.append(curve)
-        self.audit_log.record("realtime_paper_tick", {"symbol": symbol, "signal": signal.to_dict(), "orders": orders, "paper_only": True})
-        self.audit_log.record("signal_generated", {"symbol": symbol, "signal": signal.to_dict(), "paper_only": True})
+        self.audit_log.record("realtime_paper_tick", {"symbol": symbol, "signal": signal_row, "orders": orders, "paper_only": True})
+        self.audit_log.record("signal_generated", {"symbol": symbol, "signal": signal_row, "paper_only": True})
         return {
             "ok": True,
             "state": self.state.to_dict(),
-            "signal": signal.to_dict(),
+            "signal": signal_row,
             "anomaly": anomaly.to_dict(),
             "freshness": freshness.to_dict(),
             "orders": orders,
