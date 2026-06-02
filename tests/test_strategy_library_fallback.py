@@ -11,6 +11,7 @@ def test_strategy_library_api_returns_fixed_shape():
     assert isinstance(data["data"], list)
     assert isinstance(data["default_keys"], list)
     assert isinstance(data["errors"], list)
+    assert len(data["data"]) >= 35
     assert {"低位修复", "高位追高过滤", "仓位与止损"} <= {x["name"] for x in data["data"]}
 
 
@@ -26,6 +27,8 @@ def test_strategy_library_service_failure_uses_backend_fallback(monkeypatch):
 def test_screener_frontend_has_timeout_fallback_and_can_run():
     html = TestClient(api.app).get("/screener").text
     assert "FALLBACK_STRATEGIES" in html
+    assert "__FALLBACK_STRATEGIES_JSON__" not in html
+    assert html.count('"key":') >= 35
     assert "AbortController" in html
     assert "3000" in html
     assert "useFallbackStrategyLibrary" in html

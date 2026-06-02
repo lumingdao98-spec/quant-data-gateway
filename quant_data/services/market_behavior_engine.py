@@ -78,6 +78,7 @@ class MarketBehaviorEngine:
         bars: list[Bar | dict[str, Any]],
         intraday: list[IntradayPoint | dict[str, Any]] | None = None,
         technical_context: dict[str, Any] | None = None,
+        recent_days: int = 1,
     ) -> dict[str, Any]:
         rows = [self._bar_dict(b) for b in bars or []]
         rows = [r for r in rows if self._num(r.get("close")) and self._num(r.get("high")) and self._num(r.get("low"))]
@@ -271,6 +272,9 @@ class MarketBehaviorEngine:
         risk_label = "高风险" if len(risk_hits) >= 2 or behavior_score >= 18 else "中风险" if risk_hits else "观察"
         if need_level2:
             evidence.append("缺少 Level-2/逐笔/账户级数据，疑似骗量或尾盘异常仅作风险提示")
+        marker_list = self._dedup_markers(markers)
+        if recent_days and recent_days > 1:
+            marker_list = self._dedup_markers(self._recent_markers(q, rows, recent_days) + markers)
         return {
             "behavior_tags": tags,
             "behavior_score": round(behavior_score, 2),
@@ -278,10 +282,53 @@ class MarketBehaviorEngine:
             "behavior_evidence": list(dict.fromkeys(evidence))[:30],
             "manipulation_risk_label": risk_label,
             "need_level2_confirm": need_level2,
-            "kline_markers": self._dedup_markers(markers),
+            "kline_markers": marker_list,
+            "recent_marker_days": int(recent_days or 1),
+            "recent_marker_count": len(marker_list),
             "risk_penalty_contribution": round(min(18.0, behavior_score * 0.45), 2),
             "supported_tags": SUPPORTED_BEHAVIOR_TAGS,
         }
+
+    def _recent_markers(self, quote: dict[str, Any], rows: list[dict[str, Any]], recent_days: int) -> list[dict[str, Any]]:
+        if len(rows) < 6 or recent_days <= 1:
+            return []
+        start = max(4, len(rows) - int(recent_days))
+        markers: list[dict[str, Any]] = []
+        for idx in range(start, len(rows)):
+            prefix = rows[: idx + 1]
+            row_quote = self._quote_for_row(quote, prefix)
+            result = self.analyze(row_quote, prefix, recent_days=0)
+            markers.extend(result.get("kline_markers") or [])
+        return markers
+
+    def _quote_for_row(self, quote: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+        row = rows[-1]
+        prev = rows[-2] if len(rows) >= 2 else row
+        q = dict(quote or {})
+        close = self._num(row.get("close")) or 0.0
+        prev_close = self._num(prev.get("close")) or close
+        volume = self._num(row.get("volume")) or 0.0
+        prev_vols = [self._num(x.get("volume")) or 0.0 for x in rows[:-1]]
+        vol_ma20 = moving_average(prev_vols, 20) or 0.0
+        change_pct = self._num(row.get("change_pct"))
+        if change_pct is None and prev_close:
+            change_pct = (close / prev_close - 1) * 100
+        q.update({
+            "symbol": row.get("symbol") or q.get("symbol"),
+            "ts": row.get("ts") or row.get("date") or q.get("ts"),
+            "last": close,
+            "pre_close": prev_close,
+            "open": row.get("open"),
+            "high": row.get("high"),
+            "low": row.get("low"),
+            "volume": volume,
+            "amount": row.get("amount"),
+            "change": close - prev_close if prev_close else None,
+            "change_pct": change_pct,
+            "turnover": row.get("turnover") if row.get("turnover") is not None else q.get("turnover"),
+            "volume_ratio": volume / vol_ma20 if vol_ma20 else q.get("volume_ratio"),
+        })
+        return q
 
     def _intraday_rules(self, points: list[dict[str, Any]], add) -> None:
         if len(points) < 8:

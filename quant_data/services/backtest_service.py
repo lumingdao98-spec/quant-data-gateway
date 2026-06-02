@@ -11,6 +11,9 @@ from quant_data.models import Bar
 @dataclass
 class BacktestConfig:
     strategy: str = "ma_cross"
+    strategy_combo: tuple[str, ...] = ()
+    combo_buy_rule: str = "at_least_2"
+    combo_sell_rule: str = "any"
     initial_cash: float = 100_000.0
     fee_rate: float = 0.0003
     slippage_rate: float = 0.0005
@@ -23,6 +26,11 @@ class BacktestConfig:
 
 
 SUPPORTED_STRATEGIES = [
+    {
+        "key": "combo_signal",
+        "name": "组合策略判断",
+        "description": "可同时勾选评分、均线、突破、MACD、BOLL等策略，买入按命中数量确认，卖出按任一/全部转弱确认。",
+    },
     {
         "key": "score_driven",
         "name": "日评分驱动",
@@ -422,6 +430,12 @@ class BacktestService:
             "name": name or symbol,
             "strategy": cfg.strategy,
             "strategy_name": self._strategy_name(cfg.strategy),
+            "strategy_combo": list(cfg.strategy_combo),
+            "strategy_combo_names": [self._strategy_name(x) for x in cfg.strategy_combo],
+            "combo_rules": {
+                "buy": cfg.combo_buy_rule,
+                "sell": cfg.combo_sell_rule,
+            },
             "initial_cash": round(cfg.initial_cash, 2),
             "final_equity": round(final_equity, 2),
             "total_return_pct": total_return_pct,
@@ -442,6 +456,8 @@ class BacktestService:
             "score_series": score_series,
             "score_formula": SCORE_FORMULA,
             "params": asdict(cfg),
+            "params_cn": self._params_cn(cfg),
+            "api_labels": self._api_labels(),
             "period": period,
             "cost_summary": cost_summary,
             "position_summary": position_summary,
@@ -457,6 +473,7 @@ class BacktestService:
                 "信号使用当日收盘数据计算，下一交易日开盘成交，避免收盘后才知道的信号当日成交。",
                 "默认计入手续费和滑点，按整手交易；暂不模拟涨跌停无法成交、盘口深度、停牌和分红税。",
                 "评分范围为0-100分：趋势34%、动量25%、量能19%、位置结构22%，再按风险扣分45%折减。",
+                "组合策略判断会把多个子策略的买入/卖出信号合并，买入按命中数量确认，卖出默认任一策略转弱即退出。",
                 "日评分驱动只使用历史K线可见数据回放，不使用未来数据；实盘还需要人工复核信息面和大盘环境。",
                 "回测结果用于研究策略口径，不等于实盘收益或买卖建议。",
             ],
@@ -466,8 +483,25 @@ class BacktestService:
         strategy = str(cfg.strategy or "ma_cross")
         if strategy not in {x["key"] for x in self.strategies}:
             strategy = "ma_cross"
+        valid = {x["key"] for x in self.strategies if x["key"] != "combo_signal"}
+        raw_combo = cfg.strategy_combo
+        if isinstance(raw_combo, str):
+            combo = tuple(x.strip() for x in raw_combo.split(",") if x.strip() in valid)
+        else:
+            combo = tuple(str(x).strip() for x in (raw_combo or ()) if str(x).strip() in valid)
+        if strategy == "combo_signal" and not combo:
+            combo = ("score_driven", "ma_cross", "macd_momentum", "breakout")
+        buy_rule = str(cfg.combo_buy_rule or "at_least_2")
+        if buy_rule not in {"any", "at_least_2", "at_least_3", "all"}:
+            buy_rule = "at_least_2"
+        sell_rule = str(cfg.combo_sell_rule or "any")
+        if sell_rule not in {"any", "all"}:
+            sell_rule = "any"
         return BacktestConfig(
             strategy=strategy,
+            strategy_combo=combo,
+            combo_buy_rule=buy_rule,
+            combo_sell_rule=sell_rule,
             initial_cash=max(1_000.0, _num(cfg.initial_cash, 100_000.0)),
             fee_rate=max(0.0, min(0.02, _num(cfg.fee_rate, 0.0003))),
             slippage_rate=max(0.0, min(0.02, _num(cfg.slippage_rate, 0.0005))),
@@ -746,6 +780,24 @@ class BacktestService:
             if cfg.take_profit_pct > 0 and entry_price > 0 and close >= entry_price * (1 + cfg.take_profit_pct / 100):
                 return {"side": "sell", "reason": f"止盈{cfg.take_profit_pct:.1f}%"}
 
+        if strategy == "combo_signal":
+            return self._combo_signal(idx, closes, highs, lows, volumes, macd_hist, score_series, in_position, peak_price, cfg)
+        return self._single_strategy_signal(strategy, idx, closes, highs, lows, volumes, macd_hist, score_series, in_position, peak_price, cfg)
+
+    def _single_strategy_signal(
+        self,
+        strategy: str,
+        idx: int,
+        closes: list[float],
+        highs: list[float],
+        lows: list[float],
+        volumes: list[float],
+        macd_hist: list[float],
+        score_series: list[dict],
+        in_position: bool,
+        peak_price: float,
+        cfg: BacktestConfig,
+    ) -> dict | None:
         if strategy == "score_driven":
             return self._score_driven_signal(idx, closes, score_series, in_position, cfg)
         if strategy == "score_reversal":
@@ -761,6 +813,51 @@ class BacktestService:
         if strategy == "trend_pullback":
             return self._trend_pullback_signal(idx, closes, score_series, in_position)
         return self._ma_cross_signal(idx, closes, in_position)
+
+    def _combo_signal(
+        self,
+        idx: int,
+        closes: list[float],
+        highs: list[float],
+        lows: list[float],
+        volumes: list[float],
+        macd_hist: list[float],
+        score_series: list[dict],
+        in_position: bool,
+        peak_price: float,
+        cfg: BacktestConfig,
+    ) -> dict | None:
+        combo = tuple(x for x in cfg.strategy_combo if x and x != "combo_signal")
+        if not combo:
+            combo = ("score_driven", "ma_cross", "macd_momentum", "breakout")
+        hits: list[tuple[str, dict]] = []
+        for key in combo:
+            signal = self._single_strategy_signal(key, idx, closes, highs, lows, volumes, macd_hist, score_series, in_position, peak_price, cfg)
+            if signal and signal.get("side") == ("sell" if in_position else "buy"):
+                hits.append((key, signal))
+        if not hits:
+            return None
+        names = [self._strategy_name(key) for key, _ in hits]
+        if in_position:
+            required = len(combo) if cfg.combo_sell_rule == "all" else 1
+            if len(hits) >= required:
+                reasons = "；".join(str(x.get("reason") or "") for _, x in hits[:3])
+                return {"side": "sell", "reason": f"组合策略卖出：{','.join(names)} 命中；{reasons}"}
+            return None
+        if cfg.combo_buy_rule == "all":
+            required = len(combo)
+        elif cfg.combo_buy_rule == "at_least_3":
+            required = min(3, len(combo))
+        elif cfg.combo_buy_rule == "any":
+            required = 1
+        else:
+            required = min(2, len(combo))
+        snap = score_series[idx]
+        risk = _num(snap.get("risk_penalty"), 0)
+        if len(hits) >= required and risk <= 38:
+            reasons = "；".join(str(x.get("reason") or "") for _, x in hits[:3])
+            return {"side": "buy", "reason": f"组合策略买入：{','.join(names)} 命中，满足{required}/{len(combo)}项；{reasons}"}
+        return None
 
     def _score_driven_signal(self, idx: int, closes: list[float], score_series: list[dict], in_position: bool, cfg: BacktestConfig) -> dict | None:
         snap = score_series[idx]
@@ -997,6 +1094,44 @@ class BacktestService:
                 }
             )
         return events
+
+    def _params_cn(self, cfg: BacktestConfig) -> dict:
+        return {
+            "策略": self._strategy_name(cfg.strategy),
+            "组合策略": "、".join(self._strategy_name(x) for x in cfg.strategy_combo) if cfg.strategy_combo else "未启用",
+            "组合买入规则": {"any": "任一命中", "at_least_2": "至少2项命中", "at_least_3": "至少3项命中", "all": "全部命中"}.get(cfg.combo_buy_rule, cfg.combo_buy_rule),
+            "组合卖出规则": {"any": "任一转弱卖出", "all": "全部转弱卖出"}.get(cfg.combo_sell_rule, cfg.combo_sell_rule),
+            "初始资金": round(cfg.initial_cash, 2),
+            "仓位比例": f"{cfg.position_pct * 100:.1f}%",
+            "手续费率": f"{cfg.fee_rate * 100:.4f}%",
+            "滑点率": f"{cfg.slippage_rate * 100:.4f}%",
+            "止损": f"{cfg.stop_loss_pct:.1f}%",
+            "止盈": f"{cfg.take_profit_pct:.1f}%" if cfg.take_profit_pct > 0 else "未启用",
+            "买入评分阈值": cfg.buy_score,
+            "卖出评分阈值": cfg.sell_score,
+            "整手股数": cfg.lot_size,
+        }
+
+    def _api_labels(self) -> dict:
+        return {
+            "strategy": "策略",
+            "strategy_combo": "组合策略",
+            "combo_buy_rule": "组合买入规则",
+            "combo_sell_rule": "组合卖出规则",
+            "initial_cash": "初始资金",
+            "fee_rate": "手续费率",
+            "slippage_rate": "滑点率",
+            "position_pct": "仓位比例",
+            "stop_loss_pct": "止损%",
+            "take_profit_pct": "止盈%",
+            "buy_score": "买入评分",
+            "sell_score": "卖出评分",
+            "lot_size": "整手股数",
+            "trade_events": "买卖流水",
+            "position_summary": "持仓与成本",
+            "cost_summary": "成本汇总",
+            "period": "回测区间",
+        }
 
     def _daily_returns(self, equity_curve: list[dict]) -> list[float]:
         returns: list[float] = []

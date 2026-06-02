@@ -1,0 +1,115 @@
+version: "2026-06-02"
+timezone: "Asia/Shanghai"
+
+profiles:
+  SSE_MAIN:
+    effective_from: "2026-01-01"
+    exchange: "SSE"
+    board: "MAIN"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.10
+    ipo_first_n_days_no_limit: 5
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  SSE_MAIN_RISK_WARNING:
+    effective_from: "2026-01-01"
+    exchange: "SSE"
+    board: "MAIN_RISK_WARNING"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.10
+    ipo_first_n_days_no_limit: 5
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  SSE_STAR:
+    effective_from: "2026-01-01"
+    exchange: "SSE"
+    board: "STAR"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 200
+    odd_lot_sell_once: true
+    price_limit_pct: 0.20
+    ipo_first_n_days_no_limit: 5
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  SZSE_MAIN:
+    effective_from: "2026-01-01"
+    exchange: "SZSE"
+    board: "MAIN"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.10
+    ipo_first_n_days_no_limit: 5
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  SZSE_MAIN_RISK_WARNING:
+    effective_from: "2026-01-01"
+    exchange: "SZSE"
+    board: "MAIN_RISK_WARNING"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.05
+    ipo_first_n_days_no_limit: 5
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  SZSE_CHINEXT:
+    effective_from: "2026-01-01"
+    exchange: "SZSE"
+    board: "CHINEXT"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.20
+    ipo_first_n_days_no_limit: 5
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  BSE_STOCK:
+    effective_from: "2026-01-01"
+    exchange: "BSE"
+    board: "BSE"
+    security_type: "stock"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.30
+    ipo_first_n_days_no_limit: 1
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "forbidden"
+
+  ETF_GENERIC:
+    effective_from: "2026-01-01"
+    exchange: "AUTO"
+    board: "ETF"
+    security_type: "etf"
+    t_plus_one: true
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.10
+    ipo_first_n_days_no_limit: 0
+    price_tick: 0.001
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "instrument_master"

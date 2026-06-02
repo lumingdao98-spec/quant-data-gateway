@@ -64,3 +64,25 @@ def test_backtest_score_driven_outputs_scores_kline_and_markers():
     assert "anomaly_markers" in result["data_quality"]
     assert result["markers"]
     assert {m["side"] for m in result["markers"]} <= {"buy", "sell"}
+
+
+def test_backtest_combo_signal_records_component_rules():
+    result = BacktestService().run(
+        "300750",
+        _trend_bars(180),
+        BacktestConfig(
+            strategy="combo_signal",
+            strategy_combo=("score_driven", "ma_cross", "macd_momentum"),
+            combo_buy_rule="at_least_2",
+            combo_sell_rule="any",
+            buy_score=55,
+            sell_score=45,
+        ),
+    )
+
+    assert result["strategy"] == "combo_signal"
+    assert result["strategy_combo"] == ["score_driven", "ma_cross", "macd_momentum"]
+    assert result["combo_rules"]["buy"] == "at_least_2"
+    assert "组合策略" in result["params_cn"]
+    assert "strategy_combo" in result["api_labels"]
+    assert any("组合策略" in x for x in result["assumptions"])

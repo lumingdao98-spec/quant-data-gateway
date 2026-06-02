@@ -239,6 +239,7 @@ class BacktestResult:
     portfolio_states: list[PortfolioState] = field(default_factory=list)
     equity_curve: list[dict[str, Any]] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
+    score_provenance: list[dict[str, Any]] = field(default_factory=list)
     data_quality: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -259,6 +260,7 @@ class BacktestResult:
             "portfolio_states": [x.to_dict() for x in self.portfolio_states],
             "equity_curve": _iso(self.equity_curve),
             "metrics": _iso(self.metrics),
+            "score_provenance": _iso(self.score_provenance),
             "data_quality": _iso(self.data_quality),
             "warnings": list(self.warnings),
             "errors": list(self.errors),

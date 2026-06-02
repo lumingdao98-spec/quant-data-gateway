@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import json
+
+from quant_data.services.strategy_library_service import StrategyLibraryService
+
+
+def _fallback_strategies_json() -> str:
+    try:
+        data = StrategyLibraryService().list()
+    except Exception:
+        data = []
+    return json.dumps(data or [], ensure_ascii=False)
+
 
 def build_screener_ui() -> str:
-    return r'''<!doctype html>
+    html = r'''<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -164,6 +176,11 @@ def score(context):
       <button class="btn-green" onclick="addSelectedToMonitor()">加入实时监测</button>
       <button class="btn2" onclick="jumpSelectedToMonitor()">加入并跳转</button>
       <button class="btn2" onclick="appendSelectedToPool()">加入筛选池</button>
+      <button class="btn2" onclick="backtestCurrentScreener()">筛选结果回测</button>
+      <button class="btn2" onclick="addSelectedToRealtimePool()">加入实时模拟池</button>
+      <button class="btn2" onclick="startRealtimeFromScreener()">启动盘中模拟</button>
+      <button class="btn2" onclick="viewThreeDimSignal()">三面信号</button>
+      <button class="btn2" onclick="viewAnomalyReason()">异常原因</button>
     </div>
     <div class="detail-section-nav">基础行情 · 估值市值 · 技术状态 · 资金行为 · 支撑压力 · 信息面快照 · 缺失数据 · 诊断结论</div>
     <div class="kv" id="detailKv"></div>
@@ -358,6 +375,13 @@ function openSelectedDetail(){const s=selected?.symbol||parseSymbols().split(','
 function openBacktestPage(){const s=selected?.symbol||parseSymbols().split(',')[0]||'300750';window.open('/backtest?symbol='+encodeURIComponent(s),'_blank')}
 function appendSelectedToPool(){if(!selected)return;const old=parseSymbols().split(',').filter(Boolean);if(!old.includes(selected.symbol))old.push(selected.symbol);$('symbols').value=old.join(',');savePool()}
 async function addSelectedToMonitor(){if(!selected){log('请先选择一只筛选结果','WARN');return}try{const resp=await fetch('/api/watchlist/add?symbols='+encodeURIComponent(selected.symbol),{method:'POST',cache:'no-store'});const js=await resp.json();if(!js.ok)throw new Error(js.message||'加入失败');log(`${selected.symbol} ${selected.name} 已加入实时监测列表，当前 ${js.data.count} 只`)}catch(e){log(e,'ERROR')}}
+function currentScreenerPayload(limit=30){const visible=(rows&&rows.length?rows:[]).slice(0,Math.max(1,limit));const symbols=visible.length?visible.map(x=>x.symbol).filter(Boolean):parseSymbols().split(',').filter(Boolean);return {symbols,rows:visible,strategies:selectedStrategies(),selected_symbol:selected?.symbol||symbols[0]||'',source:'screener_snapshot'}}
+function ensureSelectedRow(){if(selected)return selected;if(rows&&rows.length){selected=rows[0];return selected}return null}
+function backtestCurrentScreener(){const r=ensureSelectedRow();const sym=r?.symbol||parseSymbols().split(',')[0]||'300750';const p=new URLSearchParams();p.set('symbol',sym);p.set('strategy','combo_signal');p.set('strategy_combo',selectedStrategies().join(','));p.set('combo_buy_rule','at_least_2');p.set('combo_sell_rule','any');p.set('position_sizing','score_weighted');p.set('horizon','swing');p.set('legacy','true');p.set('autorun','1');window.open('/backtest?'+p.toString(),'_blank')}
+async function addSelectedToRealtimePool(){const payload=currentScreenerPayload(30);if(!payload.symbols.length){log('没有可加入实时模拟池的筛选结果','WARN');return}try{const resp=await fetch('/api/screener/realtime-paper/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});const js=await resp.json();if(!js.ok)throw new Error(js.message||'加入实时模拟池失败');log('已加入实时模拟池：'+(js.symbols||[]).join(','))}catch(e){log(e,'ERROR')}}
+async function startRealtimeFromScreener(){const payload=currentScreenerPayload(30);if(!payload.symbols.length){log('没有可启动盘中模拟的筛选结果','WARN');return}payload.horizon='intraday_paper';payload.interval_seconds=15;try{const resp=await fetch('/api/screener/realtime-paper/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});const js=await resp.json();if(!js.ok)throw new Error(js.message||'启动盘中模拟失败');log('盘中实时模拟已启动：'+(js.symbols||payload.symbols).join(','));window.open('/realtime-paper','_blank')}catch(e){log(e,'ERROR')}}
+async function viewThreeDimSignal(){const r=ensureSelectedRow();if(!r){log('请先选择一只筛选结果','WARN');return}try{const resp=await fetch('/api/screener/signal-preview/'+encodeURIComponent(r.symbol),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({row:r,horizon:'swing'}),cache:'no-store'});const js=await resp.json();if(!js.ok)throw new Error(js.message||'信号生成失败');const s=js.signal||{};$('explainTitle').textContent='三面评分信号：'+r.name+' '+r.symbol;$('explainBody').innerHTML=`<div class="hint">动作 ${htmlEsc(s.action||'--')} · 综合 ${fmt(s.final_score,1)} · 置信 ${fmt((s.confidence||0)*100,1)}% · 目标仓位 ${fmt((s.target_weight||0)*100,1)}%</div><div class="explain-metric"><b>基本/技术</b><span>${fmt(s.fundamental_score,1)} / ${fmt(s.technical_score,1)}</span></div><div class="explain-metric"><b>信息/大盘</b><span>${fmt(s.information_score,1)} / ${fmt(s.market_score,1)}</span></div><div class="explain-metric"><b>异常分</b><span>${fmt(s.anomaly_score,1)}</span></div><div class="explain-metric"><b>原因</b><span>${htmlEsc(s.reason||'--')}</span></div><div class="small">${(s.evidence||[]).map(x=>`<span class="tag">${htmlEsc(x)}</span>`).join('')}</div>`;$('explainBox').style.display='block'}catch(e){log(e,'ERROR')}}
+async function viewAnomalyReason(){const r=ensureSelectedRow();if(!r){log('请先选择一只筛选结果','WARN');return}try{const resp=await fetch('/api/screener/anomaly-preview/'+encodeURIComponent(r.symbol),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({row:r}),cache:'no-store'});const js=await resp.json();if(!js.ok)throw new Error(js.message||'异常识别失败');const a=js.anomaly||{};$('explainTitle').textContent='异常波动原因：'+r.name+' '+r.symbol;$('explainBody').innerHTML=`<div class="hint">动作建议 ${htmlEsc(a.action_suggestion||'allow')} · 异常分 ${fmt(a.anomaly_score,1)} · 严重度 ${htmlEsc(a.severity??0)}</div><div>${(a.anomaly_tags||[]).map(x=>`<span class="tag risk">${htmlEsc(x)}</span>`).join('')||'<span class="ok">暂无明显异常标签</span>'}</div><div class="section-title">证据</div><div class="small">${(a.evidence||[]).map(x=>`<div>• ${htmlEsc(x)}</div>`).join('')||'--'}</div>`;$('explainBox').style.display='block'}catch(e){log(e,'ERROR')}}
 function openTechnicalFactors(){if(!selected){log('请先选择一只筛选结果','WARN');return}window.open('/technical/'+encodeURIComponent(selected.symbol),'_blank')}
 function jumpSelectedToMonitor(){if(!selected){log('请先选择一只筛选结果','WARN');return}window.open('/jump/watchlist?symbols='+encodeURIComponent(selected.symbol),'_blank')}
 function clearTrend(){const c=$('trendCanvas');if(c){const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height)}$('trendEmpty').style.display='flex';$('trendHint').textContent='按天记录'}
@@ -367,17 +391,7 @@ function drawTrend(data){const canvas=$('trendCanvas');const empty=$('trendEmpty
 
 document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='symbol'||k==='name'||k==='grade')?1:-1}sortRows(false);render()});
 
-const FALLBACK_STRATEGIES=[
-  {key:'low_position',name:'低位修复',category:'稳定恢复',description:'低位结构、回踩修复和趋势确认的兜底策略。',enabled:true,default_weight:1,tags:['fallback','low']},
-  {key:'avoid_chasing_high',name:'高位追高过滤',category:'稳定恢复',description:'过滤高位放量滞涨、假突破和追高风险。',enabled:true,default_weight:1,tags:['fallback','risk']},
-  {key:'ma_repair',name:'均线修复',category:'稳定恢复',description:'MA5/10/20 修复和多头排列观察。',enabled:true,default_weight:1,tags:['ma']},
-  {key:'macd_cross',name:'MACD金叉/多头',category:'稳定恢复',description:'MACD DIF/DEA 和柱体方向确认。',enabled:true,default_weight:1,tags:['macd']},
-  {key:'macd_hist_turn',name:'MACD柱改善',category:'稳定恢复',description:'弱转强时的柱体改善观察。',enabled:true,default_weight:1,tags:['macd']},
-  {key:'volume_breakout',name:'温和放量',category:'稳定恢复',description:'量能温和配合，避免异常巨量。',enabled:true,default_weight:1,tags:['volume']},
-  {key:'risk_control',name:'风险扣分',category:'稳定恢复',description:'行为风险、技术破位、消息风险扣分。',enabled:true,default_weight:1,tags:['risk']},
-  {key:'atr_risk',name:'ATR波动过滤',category:'稳定恢复',description:'过滤异常波动和不可控振幅。',enabled:true,default_weight:1,tags:['atr']},
-  {key:'position_stop',name:'仓位与止损',category:'稳定恢复',description:'输出仓位、止损和人工复核建议。',enabled:true,default_weight:1,tags:['position']}
-];
+const FALLBACK_STRATEGIES=__FALLBACK_STRATEGIES_JSON__;
 const LS_Q_SNAPSHOT='quant_screener_snapshot_id',LS_Q_ROWS='quant_screener_rows',LS_Q_PARAMS='quant_screener_params',LS_Q_SELECTED='quant_screener_selected_symbol',LS_Q_VIEW='quant_screener_view_mode',LS_Q_SCROLL='quant_screener_scroll_position',LS_Q_STRATEGIES='quant_screener_strategy_keys',LS_Q_CUSTOM='quant_screener_custom_symbols';
 function persistScreenerState(){
   try{
@@ -428,8 +442,9 @@ function ensureSortControl(){
 function useFallbackStrategyLibrary(reason){
   strategyLibrary=FALLBACK_STRATEGIES.slice();
   defaultStrategyKeys=new Set(strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));
-  const saved=localStorage.getItem(LS_STRATEGIES)||localStorage.getItem(LS_Q_STRATEGIES);
-  selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
+  const savedRaw=localStorage.getItem(LS_STRATEGIES);
+  const saved=savedRaw!==null?savedRaw:localStorage.getItem(LS_Q_STRATEGIES);
+  selectedStrategyKeys=saved!==null?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
   currentStrategyCategory='全部';
   renderStrategyTabs();renderStrategyLibrary();
   if($('strategySummary'))$('strategySummary').insertAdjacentHTML('beforeend',` <span class="tag risk">fallback: ${htmlEsc(reason||'strategy api timeout')}</span>`);
@@ -444,8 +459,9 @@ async function loadStrategyLibrary(){
     const js=await r.json();
     strategyLibrary=Array.isArray(js.data)&&js.data.length?js.data:FALLBACK_STRATEGIES.slice();
     defaultStrategyKeys=new Set((js.default_keys&&js.default_keys.length?js.default_keys:strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key)));
-    const saved=localStorage.getItem(LS_STRATEGIES)||localStorage.getItem(LS_Q_STRATEGIES);
-    selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
+    const savedRaw=localStorage.getItem(LS_STRATEGIES);
+    const saved=savedRaw!==null?savedRaw:localStorage.getItem(LS_Q_STRATEGIES);
+    selectedStrategyKeys=saved!==null?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
     currentStrategyCategory='全部';
     renderStrategyTabs();renderStrategyLibrary();
   }catch(e){
@@ -738,7 +754,66 @@ runScreener=async function(){
   }
 }
 
+function normalizeStrategySelection(){
+  if(!Array.isArray(strategyLibrary)||!strategyLibrary.length){
+    strategyLibrary=FALLBACK_STRATEGIES.slice();
+  }
+  const valid=new Set(strategyLibrary.map(x=>String(x.key)));
+  const cleaned=Array.from(selectedStrategyKeys||[]).map(String).filter(k=>valid.has(k));
+  const savedRaw=localStorage.getItem(LS_STRATEGIES);
+  if(cleaned.length)selectedStrategyKeys=new Set(cleaned);
+  else if(savedRaw==='')selectedStrategyKeys=new Set();
+  else selectedStrategyKeys=new Set((defaultStrategyKeys&&defaultStrategyKeys.size?Array.from(defaultStrategyKeys):strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key)).filter(k=>valid.has(k)));
+  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
+  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+}
+function syncStrategyCheckboxes(){
+  document.querySelectorAll('.strategy-check,.strategy-inline-check').forEach(el=>{el.checked=selectedStrategyKeys.has(el.value)});
+}
+const renderStrategyLibraryStable=renderStrategyLibrary;
+renderStrategyLibrary=function(){
+  normalizeStrategySelection();
+  renderStrategyLibraryStable();
+  syncStrategyCheckboxes();
+}
+const updateStrategySummaryStable=updateStrategySummary;
+updateStrategySummary=function(){
+  normalizeStrategySelection();
+  updateStrategySummaryStable();
+  syncStrategyCheckboxes();
+}
+syncStrategySelection=function(key,checked){
+  if(checked)selectedStrategyKeys.add(key);
+  else selectedStrategyKeys.delete(key);
+  normalizeStrategySelection();
+  updateStrategySummary();
+}
+openStrategyModal=function(){
+  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
+  normalizeStrategySelection();
+  document.getElementById('strategyModal').classList.add('show');
+  renderStrategyTabs();
+  renderStrategyLibrary();
+}
+selectAllStrategies=function(flag){
+  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
+  selectedStrategyKeys=flag?new Set(strategyLibrary.map(x=>x.key)):new Set();
+  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
+  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+  renderStrategyLibrary();
+  updateStrategySummary();
+}
+selectDefaultStrategies=function(){
+  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
+  selectedStrategyKeys=new Set(defaultStrategyKeys&&defaultStrategyKeys.size?Array.from(defaultStrategyKeys):strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));
+  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
+  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
+  renderStrategyLibrary();
+  updateStrategySummary();
+}
+
 (function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
 </script>
 </body>
 </html>'''
+    return html.replace("__FALLBACK_STRATEGIES_JSON__", _fallback_strategies_json())

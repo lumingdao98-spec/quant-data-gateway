@@ -1,5 +1,19 @@
 # Quant Data Gateway V3.18.3 / Stable Recovery
 
+## V3.22 研究回测与纸面交易增强
+
+本分支继续保留 V3.20/V3.21 兼容入口，并新增 V3.22 核心能力：
+
+- 评分溯源：`BacktestResult.score_provenance` 记录因子贡献、门禁、策略 hash、PIT 覆盖率和 no-lookahead 状态。
+- 大盘/个股/策略适配：`quant_data/research/` 提供大盘状态、个股分类和策略族建议。
+- 交易规则配置：`config/market_rules/a_share_rules.yaml` 管理涨跌停、T+1、买入手数和卖出零股，执行层不再直接硬编码板块前缀。
+- 资金与仓位：支持固定、评分、波动率、ATR、定投、金字塔、Kelly 等模式，并输出仓位利用和现金拖累。
+- 历史筛选快照：`/api/screener/historical-snapshot` 按决策时点重建筛选结果，避免回测偷看未来。
+- 纸面交易：`/api/realtime-paper/*` 仍然只做模拟，新增人工确认队列，不连接真实券商。
+- 中文 API：`/docs-cn` 是中文总览，`/docs` 保留 Swagger Try it out，可直接调参数。
+
+配套文档见 `docs/QDG_AUTOTRADING_V1.md`、`docs/QDG_SCORE_PROVENANCE_SPEC.md`、`docs/QDG_PIT_DATA_REQUIREMENTS.md` 和 `docs/TEST_PLAN_V322.md`。
+
 面向 A 股和 ETF 的研究辅助系统。V3.18.3 把 WordSource、筛选快照、信息快照、K 线缓存、技术因子、全球行业映射、市场行为标注和前端恢复状态接成闭环：页面打开不再默认空白，返回筛选页不丢结果，详情页优先复用缓存。
 
 ## 启动方式
@@ -234,3 +248,38 @@ pytest -q
 ## 外部接口限制
 
 本系统依赖公开行情、公告、F10、新闻和社区页面。公开接口可能限流、改版、休市返回空、字段缺失或响应慢。V3.18.3 的处理原则是：优先复用缓存、展示缺失原因、保留 stale 结果、避免伪造 K 线和 Level-2 结论。当前 V3.x 不接真实券商实盘接口；交易接口只保留给 V4/V5/V6/V7 的结构演进。
+
+## V3.21 Dynamic Position & Realtime Paper Trading
+
+V3.21 增加动态仓位、资金管理和实时模拟交易闭环。历史回测仍在 `/backtest`，用于验证历史 K 线、评分、止损止盈、仓位模式和买卖流水；实时模拟在 `/realtime-paper`，用于交易时段或手动 tick 的 paper-only 仿真。
+
+核心能力：
+
+- 资金管理模式：固定仓位、等权、评分加权、波动率目标、ATR 风险、单笔固定风险、分数凯利、金字塔、定投、核心-卫星。
+- 收益再投资：`compound_returns=true` 使用最新 equity 计算下一次仓位，关闭时固定以 initial_cash 为基准。
+- 策略周期：`intraday_paper`、`short_term`、`swing`、`position`、`dca`、`hybrid`。
+- 三面评分：基本面、技术面、信息面，加上大盘/市场环境权重；缺失数据动态降权，不简单补 0。
+- 异常过滤：高位滞涨、假突破、跌破 MA20/VWAP、尾盘砸盘、信息面负面和数据 stale 会降权、阻断或要求人工确认。
+- 风控网关：订单前检查总仓位、单票/行业上限、现金、交易时段、涨跌停、ST/黑名单、低流动性、数据新鲜度和大额确认。
+- paper trading：只生成模拟订单、模拟成交、模拟持仓和审计日志，不连接真实券商。
+
+新增页面和 API：
+
+- `/realtime-paper`
+- `POST /api/realtime-paper/start`
+- `POST /api/realtime-paper/stop`
+- `GET /api/realtime-paper/status`
+- `GET /api/realtime-paper/portfolio`
+- `GET /api/realtime-paper/orders`
+- `GET /api/realtime-paper/signals`
+- `GET /api/realtime-paper/audit`
+- `POST /api/realtime-paper/tick`
+- `POST /api/realtime-paper/replay`
+
+设计文档：
+
+- `docs/BACKTEST_V321_GAP_AUDIT.md`
+- `docs/MONEY_MANAGEMENT_DESIGN.md`
+- `docs/REALTIME_PAPER_TRADING_DESIGN.md`
+- `docs/TRADING_RISK_GATEWAY.md`
+- `docs/AUTO_TRADING_ROADMAP.md`

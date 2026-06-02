@@ -34,6 +34,8 @@ def test_orderbook_closed_market_explains_no_level1_book(monkeypatch):
     data = TestClient(api.app).get("/api/orderbook/300274").json()
     assert data["skipped_external"] is True
     assert data["note"] == "\u4f11\u5e02\u65e0\u76d8\u53e3"
+    assert data["data"]["behavior"]["confidence"] == "low"
+    assert data["data"]["behavior"]["requires_level2"] is True
 
 
 def test_orderbook_open_market_explains_missing_public_level2_book(monkeypatch):
@@ -45,6 +47,8 @@ def test_orderbook_open_market_explains_missing_public_level2_book(monkeypatch):
     assert data["skipped_external"] is False
     assert "Level-2" in data["note"]
     assert "\u516c\u5f00\u884c\u60c5\u6e90" in data["note"]
+    assert data["data"]["behavior"]["confidence"] == "low"
+    assert data["data"]["behavior"]["requires_level2"] is True
 
 
 def test_missing_quote_metrics_have_explicit_reasons(monkeypatch):

@@ -9,11 +9,12 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from quant_data import __version__
 from quant_data.market_calendar import MarketCalendar
-from quant_data.models import AssetType, Bar, IntradayPoint, Quote
+from quant_data.models import AssetType, Bar, IntradayPoint, OrderBook, Quote
 from quant_data.services.market_data_service import MarketDataService
 from quant_data.services.screener_service import ScreenerConfig, ScreenerService
 from quant_data.services.watchlist_service import WatchlistService
@@ -27,6 +28,7 @@ from quant_data.services.source_registry import SourceRegistryService
 from quant_data.services.technical_factor_registry import TechnicalFactorRegistryService
 from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
+from quant_data.services.orderbook_behavior_service import OrderBookBehaviorService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot
 from quant_data.services.market_behavior_engine import MarketBehaviorEngine
 from quant_data.services.cache_state_service import CacheStateService
@@ -38,8 +40,11 @@ from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.services.background_cache_service import BackgroundCacheService
 from quant_data.services.backtest_service import BacktestConfig as LegacyBacktestConfig, BacktestService, SCORE_FORMULA
-from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategySignal
+from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategyHorizonConfig, StrategySignal
+from quant_data.backtest.position_sizing import PositionSizingConfig
 from quant_data.backtest.engine import BacktestEngine, BacktestEngineV320
+from quant_data.backtest.historical_snapshot import HistoricalScreenerSnapshotBuilder
+from quant_data.backtest.market_rules import MarketRuleEngine
 from quant_data.backtest.optimizer import ParameterOptimizer
 from quant_data.backtest.paper_broker import PaperBroker
 from quant_data.backtest.report import build_report
@@ -49,7 +54,15 @@ from quant_data.screener_ui import build_screener_ui
 from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
 from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui, build_paper_ui
-from quant_data.trading import PaperTradingGateway, TradingSignal
+from quant_data.realtime_paper_ui import build_realtime_paper_ui
+from quant_data.trading import (
+    AnomalyGuard,
+    DataFreshnessGuard,
+    PaperTradingGateway,
+    RealtimePaperEngine,
+    SignalFusionEngine,
+    TradingSignal,
+)
 
 
 service = MarketDataService()
@@ -72,6 +85,7 @@ technical_factor_registry_service = TechnicalFactorRegistryService()
 candidate_pool_service = CandidatePoolService()
 market_regime_service = MarketRegimeService()
 market_behavior_engine = MarketBehaviorEngine()
+orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
 technical_factor_engine = TechnicalFactorEngine()
@@ -79,8 +93,15 @@ backtest_service = BacktestService()
 backtest_engine_v319 = BacktestEngine(service)
 backtest_engine_v320 = BacktestEngineV320(service)
 backtest_storage_v319 = BacktestStorage()
+historical_snapshot_builder_v322 = HistoricalScreenerSnapshotBuilder()
+market_rule_engine_v322 = MarketRuleEngine.default()
 paper_broker_v319 = PaperBroker(V319BacktestConfig())
 paper_trading_gateway_v320 = PaperTradingGateway()
+realtime_paper_engine_v321 = RealtimePaperEngine(
+    signal_fusion=SignalFusionEngine(),
+    anomaly_guard=AnomalyGuard(),
+    freshness_guard=DataFreshnessGuard(),
+)
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -92,7 +113,7 @@ FALLBACK_STRATEGIES = [
     {"key": "atr_risk", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
     {"key": "position_stop", "name": "仓位与止损", "category": "回测/风控/执行", "description": "结合支撑、ATR 与等级输出仓位/止损建议。", "enabled": True, "default_weight": 1.0, "tags": ["position"]},
 ]
-app = FastAPI(title="Quant Data Gateway", version=__version__, description="A股/基金实时行情、分时、K线与后续量化系统的数据网关")
+app = FastAPI(title="量化数据网关 API", version=__version__, description="A股/ETF 实时行情、筛选、回测、评分溯源与纸面交易系统。", docs_url=None, redoc_url=None)
 
 def _make_snapshot_id(symbol: str | None = None, limit: int | None = None) -> str:
     core = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -107,6 +128,171 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_api_docs() -> HTMLResponse:
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title="量化数据网关 API 调试",
+        swagger_ui_parameters={
+            "docExpansion": "none",
+            "defaultModelsExpandDepth": -1,
+            "displayRequestDuration": True,
+            "tryItOutEnabled": True,
+            "filter": True,
+        },
+    )
+
+
+def _render_chinese_api_docs() -> str:
+    groups = [
+        (
+            "行情与盘口",
+            [
+                ("GET", "/api/quotes?symbols=300750,600519&force=false", "批量实时行情。force=false 时优先使用交易时段缓存，休市后不反复刷新。"),
+                ("GET", "/api/timeline/{symbol}?force=false", "分时走势。只返回真实分时或同交易日缓存，不伪造分时线。"),
+                ("GET", "/api/orderbook/{symbol}?force=true", "五档盘口。公开源缺 Level-2 时返回缺失原因、委比和委差兜底字段。"),
+                ("GET", "/api/detail/{symbol}?frame=1d&limit=520&adjust=qfq", "K线详情，支持分时、日K、周K、月K、副图、行为标注和缓存状态。"),
+            ],
+        ),
+        (
+            "筛选与策略",
+            [
+                ("GET", "/api/strategy/library", "完整策略库。返回 key、中文名、分类、说明、默认权重和默认选中项。"),
+                ("GET", "/api/screener/run", "执行筛选，支持股票池、策略组合、排序、缓存快照、技术面和信息面字段。"),
+                ("GET", "/api/cache/screener/latest", "读取最近筛选快照，用于页面恢复和休市缓存兜底。"),
+                ("GET", "/api/technical/factors/{symbol}", "技术因子矩阵，返回指标分类、原始值、解释、方向和评分。"),
+            ],
+        ),
+        (
+            "回测系统",
+            [
+                ("GET", "/api/backtest/run", "单标的快速回测。参数可在 /docs 中直接调试，保留英文键名以兼容前端。"),
+                ("POST", "/api/backtest/run", "V3.20/V3.22 科学回测入口，支持多标的、订单撮合、成本、滑点、组合约束和评分溯源。"),
+                ("GET", "/api/backtest/v322/readiness", "V3.22 能力检查：评分溯源、规则引擎、资金管理、纸面交易和历史快照。"),
+                ("GET", "/api/market-rules/profiles", "交易规则配置，按生效日期返回涨跌停、T+1、买入手数、卖出零股等规则。"),
+                ("GET", "/backtest?symbol=300750", "回测可视化页面，K线标注买入、卖出、异常点，并提供买卖流水内置窗口。"),
+            ],
+        ),
+        (
+            "纸面交易",
+            [
+                ("POST", "/api/realtime-paper/start", "启动盘中纸面交易，只模拟不连真实券商。"),
+                ("GET", "/api/realtime-paper/status", "查看资金、持仓、最近信号、风险拦截和人工确认队列数量。"),
+                ("GET", "/api/realtime-paper/orders", "纸面订单流水。"),
+                ("GET", "/api/realtime-paper/confirmations", "需要人工确认的候选交易。"),
+            ],
+        ),
+        (
+            "信息面与大盘",
+            [
+                ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
+                ("GET", "/api/market/regime", "大盘环境分析，可用于评分里的市场情绪权重。"),
+                ("GET", "/api/screener/historical-snapshot?symbols=300750,600438", "按决策时点重建筛选快照，保证回测不偷看未来。"),
+            ],
+        ),
+    ]
+    params = [
+        ("symbol", "标的代码", "300750、600438、510300"),
+        ("strategy", "回测策略", "score_driven、score_reversal、combo_signal"),
+        ("strategy_combo", "组合策略 key，逗号分隔", "ma_repair,macd_cross,risk_control"),
+        ("initial_cash", "初始资金", "100000"),
+        ("position_pct", "仓位比例", "0.5 到 1.0"),
+        ("stop_loss_pct / take_profit_pct", "止损 / 止盈百分比", "8 / 20；0 表示关闭固定止盈"),
+        ("position_sizing", "仓位模式", "score_weighted、volatility_target、atr_risk、dca、pyramid"),
+        ("horizon", "交易周期", "short_term、swing、position、dca、hybrid"),
+        ("market_weight", "大盘情绪权重", "0.14，可与其他三面权重一起调"),
+        ("force", "是否强制刷新", "false；休市确认后建议保持 false"),
+    ]
+    sections = []
+    for title, rows in groups:
+        items = "".join(
+            f"<tr><td><b>{method}</b></td><td><code>{path}</code></td><td>{desc}</td></tr>"
+            for method, path, desc in rows
+        )
+        sections.append(f"<section><h2>{title}</h2><table><tbody>{items}</tbody></table></section>")
+    param_rows = "".join(
+        f"<tr><td><code>{key}</code></td><td>{desc}</td><td>{example}</td></tr>"
+        for key, desc, example in params
+    )
+    sections.append(f"<section><h2>常用参数中文说明</h2><table><tbody>{param_rows}</tbody></table></section>")
+    return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>量化数据网关 API 文档</title><style>
+body{margin:0;background:#0b1020;color:#dbeafe;font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif;line-height:1.55}
+header{position:sticky;top:0;background:#101827;border-bottom:1px solid #283956;padding:16px 22px;z-index:2}
+h1{margin:0;font-size:24px}main{max-width:1160px;margin:0 auto;padding:18px 18px 40px}
+section{background:#101827;border:1px solid #283956;border-radius:12px;margin:12px 0;overflow:hidden}
+h2{font-size:18px;margin:0;padding:12px 14px;background:#141e32;border-bottom:1px solid #283956}
+table{width:100%;border-collapse:collapse}td{padding:10px 12px;border-bottom:1px solid rgba(40,57,86,.72);vertical-align:top}
+td:first-child{width:180px;color:#93c5fd}td:nth-child(2){width:430px}code{color:#bfdbfe;background:#172033;border:1px solid #26364f;border-radius:8px;padding:3px 6px}
+.note{color:#9fb2d4;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;margin:12px 0}
+a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</h1></header><main>
+<div class="note">中文页用于快速理解接口。需要直接填写参数并调用时，请打开 <a href="/docs">/docs API 调试页</a>；它保留 Try it out，可调所有查询参数和 POST JSON。程序化调用可读取 <a href="/openapi.json">/openapi.json</a>。</div>
+""" + "".join(sections) + "</main></body></html>"
+
+
+@app.get("/docs-cn", response_class=HTMLResponse, include_in_schema=False)
+def chinese_api_docs() -> str:
+    return _render_chinese_api_docs()
+    groups = [
+        ("行情与盘口", [
+            ("GET", "/api/quotes?symbols=300750,600519&force=false", "批量实时行情，返回最新价、涨跌幅、成交额、换手率、量比、市值、缺失原因。"),
+            ("GET", "/api/timeline/{symbol}?force=false", "分时走势。只返回真实分时或同交易日缓存，不伪造分时线。"),
+            ("GET", "/api/orderbook/{symbol}?force=true", "五档盘口。公开源缺 Level-2 时返回委比、委差和缺失说明。"),
+            ("GET", "/api/detail/{symbol}?frame=1d&limit=520&adjust=qfq", "K线详情，支持日K、周K、月K、复权、行为标注和缓存状态。"),
+        ]),
+        ("筛选与策略", [
+            ("GET", "/api/strategy/library", "完整策略库，包含低位、趋势、量价、风控、基本面、消息面、宏观等策略元数据。"),
+            ("GET", "/api/screener/run", "执行筛选，支持自选池、策略组合、排序、信息面/技术面字段。"),
+            ("GET", "/api/cache/screener/latest", "读取最近筛选快照，用于页面恢复和缓存兜底。"),
+            ("GET", "/api/technical/factors/{symbol}", "技术因子矩阵，返回指标分类、原始值、解释、方向和评分。"),
+        ]),
+        ("回测系统", [
+            ("GET", "/api/backtest/run", "单标的回测。支持组合策略、仓位模式、交易周期、止损止盈、复利、ATR风险、金字塔和定投。"),
+            ("POST", "/api/backtest/run", "V3.20科学回测入口，支持多标的、订单撮合、成本、滑点和组合约束。"),
+            ("GET", "/api/backtest/strategies", "回测策略列表。"),
+            ("GET", "/backtest?symbol=300750", "回测可视化页面，K线标注买入、卖出、异常点，并提供买卖流水内置窗口。"),
+        ]),
+        ("盘中模拟交易", [
+            ("POST", "/api/realtime-paper/start", "启动纸面盘中模拟，使用信号融合、异常防护和风险网关。"),
+            ("GET", "/api/realtime-paper/status", "查看模拟交易状态、资金、持仓和最近信号。"),
+            ("GET", "/api/realtime-paper/orders", "订单流水。"),
+            ("GET", "/api/realtime-paper/audit", "风险与执行审计记录。"),
+        ]),
+        ("信息面与大盘", [
+            ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
+            ("GET", "/api/wordsource/report/{symbol}", "信息面/技术面/资金面映射报告。"),
+            ("GET", "/api/market/regime", "大盘环境分析，用于评分中的市场情绪权重。"),
+            ("GET", "/api/source-knowledge", "数据源知识库和覆盖说明。"),
+        ]),
+        ("系统与缓存", [
+            ("GET", "/api/calendar/status", "交易时段、午休、休市和下一次刷新时间。"),
+            ("GET", "/api/cache/status", "缓存健康状态。"),
+            ("POST", "/api/background/refresh/watchlist", "后台刷新监控列表。"),
+            ("GET", "/openapi.json", "机器可读 OpenAPI JSON。"),
+        ]),
+    ]
+    sections = []
+    for title, rows in groups:
+        items = "".join(
+            f"<tr><td><b>{method}</b></td><td><code>{path}</code></td><td>{desc}</td></tr>"
+            for method, path, desc in rows
+        )
+        sections.append(f"<section><h2>{title}</h2><table><tbody>{items}</tbody></table></section>")
+    return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>量化数据网关 API 文档</title><style>
+body{margin:0;background:#0b1020;color:#dbeafe;font-family:Segoe UI,Microsoft YaHei,Arial,sans-serif;line-height:1.55}
+header{position:sticky;top:0;background:#101827;border-bottom:1px solid #283956;padding:16px 22px;z-index:2}
+h1{margin:0;font-size:24px}main{max-width:1160px;margin:0 auto;padding:18px 18px 40px}
+section{background:#101827;border:1px solid #283956;border-radius:12px;margin:12px 0;overflow:hidden}
+h2{font-size:18px;margin:0;padding:12px 14px;background:#141e32;border-bottom:1px solid #283956}
+table{width:100%;border-collapse:collapse}td{padding:10px 12px;border-bottom:1px solid rgba(40,57,86,.72);vertical-align:top}
+td:first-child{width:72px;color:#93c5fd}td:nth-child(2){width:390px}code{color:#bfdbfe;background:#172033;border:1px solid #26364f;border-radius:8px;padding:3px 6px}
+.note{color:#9fb2d4;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;margin:12px 0}
+a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</h1></header><main>
+<div class="note">这是中文 API 总览页。需要填写参数并直接调用接口时使用 <a href="/docs">/docs 交互调试页</a>；程序化调试可使用 <a href="/openapi.json">/openapi.json</a>；页面入口包括 <a href="/ui">行情监控</a>、<a href="/screener">筛选系统</a>、<a href="/backtest">交易回测</a>。</div>
+""" + "".join(sections) + "</main></body></html>"
 
 
 
@@ -597,7 +783,7 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
             bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
         else:
             synced, sync_reason = False, "quote_unavailable"
-        behavior = market_behavior_engine.analyze(q, bars) if len(bars) >= 5 else market_behavior_engine.analyze(q, [])
+        behavior = market_behavior_engine.analyze(q, bars, recent_days=7) if len(bars) >= 5 else market_behavior_engine.analyze(q, [])
         payload = {
             "ok": True,
             "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -778,13 +964,13 @@ def _timeline_latest_date(points: list[IntradayPoint]) -> object | None:
 
 
 def _timeline_expected_date(q: Quote | None) -> object | None:
+    if q and getattr(q, "ts", None):
+        return q.ts.date()
     market = q.market if q else "CN"
     session = _market_session(market)
     status = str(session.get("status") or "")
     if status not in {"pre_open_auction", "morning", "lunch", "afternoon", "closing_auction", "call_auction_cooldown"}:
         return None
-    if q and getattr(q, "ts", None):
-        return q.ts.date()
     try:
         return datetime.fromisoformat(str(session.get("date"))).date()
     except Exception:
@@ -796,6 +982,31 @@ def _filter_timeline_date(points: list[IntradayPoint], expected) -> list[Intrada
         return points
     same_day = [p for p in points if getattr(getattr(p, "ts", None), "date", lambda: None)() == expected]
     return same_day or points
+
+
+def _filter_timeline_quote_range(points: list[IntradayPoint], q: Quote | None) -> list[IntradayPoint]:
+    if not points or q is None:
+        return points
+    highs = [_safe_float(v) for v in [q.high, q.open, q.last, q.pre_close] if _safe_float(v) > 0]
+    lows = [_safe_float(v) for v in [q.low, q.open, q.last, q.pre_close] if _safe_float(v) > 0]
+    if not highs or not lows:
+        return points
+    hi = max(highs)
+    lo = min(lows)
+    if hi <= 0 or lo <= 0 or hi < lo:
+        return points
+    pad = max((hi - lo) * 0.08, hi * 0.015, 0.02)
+    upper = hi + pad
+    lower = max(0.01, lo - pad)
+    clean: list[IntradayPoint] = []
+    for p in points:
+        price = _safe_float(getattr(p, "price", None))
+        if lower <= price <= upper:
+            avg = _safe_float(getattr(p, "avg_price", None))
+            if avg and not (lower <= avg <= upper):
+                p = replace(p, avg_price=price)
+            clean.append(p)
+    return clean
 
 
 def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -> list[IntradayPoint]:
@@ -819,6 +1030,7 @@ def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -
     if expected_date is not None and latest is not None and latest < expected_date:
         return []
     clean = _filter_timeline_date(clean, expected_date)
+    clean = _filter_timeline_quote_range(clean, q)
     if len(clean) < 2:
         return []
     return clean
@@ -1009,7 +1221,7 @@ def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
     market = q.market if q else _detect_market(symbol)
     expected_date = _timeline_expected_date(q)
     latest_date = _timeline_latest_date(points)
-    stale_rejected = bool(expected_date is not None and latest_date is None and force)
+    stale_rejected = bool(expected_date is not None and latest_date is None)
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -1024,7 +1236,7 @@ def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
             "latest_date": latest_date.isoformat() if latest_date else None,
             "fresh_for_session": bool(expected_date is None or latest_date == expected_date),
             "stale_cache_rejected": stale_rejected,
-            "note": "实时分时源暂无当日有效点，未使用跨日缓存" if stale_rejected else "",
+            "note": "实时分时源暂无当日有效点，未使用跨日缓存或异常价格缓存" if stale_rejected else "",
         },
         "data": [p.to_dict() for p in points],
     }
@@ -1039,25 +1251,37 @@ def kline(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none"
 
 
 @app.get("/api/detail/{symbol}")
-def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none", force: bool = False, include_timeline: bool = False, refresh: bool = False) -> dict:
+def detail(
+    symbol: str,
+    frame: str = "1d",
+    limit: int = 260,
+    adjust: str = "none",
+    force: bool = False,
+    include_timeline: bool = False,
+    refresh: bool = False,
+    include_quote: bool = True,
+) -> dict:
     force = bool(force or refresh)
     if frame not in {"1d", "1w", "1M", "1mo"}:
         frame = "1d"
     if frame == "1mo":
         frame = "1M"
     quote_error = None
-    try:
-        q = _enrich_quote_real(symbol, force=force)[0]
-    except Exception as exc:
-        q = None
-        quote_error = str(exc)
+    q = None
+    if include_quote:
+        try:
+            q = _enrich_quote_real(symbol, force=force)[0]
+        except Exception as exc:
+            quote_error = str(exc)
     kpayload = _safe_kline_payload(symbol, frame=frame, limit=limit, adjust=adjust, force=force, sync_quote=False)
     bars_data = kpayload.get("bars") or []
+    if limit and len(bars_data) > limit:
+        bars_data = bars_data[-max(1, int(limit)):]
     bars = [Bar(symbol=x.get("symbol") or symbol, frame=frame, ts=datetime.fromisoformat(str(x.get("ts")).replace("Z", "+00:00")).replace(tzinfo=None) if x.get("ts") else datetime.now(), open=float(x.get("open") or 0), high=float(x.get("high") or 0), low=float(x.get("low") or 0), close=float(x.get("close") or 0), volume=float(x.get("volume") or 0), amount=float(x.get("amount") or 0), turnover=x.get("turnover"), change_pct=x.get("change_pct"), source=x.get("source") or "cache_state") for x in bars_data]
     if q is None and bars:
         b = bars[-1]
         q = Quote(symbol=symbol, name=symbol, ts=b.ts, last=b.close, pre_close=b.open, open=b.open, high=b.high, low=b.low, volume=b.volume, amount=b.amount, change=b.close-b.open, change_pct=b.change_pct, turnover=b.turnover, source="bar_snapshot")
-    if q is not None:
+    if q is not None and include_quote:
         q, qd, quote_cache_status = _enrich_quote_real(symbol, force=False, quote_obj=q, bars=bars)
         bars, synced, sync_reason = _sync_daily_bar_with_quote(bars, q, frame, adjust)
         points = _timeline_with_fallback(symbol, q, force=force) if include_timeline else []
@@ -1065,9 +1289,16 @@ def detail(symbol: str, frame: str = "1d", limit: int = 260, adjust: str = "none
         qd["cache_status"] = quote_cache_status
         session = _market_session(q.market)
         out_symbol = q.symbol
+    elif q is not None:
+        synced, sync_reason, points = False, "quote_skipped", []
+        qd = q.to_dict()
+        qd["extra"] = _quote_extra(q)
+        qd["cache_status"] = {"status": "skipped", "source": "include_quote=false"}
+        session = _market_session(q.market)
+        out_symbol = q.symbol
     else:
         synced, sync_reason, points, qd, session, out_symbol = False, "quote_unavailable", [], None, _market_session(_detect_market(symbol)), symbol
-    behavior = market_behavior_engine.analyze(q, bars, intraday=points) if len(bars) >= 5 else kpayload.get("behavior_analysis") or market_behavior_engine.analyze(q, [])
+    behavior = market_behavior_engine.analyze(q, bars, intraday=points, recent_days=7) if len(bars) >= 5 else kpayload.get("behavior_analysis") or market_behavior_engine.analyze(q, [])
     return {
         "ok": bool(kpayload.get("ok", True)),
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -1237,6 +1468,98 @@ def wordsource_candidates(max_pages: int = 2, page_size: int = 100, max_items: i
     regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
     return {"ok": True, "market_regime": regime, "candidate_pool": pool}
 
+
+@app.get("/api/market/regime")
+def market_regime(max_pages: int = 2, page_size: int = 100) -> dict:
+    quotes = []
+    for page in range(1, max(1, min(int(max_pages or 2), 10)) + 1):
+        try:
+            quotes.extend(service.get_market_snapshot(page=page, page_size=max(20, min(int(page_size or 100), 500))) or [])
+        except Exception:
+            break
+    regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
+    return {"ok": True, "data": regime, "market_regime": regime, "count": len(quotes)}
+
+
+@app.get("/api/market-rules/profiles")
+def market_rule_profiles(symbol: str = "", asof: str = "") -> dict:
+    profiles = {key: value.to_dict() for key, value in market_rule_engine_v322.profiles.items()}
+    resolved = None
+    if symbol:
+        resolved = market_rule_engine_v322.resolve_profile(symbol, asof=asof or None).to_dict()
+    return {
+        "ok": True,
+        "version": market_rule_engine_v322.version,
+        "timezone": market_rule_engine_v322.timezone,
+        "count": len(profiles),
+        "profiles": profiles,
+        "resolved": resolved,
+        "note": "交易规则来自 config/market_rules/a_share_rules.yaml，执行撮合不再在 execution.py 里硬编码前缀。",
+    }
+
+
+@app.get("/api/backtest/v322/readiness")
+def backtest_v322_readiness() -> dict:
+    return {
+        "ok": True,
+        "version": "V3.22",
+        "capabilities": {
+            "score_provenance": True,
+            "pit_historical_snapshot": True,
+            "market_rule_engine": True,
+            "position_sizing": True,
+            "money_management": True,
+            "exit_policy": True,
+            "realtime_paper": True,
+            "human_confirm": True,
+            "paper_only_no_broker": True,
+        },
+        "endpoints": [
+            "/api/backtest/run",
+            "/api/backtest/v322/readiness",
+            "/api/market-rules/profiles",
+            "/api/screener/historical-snapshot",
+            "/api/realtime-paper/status",
+            "/api/realtime-paper/confirmations",
+        ],
+        "note": "V3.22 回测信号使用历史可见数据和评分溯源；真实交易仍需要人工复核，本系统只做纸面模拟。",
+    }
+
+
+@app.get("/api/screener/historical-snapshot")
+def screener_historical_snapshot(
+    symbols: str = "300750,600438",
+    trade_date: str = "",
+    decision_time: str = "",
+    limit: int = 260,
+    adjust: str = "qfq",
+) -> dict:
+    symbol_list = _parse_symbol_text(symbols) if symbols else []
+    symbol_list = symbol_list[: max(1, min(len(symbol_list) or 1, 80))]
+    today = datetime.now().strftime("%Y-%m-%d")
+    trade_date = str(trade_date or today)[:10]
+    decision_time = str(decision_time or f"{trade_date} 15:10:00")
+    bars_by_symbol = {}
+    for code in symbol_list:
+        try:
+            bars_by_symbol[code] = service.get_kline(
+                code,
+                frame="1d",
+                limit=max(60, min(int(limit or 260), 1200)),
+                adjust=adjust,
+                force_refresh=False,
+            )
+        except Exception:
+            bars_by_symbol[code] = []
+    snapshot = historical_snapshot_builder_v322.build_historical_snapshot(
+        trade_date,
+        decision_time,
+        symbol_list,
+        bars_by_symbol=bars_by_symbol,
+        market_inputs={"symbol_count": len(symbol_list)},
+    )
+    return {"ok": True, "data": snapshot, "snapshot": snapshot}
+
 @app.get("/api/screener/strategies")
 def screener_strategies() -> dict:
     return {
@@ -1260,10 +1583,140 @@ def backtest_strategies() -> dict:
     return {"ok": True, "data": backtest_service.strategies}
 
 
+def _v321_effective_legacy_params(
+    *,
+    position_pct: float,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    buy_score: float,
+    sell_score: float,
+    initial_cash: float,
+    sizing_mode: str,
+    horizon: str,
+    dca_amount: float,
+    atr_risk_pct: float,
+) -> dict:
+    valid_horizon = horizon if horizon in {"intraday_paper", "short_term", "swing", "position", "dca", "hybrid"} else "swing"
+    rules = StrategyHorizonConfig(horizon=valid_horizon).resolved_rules()
+    base_position = max(0.01, min(float(position_pct or 0.0), 1.0))
+    stop = float(stop_loss_pct or 0.0)
+    take = float(take_profit_pct or 0.0)
+    buy = float(buy_score or 0.0)
+    sell = float(sell_score or 0.0)
+    notes: list[str] = []
+    horizon_cap = base_position
+    if valid_horizon == "short_term":
+        horizon_cap = min(horizon_cap, 0.45)
+        stop = min(stop or 4.0, 4.0)
+        take = take or 8.0
+        sell = max(sell, 52.0)
+        notes.append("短线周期：仓位上限45%，止损收紧到4%，卖出评分阈值不低于52")
+    elif valid_horizon == "swing":
+        stop = 7.0 if not stop or abs(stop - 8.0) < 1e-9 else stop
+        take = take or 15.0
+        notes.append("波段周期：默认使用7%止损、15%止盈")
+    elif valid_horizon == "position":
+        horizon_cap = min(horizon_cap, 0.75)
+        stop = max(stop, 12.0)
+        take = 0.0 if take <= 0 else take
+        sell = min(sell, 42.0) if sell else 42.0
+        notes.append("长线周期：仓位上限75%，止损放宽到12%，降低评分卖出频率")
+    elif valid_horizon == "dca":
+        dca_weight = max(0.01, min(float(dca_amount or 0.0) / max(float(initial_cash or 1.0), 1.0), 0.20))
+        horizon_cap = min(horizon_cap, dca_weight)
+        stop = 0.0
+        take = 0.0
+        notes.append("定投周期：按定投金额折算单次仓位，默认不启用固定止损止盈")
+    elif valid_horizon == "hybrid":
+        horizon_cap = min(horizon_cap, 0.60)
+        stop = stop or 8.0
+        take = take or 12.0
+        notes.append("组合周期：核心/卫星上限60%，保留止损止盈")
+    mode = str(sizing_mode or "score_weighted")
+    mode_cap = base_position
+    if mode == "equal_weight":
+        mode_cap = min(mode_cap, 0.25)
+        notes.append("等权仓位：单票按25%上限参与")
+    elif mode == "score_weighted":
+        mode_cap = min(mode_cap, 0.70)
+        notes.append("评分加权：legacy回测用70%上限近似评分仓位")
+    elif mode == "volatility_target":
+        mode_cap = min(mode_cap, 0.35)
+        notes.append("波动率目标：高波动标的仓位上限35%")
+    elif mode in {"atr_risk", "fixed_risk_per_trade"}:
+        risk_budget = max(0.001, float(atr_risk_pct or 0.0) / 100.0)
+        stop_distance = max(0.01, (stop or rules.get("stop_loss_pct") or 8.0) / 100.0)
+        mode_cap = min(mode_cap, max(0.03, min(0.55, risk_budget / stop_distance)))
+        notes.append("ATR/固定风险：按风险预算 ÷ 止损距离反推仓位")
+    elif mode == "fractional_kelly":
+        mode_cap = min(mode_cap, 0.50)
+        notes.append("分数凯利：legacy回测先按50%上限保守近似")
+    elif mode == "pyramid":
+        mode_cap = min(mode_cap, 0.40)
+        notes.append("金字塔：首笔仓位按40%上限，后续加仓由报告提示")
+    elif mode == "dca":
+        dca_weight = max(0.01, min(float(dca_amount or 0.0) / max(float(initial_cash or 1.0), 1.0), 0.20))
+        mode_cap = min(mode_cap, dca_weight)
+        notes.append("定投仓位：按定投金额折算单次买入比例")
+    elif mode == "core_satellite":
+        mode_cap = min(mode_cap, 0.65)
+        notes.append("核心卫星：单票上限65%")
+    effective_position = max(0.01, min(base_position, horizon_cap, mode_cap))
+    return {
+        "position_pct": round(effective_position, 6),
+        "stop_loss_pct": round(float(stop or 0.0), 6),
+        "take_profit_pct": round(float(take or 0.0), 6),
+        "buy_score": round(float(buy), 6),
+        "sell_score": round(float(sell), 6),
+        "horizon_rules": rules,
+        "notes": list(dict.fromkeys(notes)),
+    }
+
+
+def _attach_v321_effective_controls(data: dict, effective: dict) -> dict:
+    data = dict(data or {})
+    data["v321_effective_controls"] = effective
+    data.setdefault("params", {})
+    data["params"].update(
+        {
+            "effective_position_pct": effective.get("position_pct"),
+            "effective_stop_loss_pct": effective.get("stop_loss_pct"),
+            "effective_take_profit_pct": effective.get("take_profit_pct"),
+            "effective_buy_score": effective.get("buy_score"),
+            "effective_sell_score": effective.get("sell_score"),
+        }
+    )
+    data.setdefault("params_cn", {})
+    data["params_cn"].update(
+        {
+            "实际仓位比例": f"{float(effective.get('position_pct') or 0.0) * 100:.2f}%",
+            "实际止损/止盈": f"{effective.get('stop_loss_pct')}% / {effective.get('take_profit_pct')}%",
+            "实际买入/卖出评分": f"{effective.get('buy_score')} / {effective.get('sell_score')}",
+            "资金与周期说明": "；".join(effective.get("notes") or []),
+        }
+    )
+    data.setdefault("metrics", {})
+    data["metrics"].update(
+        {
+            "effective_position_pct": effective.get("position_pct"),
+            "effective_stop_loss_pct": effective.get("stop_loss_pct"),
+            "effective_take_profit_pct": effective.get("take_profit_pct"),
+        }
+    )
+    if isinstance(data.get("position_summary"), dict):
+        note = data["position_summary"].get("note") or ""
+        extra = "；".join(effective.get("notes") or [])
+        data["position_summary"]["note"] = (note + ("；" if note and extra else "") + extra)[:600]
+    return data
+
+
 @app.get("/api/backtest/run")
 def backtest_run(
     symbol: str = "300750",
     strategy: str = "ma_cross",
+    strategy_combo: str = "",
+    combo_buy_rule: str = "at_least_2",
+    combo_sell_rule: str = "any",
     initial_cash: float = 100_000.0,
     fee_rate: float = 0.0003,
     slippage_rate: float = 0.0005,
@@ -1276,12 +1729,31 @@ def backtest_run(
     adjust: str = "qfq",
     force: bool = False,
     legacy: bool = False,
+    position_sizing: str = "score_weighted",
+    sizing_mode: str | None = None,
+    horizon: str = "swing",
+    compound_returns: bool = True,
+    dca_amount: float = 1000.0,
+    dca_frequency: str = "monthly",
+    pyramid_step_pct: float = 5.0,
+    pyramid_max_adds: int = 3,
+    atr_risk_pct: float = 2.0,
+    anomaly_filter: bool = True,
+    quality_filter: bool = True,
+    fundamental_weight: float = 0.28,
+    technical_weight: float = 0.34,
+    information_weight: float = 0.24,
+    market_weight: float = 0.14,
 ) -> dict:
     symbol = str(symbol or "300750").strip()
     limit = max(60, min(int(limit or 520), 1200))
     adjust = str(adjust or "qfq").lower()
     if adjust not in {"none", "qfq", "hfq"}:
         adjust = "qfq"
+    # The combo strategy is implemented in the single-symbol research backtester.
+    # Route it there even when callers omit legacy=true so API and UI behavior match.
+    if strategy == "combo_signal":
+        legacy = True
     try:
         q = service.get_quote(symbol, force_refresh=force)
     except Exception:
@@ -1290,24 +1762,58 @@ def backtest_run(
         bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=force)
         if not force and len(bars) < min(limit, 120):
             bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=True)
+        sizing_mode = str(sizing_mode or position_sizing or "score_weighted")
+        effective = _v321_effective_legacy_params(
+            position_pct=position_pct,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+            buy_score=buy_score,
+            sell_score=sell_score,
+            initial_cash=initial_cash,
+            sizing_mode=sizing_mode,
+            horizon=horizon,
+            dca_amount=dca_amount,
+            atr_risk_pct=atr_risk_pct,
+        )
         if not legacy:
             cfg = V319BacktestConfig(
                 strategy="factor_rule_strategy" if strategy in {x["key"] for x in backtest_service.strategies} else strategy,
                 symbols=[symbol],
                 initial_cash=initial_cash,
-                position_pct=position_pct,
+                position_pct=effective["position_pct"],
+                sizing=sizing_mode,
                 commission_rate=fee_rate,
                 slippage_bps=slippage_rate * 10000,
-                stop_loss_pct=stop_loss_pct,
-                take_profit_pct=take_profit_pct,
-                buy_score=buy_score,
-                sell_score=sell_score,
+                stop_loss_pct=effective["stop_loss_pct"],
+                take_profit_pct=effective["take_profit_pct"],
+                buy_score=effective["buy_score"],
+                sell_score=effective["sell_score"],
                 adjust=adjust,
                 warmup_bars=min(60, max(10, limit // 5)),
                 volume_limit_pct=1.0,
             )
             result_v320 = backtest_engine_v320.run(cfg, market_data={symbol: bars})
             data = _v320_compatible_backtest_payload(result_v320, symbol, strategy, bars, q, limit, adjust)
+            data = _augment_v321_backtest_payload(
+                data,
+                sizing_mode=sizing_mode,
+                horizon=horizon,
+                compound_returns=compound_returns,
+                dca_amount=dca_amount,
+                dca_frequency=dca_frequency,
+                pyramid_step_pct=pyramid_step_pct,
+                pyramid_max_adds=pyramid_max_adds,
+                atr_risk_pct=atr_risk_pct,
+                anomaly_filter=anomaly_filter,
+                quality_filter=quality_filter,
+                weights={
+                    "fundamental": fundamental_weight,
+                    "technical": technical_weight,
+                    "information": information_weight,
+                    "market": market_weight,
+                },
+            )
+            data = _attach_v321_effective_controls(data, effective)
             backtest_storage_v319.save(result_v320)
             return _v319_response(
                 True,
@@ -1323,14 +1829,17 @@ def backtest_run(
             [_legacy_bar_like(b) for b in bars],
             LegacyBacktestConfig(
                 strategy=strategy,
+                strategy_combo=tuple(x.strip() for x in str(strategy_combo or "").split(",") if x.strip()),
+                combo_buy_rule=combo_buy_rule,
+                combo_sell_rule=combo_sell_rule,
                 initial_cash=initial_cash,
                 fee_rate=fee_rate,
                 slippage_rate=slippage_rate,
-                position_pct=position_pct,
-                stop_loss_pct=stop_loss_pct,
-                take_profit_pct=take_profit_pct,
-                buy_score=buy_score,
-                sell_score=sell_score,
+                position_pct=effective["position_pct"],
+                stop_loss_pct=effective["stop_loss_pct"],
+                take_profit_pct=effective["take_profit_pct"],
+                buy_score=effective["buy_score"],
+                sell_score=effective["sell_score"],
             ),
             name=getattr(q, "name", None) if q else symbol,
         )
@@ -1343,6 +1852,26 @@ def backtest_run(
         result["requested_limit"] = limit
         result["data_quality"]["requested_bars"] = limit
         result["data_quality"]["short_kline"] = len(bars) < min(limit, 120)
+        result = _augment_v321_backtest_payload(
+            result,
+            sizing_mode=sizing_mode,
+            horizon=horizon,
+            compound_returns=compound_returns,
+            dca_amount=dca_amount,
+            dca_frequency=dca_frequency,
+            pyramid_step_pct=pyramid_step_pct,
+            pyramid_max_adds=pyramid_max_adds,
+            atr_risk_pct=atr_risk_pct,
+            anomaly_filter=anomaly_filter,
+            quality_filter=quality_filter,
+            weights={
+                "fundamental": fundamental_weight,
+                "technical": technical_weight,
+                "information": information_weight,
+                "market": market_weight,
+            },
+        )
+        result = _attach_v321_effective_controls(result, effective)
         return {"ok": True, "data": result}
     except Exception as exc:
         return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}
@@ -1352,13 +1881,38 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
     data = result.to_dict()
     metrics = data.get("metrics", {})
     equity_curve = data.get("equity_curve", [])
-    final_equity = float(equity_curve[-1].get("equity", 0.0)) if equity_curve else float(data.get("config", {}).get("initial_cash", 0.0))
+    initial_cash = float(data.get("config", {}).get("initial_cash", 0.0) or 0.0)
+    final_equity = float(equity_curve[-1].get("equity", 0.0)) if equity_curve else initial_cash
     start_close = _bar_number(bars[0], "close") if bars else 0.0
     end_close = _bar_number(bars[-1], "close") if bars else 0.0
     buy_hold = (end_close / start_close - 1) * 100 if start_close else 0.0
     trades = [_v320_compat_trade(t, idx + 1) for idx, t in enumerate(data.get("trades", []))]
+    score_provenance = [dict(x) for x in (data.get("score_provenance") or []) if isinstance(x, dict)]
+    score_provenance_summary = [
+        x.get("summary") or {
+            "symbol": x.get("symbol"),
+            "score": x.get("final_score"),
+            "strategy_family": x.get("strategy_family"),
+            "no_lookahead": x.get("no_lookahead"),
+            "coverage_pct": x.get("coverage_pct"),
+        }
+        for x in score_provenance[:20]
+    ]
+    score_series = [
+        {
+            "date": str(x.get("decision_time") or "")[:10],
+            "symbol": x.get("symbol"),
+            "score": x.get("final_score"),
+            "strategy_family": x.get("strategy_family"),
+            "action": x.get("signal_action"),
+        }
+        for x in score_provenance
+    ]
     fills = [x for x in data.get("fills", []) if not x.get("blocked") and int(x.get("quantity") or 0) > 0]
-    trade_events = _v320_trade_events_from_trades(trades) if trades else _v320_trade_events(fills)
+    trade_events = _hydrate_trade_event_cash(
+        _v320_trade_events_from_trades(trades) if trades else _v320_trade_events(fills),
+        initial_cash,
+    )
     cost_summary = {
         "commission": round(sum(float(x.get("commission") or 0) for x in fills), 6),
         "stamp_tax": round(sum(float(x.get("stamp_tax") or 0) for x in fills), 6),
@@ -1388,7 +1942,12 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
         "buy_hold_return_pct": round(buy_hold, 4),
         "excess_return_pct": round(float(metrics.get("total_return_pct", 0.0) or 0.0) - buy_hold, 4),
         "equity_curve": equity_curve,
-        "score_series": [],
+        "score_series": score_series,
+        "score_provenance": score_provenance,
+        "score_provenance_summary": score_provenance_summary,
+        "score_provenance_count": len(score_provenance),
+        "strategy_family": (score_provenance_summary[-1] or {}).get("strategy_family") if score_provenance_summary else "",
+        "market_regime": ((score_provenance[-1] or {}).get("market_state") or {}).get("market_regime") if score_provenance else "",
         "score_formula": {**SCORE_FORMULA, "note": SCORE_FORMULA.get("note", "") + "；本次默认接口已切换到 V3.20 科学回测引擎。"},
         "kline": kline,
         "markers": _v320_markers(fills),
@@ -1418,6 +1977,27 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
         "trade_events": trade_events,
         "trade_event_count": len(trade_events),
         "params": data.get("config", {}),
+        "params_cn": {
+            "策略": f"{strategy} · V3.20",
+            "初始资金": data.get("config", {}).get("initial_cash"),
+            "仓位比例": data.get("config", {}).get("position_pct"),
+            "手续费率": data.get("config", {}).get("commission_rate"),
+            "滑点基点": data.get("config", {}).get("slippage_bps"),
+            "止损": data.get("config", {}).get("stop_loss_pct"),
+            "止盈": data.get("config", {}).get("take_profit_pct"),
+            "复权口径": adjust,
+        },
+        "api_labels": {
+            "strategy": "策略",
+            "initial_cash": "初始资金",
+            "commission_rate": "手续费率",
+            "slippage_bps": "滑点基点",
+            "position_pct": "仓位比例",
+            "trade_events": "买卖流水",
+            "position_summary": "持仓与成本",
+            "cost_summary": "成本汇总",
+            "period": "回测区间",
+        },
         "assumptions": [
             "V3.20 科学回测：默认下一交易日成交，避免收盘后才知道的信号当日成交。",
             "滑点默认使用 price_adjusted_slippage：成交价已反映滑点，现金不再重复扣滑点。",
@@ -1426,6 +2006,151 @@ def _v320_compatible_backtest_payload(result: object, symbol: str, strategy: str
         "metrics": metrics,
         "warnings": data.get("warnings", []),
     }
+
+
+def _augment_v321_backtest_payload(
+    data: dict,
+    *,
+    sizing_mode: str,
+    horizon: str,
+    compound_returns: bool,
+    dca_amount: float,
+    dca_frequency: str,
+    pyramid_step_pct: float,
+    pyramid_max_adds: int,
+    atr_risk_pct: float,
+    anomaly_filter: bool,
+    quality_filter: bool,
+    weights: dict[str, float],
+) -> dict:
+    data = dict(data or {})
+    metrics = dict(data.get("metrics") or {})
+    trades = data.get("trades") or []
+    returns = [float(t.get("pnl_pct") or 0.0) for t in trades if isinstance(t, dict)]
+    wins = [x for x in returns if x > 0]
+    losses = [x for x in returns if x < 0]
+    metrics.setdefault("expectancy", round((sum(returns) / len(returns)) if returns else 0.0, 6))
+    metrics.setdefault("payoff_ratio", round((abs(sum(wins) / len(wins)) / abs(sum(losses) / len(losses))) if wins and losses else 0.0, 6))
+    metrics.setdefault("avg_win", round(sum(wins) / len(wins), 6) if wins else 0.0)
+    metrics.setdefault("avg_loss", round(sum(losses) / len(losses), 6) if losses else 0.0)
+    metrics.setdefault("max_consecutive_losses", _max_consecutive_losses(returns))
+    metrics.setdefault("MFE", metrics.get("avg_mfe_pct", 0.0))
+    metrics.setdefault("MAE", metrics.get("avg_mae_pct", 0.0))
+    metrics.setdefault("stop_loss_efficiency", metrics.get("stop_loss_efficiency", 0.0))
+    metrics.setdefault("take_profit_efficiency", metrics.get("take_profit_efficiency", 0.0))
+    final_equity = float(data.get("final_equity") or 0.0)
+    cash = _safe_float((data.get("position_summary") or {}).get("cash"))
+    if final_equity > 0 and cash is not None:
+        metrics.setdefault("cash_drag_pct", round(max(0.0, min(cash / final_equity * 100.0, 100.0)), 4))
+        metrics.setdefault("position_utilization_pct", round(max(0.0, min(100.0 - metrics["cash_drag_pct"], 100.0)), 4))
+    else:
+        metrics.setdefault("cash_drag_pct", 0.0)
+        metrics.setdefault("position_utilization_pct", 0.0)
+    score_rows = [x for x in (data.get("score_provenance") or []) if isinstance(x, dict)]
+    data.setdefault(
+        "score_provenance_summary",
+        [
+            x.get("summary") or {
+                "symbol": x.get("symbol"),
+                "score": x.get("final_score"),
+                "strategy_family": x.get("strategy_family"),
+                "no_lookahead": x.get("no_lookahead"),
+                "coverage_pct": x.get("coverage_pct"),
+            }
+            for x in score_rows[:20]
+        ],
+    )
+    horizon_cfg = StrategyHorizonConfig(horizon=horizon if horizon in {"intraday_paper", "short_term", "swing", "position", "dca", "hybrid"} else "swing")
+    valid_sizing_modes = {
+        "fixed_percent",
+        "equal_weight",
+        "score_weighted",
+        "volatility_target",
+        "atr_risk",
+        "fixed_risk_per_trade",
+        "fractional_kelly",
+        "pyramid",
+        "dca",
+        "core_satellite",
+    }
+    sizing_cfg = PositionSizingConfig(
+        sizing_mode=sizing_mode if sizing_mode in valid_sizing_modes else "score_weighted",
+        compound_returns=bool(compound_returns),
+        dca_amount=float(dca_amount or 0.0),
+        dca_frequency=str(dca_frequency or "monthly"),
+        pyramid_step_pct=float(pyramid_step_pct or 0.0) / (100.0 if float(pyramid_step_pct or 0.0) > 1 else 1.0),
+        pyramid_max_adds=int(pyramid_max_adds or 0),
+        risk_per_trade_pct=float(atr_risk_pct or 0.0) / (100.0 if float(atr_risk_pct or 0.0) > 1 else 1.0),
+    )
+    metrics["position_sizing_attribution"] = {
+        "mode": sizing_mode,
+        "compound_returns": bool(compound_returns),
+        "reinvestment_basis": "equity" if compound_returns else "initial_cash",
+        "atr_risk_pct": atr_risk_pct,
+    }
+    metrics["filter_attribution"] = {
+        "quality_filter": bool(quality_filter),
+        "anomaly_filter": bool(anomaly_filter),
+        "weights": weights,
+    }
+    metrics["horizon_attribution"] = horizon_cfg.resolved_rules()
+    data["metrics"] = metrics
+    data["position_sizing_config"] = sizing_cfg.to_dict()
+    data["horizon_config"] = horizon_cfg.to_dict()
+    data["compound_returns"] = bool(compound_returns)
+    data["research_disclaimer"] = "研究辅助，不构成投资建议；回测和实时模拟均不连接真实券商。"
+    data.setdefault("api_labels", {})
+    data["api_labels"].update(
+        {
+            "position_sizing": "资金管理模式",
+            "horizon": "交易周期",
+            "compound_returns": "收益再投资",
+            "expectancy": "期望收益",
+            "payoff_ratio": "赔率",
+            "MFE": "最大有利波动",
+            "MAE": "最大不利波动",
+        }
+    )
+    data.setdefault("params", {})
+    data["params"].update(
+        {
+            "position_sizing": sizing_mode,
+            "horizon": horizon,
+            "compound_returns": bool(compound_returns),
+            "dca_amount": dca_amount,
+            "dca_frequency": dca_frequency,
+            "pyramid_step_pct": pyramid_step_pct,
+            "pyramid_max_adds": pyramid_max_adds,
+            "atr_risk_pct": atr_risk_pct,
+            "quality_filter": bool(quality_filter),
+            "anomaly_filter": bool(anomaly_filter),
+            "three_dimension_weights": weights,
+        }
+    )
+    data.setdefault("params_cn", {})
+    data["params_cn"].update(
+        {
+            "资金管理": sizing_mode,
+            "交易周期": horizon,
+            "收益再投资": "开启" if compound_returns else "关闭",
+            "定投金额": dca_amount,
+            "金字塔加仓": f"{pyramid_step_pct}% / {pyramid_max_adds}次",
+            "ATR风险": f"{atr_risk_pct}%",
+            "三面权重": f"基本{weights.get('fundamental')} / 技术{weights.get('technical')} / 信息{weights.get('information')} / 大盘{weights.get('market')}",
+        }
+    )
+    return data
+
+
+def _max_consecutive_losses(values: list[float]) -> int:
+    best = cur = 0
+    for value in values:
+        if value < 0:
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    return best
 
 
 def _bar_dict(bar: object) -> dict:
@@ -1585,6 +2310,21 @@ def _v320_trade_events_from_trades(trades: list[dict]) -> list[dict]:
             }
         )
     return events
+
+
+def _hydrate_trade_event_cash(events: list[dict], initial_cash: float) -> list[dict]:
+    cash = float(initial_cash or 0.0)
+    hydrated: list[dict] = []
+    for event in events:
+        row = dict(event)
+        try:
+            cash += float(row.get("cash_change") or 0.0)
+        except (TypeError, ValueError):
+            pass
+        if row.get("cash_after") in (None, ""):
+            row["cash_after"] = round(cash, 6)
+        hydrated.append(row)
+    return hydrated
 
 
 def _legacy_bar_like(bar: object) -> object:
@@ -1837,6 +2577,87 @@ def trading_risk_status_v320() -> dict:
 @app.get("/api/trading/audit")
 def trading_audit_v320(limit: int = 200) -> dict:
     return {"ok": True, "data": paper_trading_gateway_v320.audit.list(limit=max(1, min(int(limit or 200), 1000)))}
+
+
+@app.post("/api/realtime-paper/start")
+def realtime_paper_start(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v321.start(payload)
+
+
+@app.post("/api/realtime-paper/stop")
+def realtime_paper_stop() -> dict:
+    return realtime_paper_engine_v321.stop()
+
+
+@app.get("/api/realtime-paper/status")
+def realtime_paper_status() -> dict:
+    return realtime_paper_engine_v321.status()
+
+
+@app.get("/api/realtime-paper/portfolio")
+def realtime_paper_portfolio() -> dict:
+    return realtime_paper_engine_v321.portfolio()
+
+
+@app.get("/api/realtime-paper/orders")
+def realtime_paper_orders(limit: int = 200) -> dict:
+    return realtime_paper_engine_v321.orders(limit=max(1, min(int(limit or 200), 1000)))
+
+
+@app.get("/api/realtime-paper/signals")
+def realtime_paper_signals(limit: int = 200) -> dict:
+    return realtime_paper_engine_v321.signal_rows(limit=max(1, min(int(limit or 200), 1000)))
+
+
+@app.get("/api/realtime-paper/audit")
+def realtime_paper_audit(limit: int = 300) -> dict:
+    return realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000)))
+
+
+@app.get("/api/realtime-paper/confirmations")
+def realtime_paper_confirmations(status: str = "pending", limit: int = 200) -> dict:
+    rows = realtime_paper_engine_v321.human_confirm_queue.list(
+        status=status or None,
+        limit=max(1, min(int(limit or 200), 1000)),
+    )
+    return {"ok": True, "data": rows, "count": len(rows), "paper_only": True}
+
+
+@app.post("/api/realtime-paper/confirmations/{task_id}/approve")
+def realtime_paper_confirm_approve(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        task = realtime_paper_engine_v321.human_confirm_queue.approve(
+            task_id,
+            operator=str(payload.get("operator") or "paper_user"),
+        )
+        return {"ok": True, "data": task.to_dict(), "paper_only": True}
+    except KeyError as exc:
+        return {"ok": False, "message": str(exc), "paper_only": True}
+
+
+@app.post("/api/realtime-paper/confirmations/{task_id}/reject")
+def realtime_paper_confirm_reject(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        task = realtime_paper_engine_v321.human_confirm_queue.reject(
+            task_id,
+            operator=str(payload.get("operator") or "paper_user"),
+        )
+        return {"ok": True, "data": task.to_dict(), "paper_only": True}
+    except KeyError as exc:
+        return {"ok": False, "message": str(exc), "paper_only": True}
+
+
+@app.post("/api/realtime-paper/tick")
+def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v321.tick(
+        payload,
+        manual_replay=bool(payload.get("manual_replay") or payload.get("paper_replay")),
+    )
+
+
+@app.post("/api/realtime-paper/replay")
+def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v321.replay(payload)
 
 
 @app.get("/api/screener/run")
@@ -2263,19 +3084,54 @@ def orderbook(symbol: str, force: bool = False) -> dict:
     allow_external = bool(force or session.get("can_refresh"))
     book = service.get_order_book(symbol, allow_external=allow_external)
     note = ""
+    if book is None:
+        try:
+            q = service.get_quote(symbol, force_refresh=bool(force and allow_external))
+            if getattr(q, "order_ratio", None) is not None or getattr(q, "order_diff", None) is not None:
+                book = OrderBook(
+                    symbol=symbol,
+                    ts=datetime.now(),
+                    asks=[],
+                    bids=[],
+                    order_ratio=getattr(q, "order_ratio", None),
+                    order_diff=getattr(q, "order_diff", None),
+                    source=f"{getattr(q, 'source', 'quote')}:quote-metrics",
+                )
+                note = "公开行情源未返回五档价量，仅返回委比/委差；五档档位需要等待盘口源可用。"
+        except Exception:
+            pass
     if not allow_external:
         status = str(session.get("status") or "")
         label = str(session.get("label") or "")
         if status == "lunch" or "午" in label:
-            note = "午休无盘口"
+            note = note or "午休无盘口"
         elif status == "closed" or "休" in label:
-            note = "休市无盘口"
+            note = note or "休市无盘口"
         else:
-            note = "非交易时段不适用"
+            note = note or "非交易时段不适用"
     elif not book:
-        note = "公开行情源未返回五档盘口；普通免费源通常没有稳定 Level-2 深度，交易时段会继续尝试。"
+        note = note or "公开行情源未返回五档盘口；普通免费源通常没有稳定 Level-2 深度，交易时段会继续尝试。"
     elif not ((book.asks or []) and (book.bids or [])):
-        note = "盘口字段不完整；仅展示公开源实际返回的档位。"
+        note = note or "盘口字段不完整；仅展示公开源实际返回的档位。"
+    behavior = orderbook_behavior_service.analyze(
+        book,
+        symbol=symbol,
+        skipped_external=not allow_external,
+        note=note,
+    )
+    if book:
+        payload = book.to_dict()
+    else:
+        payload = {
+            "symbol": symbol,
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "asks": [],
+            "bids": [],
+            "order_ratio": None,
+            "order_diff": None,
+            "source": "none",
+        }
+    payload["behavior"] = behavior
     return {
         "ok": True,
         "server_time": datetime.now().isoformat(timespec="seconds"),
@@ -2284,7 +3140,7 @@ def orderbook(symbol: str, force: bool = False) -> dict:
         "market_label": session.get("label"),
         "skipped_external": not allow_external,
         "note": note,
-        "data": book.to_dict() if book else None,
+        "data": payload,
     }
 
 
@@ -2346,6 +3202,162 @@ def strategy_library() -> dict:
     if not default_keys:
         default_keys = [str(x["key"]) for x in FALLBACK_STRATEGIES]
     return {"ok": True, "data": data, "default_keys": default_keys, "errors": errors}
+
+
+def _latest_screener_rows() -> list[dict]:
+    try:
+        cached = cache_state_service.latest_screener_snapshot()
+        data = cached.data or {}
+        rows = data.get("results") or data.get("data") or data.get("snapshot", {}).get("results") or []
+        return [dict(x) for x in rows if isinstance(x, dict)]
+    except Exception:
+        return []
+
+
+def _screener_rows_from_payload(payload: dict | None = None) -> list[dict]:
+    payload = payload or {}
+    rows = payload.get("rows") or payload.get("data") or payload.get("results")
+    if isinstance(rows, list):
+        return [dict(x) for x in rows if isinstance(x, dict)]
+    return _latest_screener_rows()
+
+
+def _screener_symbols_from_payload(payload: dict | None = None) -> list[str]:
+    payload = payload or {}
+    raw = payload.get("symbols") or payload.get("watchlist") or payload.get("symbol") or ""
+    symbols: list[str] = []
+    if isinstance(raw, list):
+        symbols = [str(x).strip() for x in raw if str(x).strip()]
+    elif isinstance(raw, str):
+        symbols = _parse_symbol_text(raw)
+    for row in _screener_rows_from_payload(payload):
+        sym = str(row.get("symbol") or "").strip()
+        if sym and sym not in symbols:
+            symbols.append(sym)
+    return symbols[: max(1, min(int(payload.get("limit") or 30), 200))]
+
+
+def _screener_row_for_signal(symbol: str, payload: dict | None = None) -> dict:
+    payload = payload or {}
+    if isinstance(payload.get("row"), dict):
+        row = dict(payload["row"])
+        row.setdefault("symbol", symbol)
+        return row
+    for row in _screener_rows_from_payload(payload):
+        if str(row.get("symbol") or "").strip() == str(symbol).strip():
+            return row
+    try:
+        q = service.get_quote(symbol, force_refresh=bool(payload.get("force")))
+        return {
+            "symbol": getattr(q, "symbol", symbol),
+            "name": getattr(q, "name", symbol),
+            "last": getattr(q, "last", None),
+            "amount": getattr(q, "amount", None),
+            "change_pct": getattr(q, "change_pct", None),
+            "turnover": getattr(q, "turnover", None),
+            "volume_ratio": getattr(q, "volume_ratio", None),
+            "total_score": payload.get("score", 50),
+        }
+    except Exception:
+        return {"symbol": symbol, "total_score": payload.get("score", 50)}
+
+
+def _screener_anomaly_features(row: dict) -> dict:
+    risk_items = row.get("risk_warnings") or row.get("risk_tags") or row.get("risk_flags") or []
+    if not isinstance(risk_items, list):
+        risk_items = [risk_items]
+    return {
+        "high_position_pct": _safe_float(row.get("pos250"), _safe_float(row.get("pos20"), 0.0)),
+        "volume_ratio": _safe_float(row.get("volume_ratio"), 0.0),
+        "change_pct": _safe_float(row.get("change_pct"), 0.0),
+        "turnover": _safe_float(row.get("turnover"), 0.0),
+        "ma20_deviation_pct": _safe_float(row.get("ma20_deviation_pct"), 0.0),
+        "vwap_distance_pct": _safe_float(row.get("vwap_distance_pct"), 0.0),
+        "negative_news": "负面" in " ".join(str(x) for x in risk_items),
+        "sector_score": _safe_float(row.get("sector_score"), 50.0),
+        "amount_change_pct": _safe_float(row.get("amount_change_pct"), 0.0),
+        "stale_data": bool(row.get("cache_status", {}).get("stale")) if isinstance(row.get("cache_status"), dict) else False,
+    }
+
+
+def _screener_signal_preview(symbol: str, payload: dict | None = None) -> dict:
+    row = _screener_row_for_signal(symbol, payload)
+    anomaly = realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row))
+    now = datetime.now()
+    freshness = realtime_paper_engine_v321.freshness_guard.check(
+        {
+            "quote": now,
+            "intraday": now,
+            "news": now,
+            "technical": now,
+            "company_profile": now,
+        },
+        now=now,
+        missing_fields=list(row.get("missing_data_hints") or row.get("missing_data") or []),
+    )
+    signal = realtime_paper_engine_v321.signal_fusion.fuse(
+        symbol=symbol,
+        horizon=str((payload or {}).get("horizon") or "swing"),
+        fundamental_score=_safe_float(row.get("fundamental_score"), _safe_float(row.get("manual_review_score"), 55.0)),
+        technical_score=_safe_float(row.get("technical_score"), _safe_float(row.get("total_score"), 50.0)),
+        information_score=_safe_float(row.get("information_score"), _safe_float(row.get("info_score"), 50.0)),
+        market_score=_safe_float(row.get("market_score"), _safe_float(row.get("market_mood_score"), 50.0)),
+        anomaly_score=anomaly.anomaly_score,
+        anomaly_action=anomaly.action_suggestion,
+        evidence=list(row.get("tags") or row.get("upgrade_reasons") or row.get("hit_tags") or ["来自当前筛选快照"]),
+        data_freshness=freshness.to_dict(),
+        missing_data=list(row.get("missing_data_hints") or row.get("missing_data") or []),
+        now=now,
+    )
+    return {"ok": True, "symbol": symbol, "row": row, "signal": signal.to_dict(), "anomaly": anomaly.to_dict(), "freshness": freshness.to_dict(), "paper_only": True}
+
+
+@app.post("/api/screener/realtime-paper/add")
+def screener_realtime_paper_add(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _screener_symbols_from_payload(payload)
+    watchlist = watchlist_service.add(symbols)
+    return {"ok": True, "message": "已加入实时模拟池/监控列表", "symbols": symbols, "watchlist": watchlist, "paper_only": True}
+
+
+@app.post("/api/screener/realtime-paper/start")
+def screener_realtime_paper_start(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _screener_symbols_from_payload(payload)
+    if not symbols:
+        return {"ok": False, "message": "没有可用于实时模拟的筛选标的"}
+    watchlist_service.add(symbols)
+    start_payload = {
+        "symbols": symbols,
+        "initial_cash": payload.get("initial_cash", 100000),
+        "interval_seconds": payload.get("interval_seconds", 15),
+        "horizon": payload.get("horizon", "intraday_paper"),
+        "strategy": payload.get("strategy", "three_dimension_score"),
+    }
+    data = realtime_paper_engine_v321.start(start_payload)
+    data["symbols"] = symbols
+    data["message"] = "已用当前筛选结果启动盘中实时模拟"
+    return data
+
+
+@app.get("/api/screener/signal-preview/{symbol}")
+def screener_signal_preview_get(symbol: str, horizon: str = "swing") -> dict:
+    return _screener_signal_preview(symbol, {"horizon": horizon})
+
+
+@app.post("/api/screener/signal-preview/{symbol}")
+def screener_signal_preview_post(symbol: str, payload: dict = Body(default_factory=dict)) -> dict:
+    return _screener_signal_preview(symbol, payload)
+
+
+@app.get("/api/screener/anomaly-preview/{symbol}")
+def screener_anomaly_preview_get(symbol: str) -> dict:
+    row = _screener_row_for_signal(symbol)
+    return {"ok": True, "symbol": symbol, "row": row, "anomaly": realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row)).to_dict()}
+
+
+@app.post("/api/screener/anomaly-preview/{symbol}")
+def screener_anomaly_preview_post(symbol: str, payload: dict = Body(default_factory=dict)) -> dict:
+    row = _screener_row_for_signal(symbol, payload)
+    return {"ok": True, "symbol": symbol, "row": row, "anomaly": realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row)).to_dict()}
 
 
 @app.get("/api/technical/indicators")
@@ -3097,6 +4109,11 @@ def backtest_trades_page() -> str:
 @app.get("/paper", response_class=HTMLResponse)
 def paper_page() -> str:
     return build_paper_ui()
+
+
+@app.get("/realtime-paper", response_class=HTMLResponse)
+def realtime_paper_page() -> str:
+    return build_realtime_paper_ui()
 
 
 @app.get("/trading", response_class=HTMLResponse)

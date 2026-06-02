@@ -102,3 +102,13 @@ def test_kline_markers_have_required_shape():
         assert {"date", "type", "label", "price", "tooltip", "evidence"} <= set(marker)
         assert marker["tooltip"]
         assert isinstance(marker["evidence"], list)
+
+
+def test_recent_days_scan_keeps_prior_week_markers():
+    bars = _base_bars(35)
+    risk_day = datetime(2026, 5, 20)
+    bars[-4] = Bar("601012", "1d", risk_day, 10.4, 12.0, 10.0, 10.3, 2600, 2600000, source="unit_daily")
+    result = MarketBehaviorEngine().analyze(_quote(change_pct=0.2, last=bars[-1].close), bars, recent_days=7)
+
+    assert any(marker["date"] == risk_day.date().isoformat() for marker in result["kline_markers"])
+    assert result["recent_marker_days"] == 7
