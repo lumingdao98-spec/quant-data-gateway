@@ -1298,6 +1298,8 @@ def detail(
         out_symbol = q.symbol
     else:
         synced, sync_reason, points, qd, session, out_symbol = False, "quote_unavailable", [], None, _market_session(_detect_market(symbol)), symbol
+    if limit and len(bars) > limit:
+        bars = bars[-max(1, int(limit)) :]
     behavior = market_behavior_engine.analyze(q, bars, intraday=points, recent_days=7) if len(bars) >= 5 else kpayload.get("behavior_analysis") or market_behavior_engine.analyze(q, [])
     return {
         "ok": bool(kpayload.get("ok", True)),
@@ -4131,8 +4133,9 @@ def chart_page(symbol: str, frame: str = "time") -> str:
 
 
 @app.get("/ui", response_class=HTMLResponse)
-def ui(symbol: str = "300750") -> str:
-    return _build_ui(initial_symbol=symbol or "300750", full=False, initial_frame="time")
+def ui(symbol: str = "300750", frame: str | None = None, mode: str | None = None) -> str:
+    initial_frame = frame or mode or "time"
+    return _build_ui(initial_symbol=symbol or "300750", full=False, initial_frame=initial_frame)
 
 
 def _build_ui(initial_symbol: str, full: bool = False, initial_frame: str = "time") -> str:

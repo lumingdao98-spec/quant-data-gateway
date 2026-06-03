@@ -83,6 +83,44 @@ def test_v321_ui_entry_points_are_visible():
     assert "paper_only" in paper_html
 
 
+def test_v323_market_ui_keeps_intraday_fixed_and_kline_draggable():
+    html = TestClient(api.app).get("/ui?symbol=300750&frame=time").text
+
+    assert "分时走势 · 固定 09:30-15:30" in html
+    assert "分时固定显示 09:30-15:30；日K/周K/月K 可左右拖动" in html
+    assert "time-readonly" in html
+    assert "mode==='time'?48+(w-100)*timeFrac" in html
+    assert "if(isTimeMode())return;" in html
+    assert "overflow-wrap:anywhere" in html
+    assert "近7日异常/K线标注" in html
+    assert "分时点缺少可信价格，已停止绘制异常线" in html
+    assert "rows.length>180" in html
+    assert "lastLogKey" in html
+    assert "urlHasFrame" in html
+    assert "if(!urlHasFrame)currentMode" in html
+
+
+def test_v323_ui_query_frame_takes_precedence_over_local_state():
+    html = TestClient(api.app).get("/ui?symbol=300750&frame=1d").text
+    mode_html = TestClient(api.app).get("/ui?symbol=300750&mode=1w").text
+
+    assert "currentSymbol='300750',currentMode='1d'" in html
+    assert "currentSymbol='300750',currentMode='1w'" in mode_html
+
+
+def test_v323_realtime_paper_ui_explains_and_runs_auto_loop():
+    html = TestClient(api.app).get("/realtime-paper").text
+
+    assert "启动自动模拟" in html
+    assert "执行一轮模拟" in html
+    assert "下次循环" in html
+    assert "休市纸面回放" in html
+    assert "成本" in html
+    assert "setInterval(()=>runOneCycle('auto')" in html
+    assert "/api/quotes?symbols=" in html
+    assert "手动tick" not in html
+
+
 def test_docs_are_chinese_and_link_core_apis():
     html = TestClient(api.app).get("/docs").text
     assert "量化数据网关 API 调试" in html
