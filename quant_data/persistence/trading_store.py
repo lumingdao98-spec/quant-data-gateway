@@ -21,6 +21,8 @@ TABLES = (
     "audit_events",
     "data_source_status",
     "manual_confirmations",
+    "paper_sessions",
+    "live_sessions",
 )
 
 
@@ -59,7 +61,22 @@ class TradingStore:
             )
         return rid
 
-    def list(self, table: str, *, mode: str = "", symbol: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    def get(self, table: str, record_id: str) -> dict[str, Any] | None:
+        if table not in TABLES:
+            raise ValueError(f"unsupported trading store table: {table}")
+        with sqlite3.connect(self.db_path) as con:
+            row = con.execute(f"SELECT id, mode, symbol, session_id, created_at, payload_json FROM {table} WHERE id=?", (record_id,)).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row[5] or "{}")
+        payload.setdefault("id", row[0])
+        payload.setdefault("mode", row[1])
+        payload.setdefault("symbol", row[2])
+        payload.setdefault("session_id", row[3])
+        payload.setdefault("created_at", row[4])
+        return payload
+
+    def list(self, table: str, *, mode: str = "", symbol: str = "", session_id: str = "", limit: int = 200) -> list[dict[str, Any]]:
         if table not in TABLES:
             raise ValueError(f"unsupported trading store table: {table}")
         where = []
@@ -70,6 +87,9 @@ class TradingStore:
         if symbol:
             where.append("symbol=?")
             params.append(symbol)
+        if session_id:
+            where.append("session_id=?")
+            params.append(session_id)
         sql = f"SELECT id, mode, symbol, session_id, created_at, payload_json FROM {table}"
         if where:
             sql += " WHERE " + " AND ".join(where)

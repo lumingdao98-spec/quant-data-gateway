@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass, field
+import os
 from typing import Any
 
 
@@ -28,24 +28,29 @@ class BrokerConfig:
 
 
 def load_broker_config(env: dict[str, str] | None = None) -> BrokerConfig:
-    e = env or os.environ
+    data = env or os.environ
     return BrokerConfig(
-        broker_type=e.get("BROKER_TYPE", "disabled").lower(),
-        live_trading_enabled=_bool(e.get("LIVE_TRADING_ENABLED"), False),
-        feature_live_broker=_bool(e.get("FEATURE_LIVE_BROKER"), False),
-        order_confirm_required=_bool(e.get("ORDER_CONFIRM_REQUIRED"), True),
-        live_kill_switch=_bool(e.get("LIVE_KILL_SWITCH"), False),
-        trade_whitelist_symbols=[x.strip() for x in e.get("TRADE_WHITELIST_SYMBOLS", "").replace("，", ",").split(",") if x.strip()],
-        max_live_order_value=float(e.get("MAX_LIVE_ORDER_VALUE") or 50_000),
-        max_daily_live_order_count=int(e.get("MAX_DAILY_LIVE_ORDER_COUNT") or 5),
-        max_daily_loss_pct=float(e.get("MAX_DAILY_LOSS_PCT") or 0.03),
-        qmt_path=e.get("QMT_PATH", ""),
-        qmt_account_id=e.get("QMT_ACCOUNT_ID", ""),
-        qmt_account_type=e.get("QMT_ACCOUNT_TYPE", ""),
-        qmt_session_id=e.get("QMT_SESSION_ID", ""),
-        ptrade_path=e.get("PTRADE_PATH", ""),
-        ptrade_account_id=e.get("PTRADE_ACCOUNT_ID", ""),
+        broker_type=data.get("BROKER_TYPE", "disabled").lower(),
+        live_trading_enabled=_bool(data.get("LIVE_TRADING_ENABLED"), False),
+        feature_live_broker=_bool(data.get("FEATURE_LIVE_BROKER"), False),
+        order_confirm_required=_bool(data.get("ORDER_CONFIRM_REQUIRED"), True),
+        live_kill_switch=_bool(data.get("LIVE_KILL_SWITCH"), False),
+        trade_whitelist_symbols=_csv(data.get("TRADE_WHITELIST_SYMBOLS", "")),
+        max_live_order_value=float(data.get("MAX_LIVE_ORDER_VALUE") or 50_000),
+        max_daily_live_order_count=int(data.get("MAX_DAILY_LIVE_ORDER_COUNT") or 5),
+        max_daily_loss_pct=float(data.get("MAX_DAILY_LOSS_PCT") or 0.03),
+        qmt_path=data.get("QMT_PATH", ""),
+        qmt_account_id=data.get("QMT_ACCOUNT_ID", ""),
+        qmt_account_type=data.get("QMT_ACCOUNT_TYPE", ""),
+        qmt_session_id=data.get("QMT_SESSION_ID", ""),
+        ptrade_path=data.get("PTRADE_PATH", ""),
+        ptrade_account_id=data.get("PTRADE_ACCOUNT_ID", ""),
     )
+
+
+def _csv(value: str) -> list[str]:
+    text = str(value or "").replace("，", ",").replace("；", ",").replace(";", ",").replace("\n", ",")
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 def _bool(value: str | None, default: bool) -> bool:

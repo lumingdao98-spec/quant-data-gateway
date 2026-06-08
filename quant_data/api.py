@@ -59,6 +59,7 @@ from quant_data.realtime_paper_ui import build_realtime_paper_ui
 from quant_data.live_trading_ui import build_live_trading_ui
 from quant_data.trading_records_ui import build_trading_records_ui
 from quant_data.data_center_ui import build_data_center_ui
+from quant_data.auto_trading_workbench_ui import build_auto_trading_workbench_ui
 from quant_data.chart import ChartAnnotationService
 from quant_data.data import (
     PITStore,
@@ -2790,36 +2791,52 @@ def trading_audit_v320(limit: int = 200) -> dict:
 
 @app.post("/api/realtime-paper/start")
 def realtime_paper_start(payload: dict = Body(default_factory=dict)) -> dict:
-    return realtime_paper_engine_v321.start(payload)
+    result = realtime_paper_engine_v323.start_session(payload)
+    engine = dict(result.get("engine") or {})
+    engine["v323_session"] = result.get("session")
+    engine["session_id"] = (result.get("session") or {}).get("session_id")
+    return engine
 
 
 @app.post("/api/realtime-paper/stop")
 def realtime_paper_stop() -> dict:
-    return realtime_paper_engine_v321.stop()
+    result = realtime_paper_engine_v323.stop_active_session()
+    engine = dict(result.get("engine") or {})
+    engine["v323_session"] = result.get("session")
+    return engine
 
 
 @app.get("/api/realtime-paper/status")
 def realtime_paper_status() -> dict:
-    return realtime_paper_engine_v321.status()
+    realtime_paper_engine_v323.sync_engine_state()
+    data = realtime_paper_engine_v321.status()
+    data["v323_session"] = realtime_paper_engine_v323.active_session()
+    return data
 
 
 @app.get("/api/realtime-paper/portfolio")
 def realtime_paper_portfolio() -> dict:
-    return realtime_paper_engine_v321.portfolio()
+    realtime_paper_engine_v323.sync_engine_state()
+    data = realtime_paper_engine_v321.portfolio()
+    data["v323_session"] = realtime_paper_engine_v323.active_session()
+    return data
 
 
 @app.get("/api/realtime-paper/orders")
 def realtime_paper_orders(limit: int = 200) -> dict:
+    realtime_paper_engine_v323.sync_engine_state()
     return realtime_paper_engine_v321.orders(limit=max(1, min(int(limit or 200), 1000)))
 
 
 @app.get("/api/realtime-paper/signals")
 def realtime_paper_signals(limit: int = 200) -> dict:
+    realtime_paper_engine_v323.sync_engine_state()
     return realtime_paper_engine_v321.signal_rows(limit=max(1, min(int(limit or 200), 1000)))
 
 
 @app.get("/api/realtime-paper/audit")
 def realtime_paper_audit(limit: int = 300) -> dict:
+    realtime_paper_engine_v323.sync_engine_state()
     return realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000)))
 
 
@@ -2858,7 +2875,7 @@ def realtime_paper_confirm_reject(task_id: str, payload: dict = Body(default_fac
 
 @app.post("/api/realtime-paper/tick")
 def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
-    return realtime_paper_engine_v321.tick(
+    return realtime_paper_engine_v323.tick(
         payload,
         manual_replay=bool(payload.get("manual_replay") or payload.get("paper_replay")),
     )
@@ -2866,7 +2883,7 @@ def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
 
 @app.post("/api/realtime-paper/replay")
 def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
-    return realtime_paper_engine_v321.replay(payload)
+    return realtime_paper_engine_v323.replay(payload)
 
 
 @app.post("/api/realtime-paper/sessions/start")
@@ -2882,6 +2899,8 @@ def realtime_paper_sessions() -> dict:
 @app.get("/api/realtime-paper/sessions/{session_id}")
 def realtime_paper_session_get(session_id: str) -> dict:
     session = realtime_paper_engine_v323.get_session(session_id)
+    if session:
+        realtime_paper_engine_v323.sync_engine_state(session_id)
     return {"ok": bool(session), "data": session, "engine": realtime_paper_engine_v321.status() if session else None}
 
 
@@ -2907,51 +2926,37 @@ def realtime_paper_session_kill(session_id: str, payload: dict = Body(default_fa
 
 @app.get("/api/realtime-paper/sessions/{session_id}/orders")
 def realtime_paper_session_orders(session_id: str, limit: int = 200) -> dict:
-    rows = realtime_paper_engine_v321.orders(limit=max(1, min(int(limit or 200), 1000))).get("data") or []
-    for row in rows:
-        row.setdefault("mode", "realtime_paper")
-        row.setdefault("session_id", session_id)
-        trading_store_v323.put("orders", row, mode="realtime_paper", symbol=str(row.get("symbol") or ""), session_id=session_id, record_id=str(row.get("order_id") or ""))
-        chart_annotation_service_v323.add_order(row)
+    rows = realtime_paper_engine_v323.stored_orders(session_id, limit=max(1, min(int(limit or 200), 1000)))
     return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/fills")
 def realtime_paper_session_fills(session_id: str, limit: int = 200) -> dict:
-    rows = realtime_paper_engine_v321.account.fills_dicts()[-max(1, min(int(limit or 200), 1000)) :][::-1]
-    for row in rows:
-        row.setdefault("mode", "realtime_paper")
-        row.setdefault("session_id", session_id)
-        row.setdefault("fill_id", f"pf-{row.get('order_id')}-{row.get('created_at')}")
-        trading_store_v323.put("fills", row, mode="realtime_paper", symbol=str(row.get("symbol") or ""), session_id=session_id, record_id=str(row.get("fill_id") or ""))
-        chart_annotation_service_v323.add_fill(row, mode="realtime_paper", session_id=session_id)
+    rows = realtime_paper_engine_v323.stored_fills(session_id, limit=max(1, min(int(limit or 200), 1000)))
     return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/positions")
 def realtime_paper_session_positions(session_id: str) -> dict:
     data = realtime_paper_engine_v321.portfolio()
-    snap = data.get("data") or {}
-    trading_store_v323.put("account_snapshots", snap, mode="realtime_paper", session_id=session_id)
-    for symbol, pos in (snap.get("positions") or {}).items():
-        trading_store_v323.put("positions", pos, mode="realtime_paper", symbol=symbol, session_id=session_id)
-    return {"ok": True, "data": snap, "curve": data.get("curve") or [], "session_id": session_id}
+    stored = realtime_paper_engine_v323.stored_positions(session_id)
+    return {"ok": True, "data": (stored[0] if stored else {}), "curve": data.get("curve") or [], "session_id": session_id}
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/markers")
 def realtime_paper_session_markers(session_id: str, symbol: str = "", mode: str = "realtime_paper") -> dict:
-    symbols = [symbol] if symbol else [s for sess in realtime_paper_engine_v323.sessions.values() for s in sess.symbols]
-    rows: list[dict] = []
-    for sym in symbols:
-        rows.extend(chart_annotation_service_v323.list_markers(sym, mode=mode))
+    rows = realtime_paper_engine_v323.stored_markers(session_id, symbol=symbol, limit=1000)
+    if not rows:
+        symbols = [symbol] if symbol else [s for sess in realtime_paper_engine_v323.sessions.values() for s in sess.symbols]
+        rows = []
+        for sym in symbols:
+            rows.extend(chart_annotation_service_v323.list_markers(sym, mode=mode))
     return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/audit")
 def realtime_paper_session_audit(session_id: str, limit: int = 300) -> dict:
-    rows = realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000))).get("data") or []
-    for row in rows[:50]:
-        trading_store_v323.put("audit_events", row, mode="realtime_paper", session_id=session_id)
+    rows = realtime_paper_engine_v323.stored_audit(session_id, limit=max(1, min(int(limit or 300), 1000)))
     return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
@@ -4655,6 +4660,11 @@ def paper_page() -> str:
 @app.get("/realtime-paper", response_class=HTMLResponse)
 def realtime_paper_page() -> str:
     return build_realtime_paper_ui()
+
+
+@app.get("/auto-trading", response_class=HTMLResponse)
+def auto_trading_page() -> str:
+    return build_auto_trading_workbench_ui()
 
 
 @app.get("/live-trading", response_class=HTMLResponse)
