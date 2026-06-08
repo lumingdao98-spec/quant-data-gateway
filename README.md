@@ -1,5 +1,38 @@
 # Quant Data Gateway V3.18.3 / Stable Recovery
 
+## V3.23 Full Auto Trading Core
+
+V3.23 把历史回测、实时模拟交易和真实券商自动交易拆成独立入口，同时共享统一的数据、评分、风控、订单、持仓、审计和图表标注内核。
+
+页面入口：
+
+- `/screener`：股票筛选，支持加入自选池、回测池、实时模拟池和真实交易观察池。
+- `/detail/{symbol}` 或 `/ui?symbol=300750`：分时/K线、盘口、信息面、技术面、行为风险和图表标注。
+- `/backtest`：历史回测，使用历史数据和 point-in-time 快照，不连接真实行情和券商。
+- `/realtime-paper`：实时模拟交易，只做 paper trading，不真实下单。
+- `/live-trading`：真实交易接口页，默认禁用，未配置/未授权/未确认时只返回拒单或确认队列。
+- `/trading-records`：统一交易记录，展示回测、模拟、真实交易的订单、成交、风控、评分溯源和审计。
+- `/data-center`：缓存、数据源、缺失字段、过期状态和券商状态。
+
+核心安全规则：
+
+- `FEATURE_LIVE_BROKER=false`、`LIVE_TRADING_ENABLED=false`、`ORDER_CONFIRM_REQUIRED=true` 是默认状态。
+- 开启真实交易需要本地券商终端、用户授权、环境变量、风控配置、人工确认和用户自行完成合规要求。
+- 当前支持 `DisabledBrokerAdapter`、`SimulatorBrokerAdapter`、QMT/PTrade import guard。若本机没有 `xtquant` 或 PTrade SDK，会返回 `unsupported`，不会导致服务崩溃。
+- 没有真实数据时系统不会伪造；会显示数据源缺失、字段缺失、缓存过期、休市无盘口、券商不支持或未授权。
+- 百度、360、搜狗搜索结果页永久禁用，不抓取、不计分、不展示。
+
+V3.23 文档：
+
+- `docs/V323_BASELINE_AUDIT.md`
+- `docs/V323_AUTO_TRADING_DESIGN.md`
+- `docs/V323_BROKER_ADAPTER_GUIDE.md`
+- `docs/V323_LIVE_TRADING_SAFETY.md`
+- `docs/V323_ORDER_LIFECYCLE.md`
+- `docs/V323_CHART_MARKERS.md`
+- `docs/V323_DATA_TRUTH_RULES.md`
+- `docs/V323_COMPLIANCE_NOTES.md`
+
 ## V3.22 研究回测与纸面交易增强
 
 本分支继续保留 V3.20/V3.21 兼容入口，并新增 V3.22 核心能力：

@@ -40,6 +40,7 @@ from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.services.background_cache_service import BackgroundCacheService
 from quant_data.services.backtest_service import BacktestConfig as LegacyBacktestConfig, BacktestService, SCORE_FORMULA
+from quant_data.utils import normalize_symbol
 from quant_data.backtest import BacktestConfig as V319BacktestConfig, StrategyHorizonConfig, StrategySignal
 from quant_data.backtest.position_sizing import PositionSizingConfig
 from quant_data.backtest.engine import BacktestEngine, BacktestEngineV320
@@ -55,6 +56,29 @@ from quant_data.info_ui import build_info_ui
 from quant_data.ui_v22 import build_ui_v22
 from quant_data.backtest_ui import build_backtest_trades_ui, build_backtest_ui, build_paper_ui
 from quant_data.realtime_paper_ui import build_realtime_paper_ui
+from quant_data.live_trading_ui import build_live_trading_ui
+from quant_data.trading_records_ui import build_trading_records_ui
+from quant_data.data_center_ui import build_data_center_ui
+from quant_data.chart import ChartAnnotationService
+from quant_data.data import (
+    PITStore,
+    build_fundamentals_snapshot,
+    build_news_snapshot,
+    build_quote_snapshot,
+    default_source_registry,
+    market_session_status,
+)
+from quant_data.live import LiveTradingEngine
+from quant_data.persistence import TradingStore
+from quant_data.realtime import RealtimePaperEngineV323
+from quant_data.scoring import (
+    ScoreRequest,
+    SignalFusionV323,
+    V323FactorEngine,
+    build_score_provenance_v323,
+    explain_score,
+)
+from quant_data.strategy import StockClassifierV323, StrategySuitabilityV323
 from quant_data.trading import (
     AnomalyGuard,
     DataFreshnessGuard,
@@ -102,6 +126,16 @@ realtime_paper_engine_v321 = RealtimePaperEngine(
     anomaly_guard=AnomalyGuard(),
     freshness_guard=DataFreshnessGuard(),
 )
+trading_store_v323 = TradingStore()
+pit_store_v323 = PITStore()
+chart_annotation_service_v323 = ChartAnnotationService()
+source_registry_v323 = default_source_registry()
+factor_engine_v323 = V323FactorEngine()
+stock_classifier_v323 = StockClassifierV323()
+strategy_suitability_v323 = StrategySuitabilityV323()
+live_trading_engine_v323 = LiveTradingEngine(store=trading_store_v323)
+realtime_paper_engine_v323 = RealtimePaperEngineV323(realtime_paper_engine_v321, trading_store_v323)
+score_provenance_memory_v323: dict[str, dict] = {}
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -742,7 +776,6 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
     errors: list[str] = []
     fallback_chain: list[str] = []
     q = None
-    cache_status = cache_state_service.status("miss", key=key, source="kline_api")
     cached = cache_state_service.get_kline_cache(key)
     session = _market_session("CN")
     # UI/chart pages pass force=true during active sessions. Keep the API-level
@@ -935,7 +968,6 @@ def _sync_daily_bar_with_quote(bars: list[Bar], q: Quote, frame: str, adjust: st
 
 def _quote_extra(q: Quote) -> dict:
     pre = _safe_float(q.pre_close)
-    last = _safe_float(q.last)
     limit_rate = 0.2 if q.symbol.startswith(("300", "301", "688", "689")) else 0.1
     limit_up = round(pre * (1 + limit_rate), 2) if pre else None
     limit_down = round(pre * (1 - limit_rate), 2) if pre else None
@@ -1348,6 +1380,14 @@ def _parse_symbol_text(symbols: str | None) -> list[str]:
     return [x.strip() for x in (symbols or "").replace("，", ",").replace("\n", ",").split(",") if x.strip()]
 
 
+def _symbols_from_payload(payload: dict | None) -> list[str]:
+    payload = payload or {}
+    raw = payload.get("symbols") or payload.get("watchlist") or payload.get("symbol") or ""
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return _parse_symbol_text(str(raw))
+
+
 @app.get("/api/watchlist")
 def watchlist_get() -> dict:
     data = watchlist_service.list()
@@ -1526,6 +1566,102 @@ def backtest_v322_readiness() -> dict:
         ],
         "note": "V3.22 回测信号使用历史可见数据和评分溯源；真实交易仍需要人工复核，本系统只做纸面模拟。",
     }
+
+
+@app.get("/api/backtest/v323/readiness")
+def backtest_v323_readiness() -> dict:
+    return {
+        "ok": True,
+        "version": "V3.23 / Full Auto Trading Core",
+        "baseline": "feature/v3.23-full-auto-trading-core from codex/backtest-combo-strategy-ui@b19545d",
+        "main_latest": False,
+        "modules": {
+            "backtest": True,
+            "realtime_paper": True,
+            "live_trading_disabled_by_default": True,
+            "unified_scoring": True,
+            "broker_adapters": ["disabled", "simulator", "qmt_import_guard", "ptrade_import_guard"],
+            "chart_markers": True,
+            "trading_records": True,
+            "data_truth_rules": True,
+        },
+        "safety": live_trading_engine_v323.status()["safety"],
+        "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
+    }
+
+
+@app.get("/api/rules/effective")
+def rules_effective(symbol: str = "300750", asof: str = "") -> dict:
+    rule = market_rule_engine_v322.resolve_profile(symbol, asof=asof or None).to_dict()
+    return {"ok": True, "symbol": symbol, "asof": asof, "data": rule, "source": "config/market_rules/a_share_rules.yaml"}
+
+
+@app.post("/api/risk/pretrade/check")
+def risk_pretrade_check(payload: dict = Body(default_factory=dict)) -> dict:
+    order = dict(payload.get("order") or payload)
+    portfolio = dict(payload.get("portfolio") or {})
+    signal = dict(payload.get("signal") or {})
+    quote = dict(payload.get("quote") or {})
+    result = paper_trading_gateway_v320.risk_gateway.evaluate_order(order, portfolio=portfolio, signal=signal, quote=quote)
+    trading_store_v323.put("risk_checks", result, mode=str(order.get("mode") or "paper"), symbol=str(order.get("symbol") or ""))
+    return {"ok": True, "data": result}
+
+
+@app.get("/api/score/latest/{symbol}")
+def score_latest_v323(symbol: str) -> dict:
+    rows = [x for x in score_provenance_memory_v323.values() if x.get("symbol") == symbol]
+    rows.sort(key=lambda x: str(x.get("decision_time") or ""), reverse=True)
+    return {"ok": True, "data": rows[0] if rows else None, "missing_reason": "" if rows else "暂无评分溯源，请先运行筛选/回测/模拟。"}
+
+
+@app.get("/api/score/provenance/{provenance_id}")
+def score_provenance_get_v323(provenance_id: str) -> dict:
+    data = score_provenance_memory_v323.get(provenance_id)
+    if not data:
+        stored = trading_store_v323.list("score_provenance", limit=1000)
+        data = next((x for x in stored if x.get("provenance_id") == provenance_id), None)
+    return {"ok": bool(data), "data": data, "explain": explain_score(data) if data else None, "errors": [] if data else ["provenance_id not found"]}
+
+
+@app.post("/api/score/recompute")
+def score_recompute_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    symbol = str(payload.get("symbol") or "300750")
+    decision_time = str(payload.get("decision_time") or datetime.now().isoformat(timespec="seconds"))
+    quote_payload = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+    fundamentals_payload = payload.get("fundamentals") if isinstance(payload.get("fundamentals"), dict) else {}
+    info_payload = payload.get("information") if isinstance(payload.get("information"), dict) else {}
+    market_payload = payload.get("market_state") if isinstance(payload.get("market_state"), dict) else {}
+    quote_snapshot = build_quote_snapshot(symbol, quote_payload, source_id=str(quote_payload.get("source_id") or quote_payload.get("source") or "manual"))
+    fund_snapshot = build_fundamentals_snapshot(symbol, fundamentals_payload, source_id=str(fundamentals_payload.get("source_id") or fundamentals_payload.get("source") or "manual"))
+    news_snapshot = build_news_snapshot(symbol, info_payload.get("items") if isinstance(info_payload.get("items"), list) else [], source_id=str(info_payload.get("source_id") or "manual"))
+    bundle = factor_engine_v323.compute(
+        symbol,
+        decision_time=decision_time,
+        bars=list(payload.get("bars") or []),
+        quote=quote_payload,
+        fundamentals=fundamentals_payload,
+        information=info_payload,
+        fund_flow=dict(payload.get("fund_flow") or {}),
+        market_state=market_payload,
+        behavior_risk=dict(payload.get("behavior_risk") or {}),
+        data_sources=[quote_snapshot.source.to_dict(), fund_snapshot.source.to_dict(), news_snapshot.source.to_dict()],
+    )
+    provenance = build_score_provenance_v323(
+        ScoreRequest(
+            symbol=symbol,
+            decision_time=decision_time,
+            mode=str(payload.get("mode") or "realtime_paper"),
+            strategy_family=str(payload.get("strategy_family") or "hybrid"),
+            factor_values=bundle.values,
+            data_sources=bundle.sources,
+        )
+    )
+    signal = SignalFusionV323().fuse(provenance)
+    pdata = provenance.to_dict()
+    score_provenance_memory_v323[provenance.provenance_id] = pdata
+    trading_store_v323.put("score_provenance", pdata, mode=provenance.mode, symbol=symbol, record_id=provenance.provenance_id)
+    trading_store_v323.put("signals", signal.to_dict(), mode=provenance.mode, symbol=symbol, record_id=signal.signal_id)
+    return {"ok": True, "data": pdata, "signal": signal.to_dict(), "explain": explain_score(pdata)}
 
 
 @app.get("/api/screener/historical-snapshot")
@@ -2422,6 +2558,77 @@ def backtest_runs_v319(limit: int = 50) -> dict:
     return _v319_response(True, data=backtest_storage_v319.list_runs(limit=max(1, min(int(limit or 50), 200))), cache_status="disk")
 
 
+@app.get("/api/backtest/runs/{run_id}")
+def backtest_run_alias_v323(run_id: str) -> dict:
+    return backtest_result_v319(run_id)
+
+
+@app.post("/api/backtest/v323/run")
+def backtest_run_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    try:
+        cfg = _v319_config({**payload, "engine_version": "v3.23"})
+        result = backtest_engine_v319.run(
+            cfg,
+            market_data=_v319_market_data(payload, cfg),
+            screener_rows=payload.get("screener_rows") or payload.get("snapshot_rows"),
+        )
+        backtest_storage_v319.save(result)
+        data = result.to_dict()
+        for row in data.get("orders") or []:
+            row["mode"] = "backtest"
+            row["session_id"] = result.run_id
+            trading_store_v323.put("orders", row, mode="backtest", symbol=str(row.get("symbol") or ""), session_id=result.run_id, record_id=str(row.get("order_id") or ""))
+        for row in data.get("fills") or []:
+            row["mode"] = "backtest"
+            row["session_id"] = result.run_id
+            trading_store_v323.put("fills", row, mode="backtest", symbol=str(row.get("symbol") or ""), session_id=result.run_id, record_id=str(row.get("fill_id") or ""))
+        for row in data.get("score_provenance") or []:
+            rid = str(row.get("score_provenance_id") or row.get("provenance_id") or "")
+            if rid:
+                row.setdefault("provenance_id", rid)
+                score_provenance_memory_v323[rid] = row
+                trading_store_v323.put("score_provenance", row, mode="backtest", symbol=str(row.get("symbol") or ""), session_id=result.run_id, record_id=rid)
+        for symbol in result.symbols:
+            chart_annotation_service_v323.rebuild(symbol, orders=data.get("orders") or [], fills=data.get("fills") or [], mode="backtest")
+        trading_store_v323.put("audit_events", {"event_type": "backtest_v323_run", "run_id": result.run_id, "metrics": result.metrics}, mode="backtest", session_id=result.run_id)
+        return _v319_response(True, run_id=result.run_id, data=data, metrics=result.metrics, warnings=result.warnings, errors=result.errors, cache_status=result.cache_status)
+    except Exception as exc:
+        return _v319_response(False, errors=[str(exc)[:300]], message=str(exc)[:300])
+
+
+@app.get("/api/backtest/v323/runs")
+def backtest_v323_runs(limit: int = 50) -> dict:
+    return backtest_runs_v319(limit)
+
+
+@app.get("/api/backtest/v323/runs/{run_id}")
+def backtest_v323_run_detail(run_id: str) -> dict:
+    return backtest_result_v319(run_id)
+
+
+@app.get("/api/backtest/v323/runs/{run_id}/markers")
+def backtest_v323_run_markers(run_id: str, symbol: str = "") -> dict:
+    try:
+        data = backtest_storage_v319.load(run_id)
+        symbols = [symbol] if symbol else list(data.get("symbols") or [])
+        rows = []
+        for sym in symbols:
+            rows.extend(chart_annotation_service_v323.rebuild(sym, orders=data.get("orders") or [], fills=data.get("fills") or [], mode="backtest"))
+        return {"ok": True, "run_id": run_id, "data": rows, "count": len(rows)}
+    except FileNotFoundError:
+        return {"ok": False, "run_id": run_id, "data": [], "errors": ["run_id not found"]}
+
+
+@app.get("/api/backtest/v323/runs/{run_id}/provenance")
+def backtest_v323_run_provenance(run_id: str) -> dict:
+    try:
+        data = backtest_storage_v319.load(run_id)
+        rows = data.get("score_provenance") or []
+        return {"ok": True, "run_id": run_id, "data": rows, "count": len(rows)}
+    except FileNotFoundError:
+        return {"ok": False, "run_id": run_id, "data": [], "errors": ["run_id not found"]}
+
+
 @app.delete("/api/backtest/result/{run_id}")
 def backtest_delete_v319(run_id: str) -> dict:
     ok = backtest_storage_v319.delete(run_id)
@@ -2660,6 +2867,335 @@ def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
 @app.post("/api/realtime-paper/replay")
 def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
     return realtime_paper_engine_v321.replay(payload)
+
+
+@app.post("/api/realtime-paper/sessions/start")
+def realtime_paper_session_start(payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v323.start_session(payload)
+
+
+@app.get("/api/realtime-paper/sessions")
+def realtime_paper_sessions() -> dict:
+    return {"ok": True, "data": realtime_paper_engine_v323.list_sessions()}
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}")
+def realtime_paper_session_get(session_id: str) -> dict:
+    session = realtime_paper_engine_v323.get_session(session_id)
+    return {"ok": bool(session), "data": session, "engine": realtime_paper_engine_v321.status() if session else None}
+
+
+@app.post("/api/realtime-paper/sessions/{session_id}/pause")
+def realtime_paper_session_pause(session_id: str) -> dict:
+    return realtime_paper_engine_v323.pause(session_id)
+
+
+@app.post("/api/realtime-paper/sessions/{session_id}/resume")
+def realtime_paper_session_resume(session_id: str) -> dict:
+    return realtime_paper_engine_v323.resume(session_id)
+
+
+@app.post("/api/realtime-paper/sessions/{session_id}/stop")
+def realtime_paper_session_stop(session_id: str) -> dict:
+    return realtime_paper_engine_v323.stop_session(session_id)
+
+
+@app.post("/api/realtime-paper/sessions/{session_id}/kill-switch")
+def realtime_paper_session_kill(session_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    return realtime_paper_engine_v323.kill_switch(session_id, enabled=bool(payload.get("enabled", True)))
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}/orders")
+def realtime_paper_session_orders(session_id: str, limit: int = 200) -> dict:
+    rows = realtime_paper_engine_v321.orders(limit=max(1, min(int(limit or 200), 1000))).get("data") or []
+    for row in rows:
+        row.setdefault("mode", "realtime_paper")
+        row.setdefault("session_id", session_id)
+        trading_store_v323.put("orders", row, mode="realtime_paper", symbol=str(row.get("symbol") or ""), session_id=session_id, record_id=str(row.get("order_id") or ""))
+        chart_annotation_service_v323.add_order(row)
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}/fills")
+def realtime_paper_session_fills(session_id: str, limit: int = 200) -> dict:
+    rows = realtime_paper_engine_v321.account.fills_dicts()[-max(1, min(int(limit or 200), 1000)) :][::-1]
+    for row in rows:
+        row.setdefault("mode", "realtime_paper")
+        row.setdefault("session_id", session_id)
+        row.setdefault("fill_id", f"pf-{row.get('order_id')}-{row.get('created_at')}")
+        trading_store_v323.put("fills", row, mode="realtime_paper", symbol=str(row.get("symbol") or ""), session_id=session_id, record_id=str(row.get("fill_id") or ""))
+        chart_annotation_service_v323.add_fill(row, mode="realtime_paper", session_id=session_id)
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}/positions")
+def realtime_paper_session_positions(session_id: str) -> dict:
+    data = realtime_paper_engine_v321.portfolio()
+    snap = data.get("data") or {}
+    trading_store_v323.put("account_snapshots", snap, mode="realtime_paper", session_id=session_id)
+    for symbol, pos in (snap.get("positions") or {}).items():
+        trading_store_v323.put("positions", pos, mode="realtime_paper", symbol=symbol, session_id=session_id)
+    return {"ok": True, "data": snap, "curve": data.get("curve") or [], "session_id": session_id}
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}/markers")
+def realtime_paper_session_markers(session_id: str, symbol: str = "", mode: str = "realtime_paper") -> dict:
+    symbols = [symbol] if symbol else [s for sess in realtime_paper_engine_v323.sessions.values() for s in sess.symbols]
+    rows: list[dict] = []
+    for sym in symbols:
+        rows.extend(chart_annotation_service_v323.list_markers(sym, mode=mode))
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}/audit")
+def realtime_paper_session_audit(session_id: str, limit: int = 300) -> dict:
+    rows = realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000))).get("data") or []
+    for row in rows[:50]:
+        trading_store_v323.put("audit_events", row, mode="realtime_paper", session_id=session_id)
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
+
+
+@app.get("/api/live-broker/status")
+def live_broker_status() -> dict:
+    return live_trading_engine_v323.status()
+
+
+@app.post("/api/live-broker/connect")
+def live_broker_connect() -> dict:
+    return live_trading_engine_v323.connect()
+
+
+@app.post("/api/live-broker/disconnect")
+def live_broker_disconnect() -> dict:
+    return live_trading_engine_v323.disconnect()
+
+
+@app.get("/api/live/account")
+def live_account() -> dict:
+    return {"ok": True, "data": live_trading_engine_v323.position_sync.snapshot()}
+
+
+@app.get("/api/live/positions")
+def live_positions() -> dict:
+    return {"ok": True, "data": [x.to_dict() for x in live_trading_engine_v323.broker.get_positions()], "source": live_trading_engine_v323.broker.health_check().to_dict()}
+
+
+@app.get("/api/live/orders")
+def live_orders() -> dict:
+    rows = [x.to_dict() for x in live_trading_engine_v323.broker.get_orders()]
+    stored = trading_store_v323.list("orders", mode="live", limit=200)
+    return {"ok": True, "data": rows or stored, "source": live_trading_engine_v323.broker.health_check().to_dict()}
+
+
+@app.get("/api/live/trades")
+def live_trades() -> dict:
+    return {"ok": True, "data": [x.to_dict() for x in live_trading_engine_v323.broker.get_trades()], "source": live_trading_engine_v323.broker.health_check().to_dict()}
+
+
+@app.post("/api/live/orders/preview")
+def live_order_preview(payload: dict = Body(default_factory=dict)) -> dict:
+    return live_trading_engine_v323.preview_order(payload)
+
+
+@app.post("/api/live/orders/confirm")
+def live_order_confirm(payload: dict = Body(default_factory=dict)) -> dict:
+    confirm_id = str(payload.get("confirm_id") or "")
+    if not confirm_id:
+        return {"ok": False, "message": "confirm_id required"}
+    return live_trading_engine_v323.approve_confirmation(confirm_id)
+
+
+@app.post("/api/live/orders/place")
+def live_order_place(payload: dict = Body(default_factory=dict)) -> dict:
+    return live_trading_engine_v323.place_order(payload, confirmed=bool(payload.get("confirmed")))
+
+
+@app.post("/api/live/orders/{order_id}/cancel")
+def live_order_cancel(order_id: str) -> dict:
+    result = live_trading_engine_v323.broker.cancel_order(order_id).to_dict()
+    trading_store_v323.put("orders", {"order_id": order_id, "status": result.get("status"), "status_reason": result.get("reason"), "mode": "live"}, mode="live", record_id=order_id)
+    return {"ok": bool(result.get("ok")), "data": result}
+
+
+@app.post("/api/live/kill-switch")
+def live_kill_switch(payload: dict = Body(default_factory=dict)) -> dict:
+    return live_trading_engine_v323.kill_switch(enabled=bool(payload.get("enabled", True)))
+
+
+@app.get("/api/live/confirm-queue")
+def live_confirm_queue(status: str = "pending", limit: int = 200) -> dict:
+    rows = live_trading_engine_v323.confirm_queue.list(status=status or None, limit=max(1, min(int(limit or 200), 1000)))
+    return {"ok": True, "data": rows, "count": len(rows)}
+
+
+@app.post("/api/live/confirm-queue/{confirm_id}/approve")
+def live_confirm_approve(confirm_id: str) -> dict:
+    return live_trading_engine_v323.approve_confirmation(confirm_id)
+
+
+@app.post("/api/live/confirm-queue/{confirm_id}/reject")
+def live_confirm_reject(confirm_id: str) -> dict:
+    return live_trading_engine_v323.reject_confirmation(confirm_id)
+
+
+@app.get("/api/watchlists")
+def watchlists_v323() -> dict:
+    data = watchlist_service.list()
+    return {"ok": True, "data": [{"id": "default", "name": "默认自选池", **data}]}
+
+
+@app.post("/api/watchlists")
+def watchlists_create_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = payload.get("symbols") or payload.get("watchlist") or []
+    data = watchlist_service.set(symbols)
+    return {"ok": True, "data": {"id": "default", "name": str(payload.get("name") or "默认自选池"), **data}}
+
+
+@app.put("/api/watchlists/{watchlist_id}")
+def watchlists_update_v323(watchlist_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = payload.get("symbols") or payload.get("watchlist") or []
+    data = watchlist_service.set(symbols)
+    return {"ok": True, "data": {"id": watchlist_id, "name": str(payload.get("name") or "默认自选池"), **data}}
+
+
+@app.delete("/api/watchlists/{watchlist_id}")
+def watchlists_delete_v323(watchlist_id: str) -> dict:
+    data = watchlist_service.set([])
+    return {"ok": True, "data": {"id": watchlist_id, "deleted": True, **data}}
+
+
+@app.get("/api/screener/session/latest")
+def screener_session_latest_v323() -> dict:
+    latest = cache_state_service.latest("screener_snapshot")
+    return {"ok": bool(latest.data), "data": latest.data, "cache_status": latest.cache_status, "missing_reason": "" if latest.data else "暂无筛选快照缓存"}
+
+
+@app.get("/api/screener/session/{session_id}")
+def screener_session_get_v323(session_id: str) -> dict:
+    snap = cache_state_service.get("screener_snapshot", session_id)
+    return {"ok": bool(snap.data), "data": snap.data, "cache_status": snap.cache_status, "errors": [] if snap.data else ["session_id not found"]}
+
+
+@app.post("/api/screener/session/save")
+def screener_session_save_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    snapshot_id = str(payload.get("snapshot_id") or _make_snapshot_id("screener", len(payload.get("results") or [])))
+    cache_state_service.put("screener_snapshot", snapshot_id, payload, ttl_seconds=1800, source="api/screener/session/save")
+    return {"ok": True, "snapshot_id": snapshot_id, "data": payload}
+
+
+@app.post("/api/screener/add-to-paper")
+def screener_add_to_paper_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _symbols_from_payload(payload)
+    watchlist_service.add(symbols)
+    session = realtime_paper_engine_v323.start_session({"symbols": symbols, "strategy_family": payload.get("strategy_family") or "hybrid"})
+    return {"ok": True, "symbols": symbols, "session": session}
+
+
+@app.post("/api/screener/add-to-live-watch")
+def screener_add_to_live_watch_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _symbols_from_payload(payload)
+    watchlist_service.add(symbols)
+    for sym in symbols:
+        trading_store_v323.put("audit_events", {"event_type": "live_watch_added", "symbol": sym, "source": "screener"}, mode="live", symbol=sym)
+    return {"ok": True, "symbols": symbols, "message": "已加入真实交易观察池；真实交易默认关闭，不会自动下单。"}
+
+
+@app.get("/api/chart/{symbol}/markers")
+def chart_markers_v323(symbol: str, mode: str = "", limit: int = 300) -> dict:
+    rows = chart_annotation_service_v323.list_markers(symbol, mode=mode or None, limit=max(1, min(int(limit or 300), 1000)))
+    if not rows:
+        stored = trading_store_v323.list("chart_markers", mode=mode, symbol=symbol, limit=limit)
+        rows = stored
+    return {"ok": True, "symbol": symbol, "mode": mode, "data": rows, "count": len(rows)}
+
+
+@app.post("/api/chart/{symbol}/markers/rebuild")
+def chart_markers_rebuild_v323(symbol: str, payload: dict = Body(default_factory=dict)) -> dict:
+    rows = chart_annotation_service_v323.rebuild(
+        symbol,
+        orders=list(payload.get("orders") or trading_store_v323.list("orders", symbol=symbol, limit=1000)),
+        fills=list(payload.get("fills") or trading_store_v323.list("fills", symbol=symbol, limit=1000)),
+        mode=str(payload.get("mode") or "backtest"),
+    )
+    for row in rows:
+        trading_store_v323.put("chart_markers", row, mode=str(row.get("mode") or ""), symbol=symbol, session_id=str(row.get("session_id") or ""), record_id=str(row.get("marker_id") or ""))
+    return {"ok": True, "symbol": symbol, "data": rows, "count": len(rows)}
+
+
+@app.get("/api/trading-records")
+def trading_records_v323(mode: str = "", symbol: str = "", status: str = "", limit: int = 200) -> dict:
+    tables = ["signals", "score_provenance", "risk_checks", "orders", "fills", "positions", "account_snapshots", "chart_markers", "audit_events", "manual_confirmations"]
+    rows = []
+    for table in tables:
+        for item in trading_store_v323.list(table, mode=mode, symbol=symbol, limit=max(1, min(int(limit or 200), 1000))):
+            if status and str(item.get("status") or item.get("event_type") or "") != status:
+                continue
+            rows.append({"table": table, **item})
+    rows.sort(key=lambda x: str(x.get("created_at") or x.get("timestamp") or ""), reverse=True)
+    return {"ok": True, "data": rows[: max(1, min(int(limit or 200), 1000))], "count": len(rows)}
+
+
+@app.get("/api/trading-records/{record_id}")
+def trading_record_detail_v323(record_id: str) -> dict:
+    for table in ["signals", "score_provenance", "risk_checks", "orders", "fills", "positions", "account_snapshots", "broker_raw_responses", "chart_markers", "audit_events", "data_source_status", "manual_confirmations"]:
+        row = next((x for x in trading_store_v323.list(table, limit=1000) if x.get("id") == record_id or x.get("order_id") == record_id or x.get("fill_id") == record_id or x.get("provenance_id") == record_id), None)
+        if row:
+            return {"ok": True, "table": table, "data": row}
+    return {"ok": False, "errors": ["record_id not found"], "data": None}
+
+
+@app.get("/api/trading-records/export")
+def trading_records_export_v323(mode: str = "", symbol: str = "") -> dict:
+    return trading_records_v323(mode=mode, symbol=symbol, limit=1000)
+
+
+@app.get("/api/data-center/status")
+def data_center_status_v323() -> dict:
+    cache = cache_state_service.overview()
+    return {
+        "ok": True,
+        "market_session": market_session_status(),
+        "cache": cache,
+        "trading_store": trading_store_v323.stats(),
+        "pit_store": pit_store_v323.stats(),
+        "sources": source_registry_v323.list(),
+        "broker": live_trading_engine_v323.status()["broker"],
+        "disclaimer": "没有真实数据时系统显示缺失/过期/不支持，不伪造。",
+    }
+
+
+@app.get("/api/data-center/missing-fields")
+def data_center_missing_fields_v323() -> dict:
+    records = []
+    for table in ["data_source_status", "score_provenance"]:
+        records.extend({"table": table, **x} for x in trading_store_v323.list(table, limit=500))
+    missing = []
+    for row in records:
+        missing.extend(row.get("missing_reasons") or row.get("missing_data") or [])
+    return {"ok": True, "data": list(dict.fromkeys(str(x) for x in missing)), "count": len(missing)}
+
+
+@app.get("/api/data-center/source-errors")
+def data_center_source_errors_v323() -> dict:
+    warnings = source_registry_service.warnings() if hasattr(source_registry_service, "warnings") else []
+    providers = provider_warnings().get("data") if "provider_warnings" in globals() else []
+    return {"ok": True, "data": {"registry": source_registry_v323.list(), "warnings": warnings, "provider_warnings": providers, "live_broker": live_trading_engine_v323.status()["broker"]}}
+
+
+@app.post("/api/data-center/refresh")
+def data_center_refresh_v323(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _symbols_from_payload(payload) or watchlist_service.list().get("symbols", [])
+    refreshed = []
+    for sym in symbols[:20]:
+        try:
+            q = service.get_quote(sym, force_refresh=bool(payload.get("force")))
+            qdict = q.to_dict() if hasattr(q, "to_dict") else q.__dict__
+            snap = build_quote_snapshot(sym, qdict, source_id=str(qdict.get("source") or "quote"))
+            trading_store_v323.put("data_source_status", snap.source.to_dict(), mode="data", symbol=sym, record_id=f"quote-{sym}-{snap.source.raw_hash}")
+            refreshed.append(sym)
+        except Exception as exc:
+            trading_store_v323.put("data_source_status", {"symbol": sym, "quality_status": "error", "missing_reasons": [str(exc)[:200]]}, mode="data", symbol=sym)
+    return {"ok": True, "refreshed": refreshed, "count": len(refreshed)}
 
 
 @app.get("/api/screener/run")
@@ -3402,7 +3938,6 @@ def technical_factors(symbol: str, frame: str = "1d", adjust: str = "qfq", limit
             "applicable_market": f.get("application") or "A股/ETF日K",
         })
     closes = [float(b.close) for b in bars if b.close]
-    volumes = [float(b.volume or 0) for b in bars]
     last = float(q.last or (closes[-1] if closes else 0))
     extras = [
         ("ma5_deviation", "MA5偏离", (last / (sum(closes[-5:]) / 5) - 1) * 100 if len(closes) >= 5 and sum(closes[-5:]) else None, "last/MA5-1"),
@@ -3836,8 +4371,10 @@ def _tag_explain_from_result(item: dict, tag: str) -> dict:
             {"name": "K线复权口径", "value": item.get("kline_adjust") or "qfq", "unit": "", "better": "qfq=前复权，能降低除权缺口对回撤/低位判断的污染"},
         ]
         why.append("系统用60/120/250日价格分位、高位回撤和低点反弹共同判断低位属性；筛选默认采用前复权日K，避免除权、分红、送转导致的假回撤。")
-        if f("pos250", 999) <= 35: why.append("当前近250日位置偏低，符合低位观察条件。")
-        if f("drawdown250", 0) <= -25: why.append("相对一年高点回撤较充分。")
+        if f("pos250", 999) <= 35:
+            why.append("当前近250日位置偏低，符合低位观察条件。")
+        if f("drawdown250", 0) <= -25:
+            why.append("相对一年高点回撤较充分。")
         annotations.append({"type":"range", "label":"低位区间", "note":"可在K线中标注近250日高低点和当前位置。"})
     elif "MA" in tag or "均线" in tag or "趋势" in tag or "站上" in tag or "斜率" in tag:
         metrics = [
@@ -3848,7 +4385,8 @@ def _tag_explain_from_result(item: dict, tag: str) -> dict:
             {"name": "MA60", "value": item.get("ma60"), "unit": "元"},
         ]
         why.append("系统用MA5/MA10/MA20/MA60的相对位置、斜率和BOLL中轨判断趋势修复。")
-        if f("last", 0) and f("ma20", 0) and f("last") >= f("ma20"): why.append("价格已站上或贴近MA20，短中期修复强于完全破位状态。")
+        if f("last", 0) and f("ma20", 0) and f("last") >= f("ma20"):
+            why.append("价格已站上或贴近MA20，短中期修复强于完全破位状态。")
         annotations.append({"type":"line", "label":"MA对比", "note":"后续可把MA20/MA60交叉点作为图表标注。"})
     elif any(k in tag for k in ["动量", "MACD", "RSI", "KDJ", "WR", "CCI", "ROC", "MOM", "超买", "超卖"]):
         metrics = [
@@ -3907,7 +4445,8 @@ def _tag_explain_from_result(item: dict, tag: str) -> dict:
             {"name": "流通市值", "value": item.get("float_market_cap"), "unit": "元", "better":"过小更容易剧烈波动"},
         ]
         why.append("估值/市值标签用PE、PB、总市值、流通市值和成交活跃度进行粗筛；财报质量由信息面和公司画像继续补充。")
-        if "大中市值" in tag: why.append("当前总市值达到规则阈值，因此标为大中市值；它只代表规模属性，不代表一定低风险。")
+        if "大中市值" in tag:
+            why.append("当前总市值达到规则阈值，因此标为大中市值；它只代表规模属性，不代表一定低风险。")
     elif any(k in tag for k in ["TD", "斐波时间", "PSY", "BRAR", "CYR", "时间窗口", "情绪温度", "心理"]):
         metrics = [
             {"name": "TD序列", "value": item.get("td_signal"), "unit": "", "better":"TD9只表示变盘窗口，不直接代表方向"},
@@ -4116,6 +4655,26 @@ def paper_page() -> str:
 @app.get("/realtime-paper", response_class=HTMLResponse)
 def realtime_paper_page() -> str:
     return build_realtime_paper_ui()
+
+
+@app.get("/live-trading", response_class=HTMLResponse)
+def live_trading_page() -> str:
+    return build_live_trading_ui()
+
+
+@app.get("/trading-records", response_class=HTMLResponse)
+def trading_records_page() -> str:
+    return build_trading_records_ui()
+
+
+@app.get("/data-center", response_class=HTMLResponse)
+def data_center_page() -> str:
+    return build_data_center_ui()
+
+
+@app.get("/detail/{symbol}", response_class=HTMLResponse)
+def detail_page(symbol: str, frame: str = "time") -> str:
+    return _build_ui(initial_symbol=symbol, full=True, initial_frame=frame)
 
 
 @app.get("/trading", response_class=HTMLResponse)

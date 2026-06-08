@@ -1,41 +1,61 @@
 # V3.23 Baseline Audit
 
-Generated: 2026-06-03
+Generated: 2026-06-05
 
-## Branch And Remote
+## Baseline Used
 
-- Current branch: `codex/backtest-combo-strategy-ui`
+- Repository: `lumingdao98-spec/quant-data-gateway`
+- Current work branch: `feature/v3.23-full-auto-trading-core`
+- Baseline branch: `codex/backtest-combo-strategy-ui`
+- Baseline commit: `b19545d local v3.18 closedloop cache edition`
 - Remote: `origin https://github.com/lumingdao98-spec/quant-data-gateway.git`
-- Recent head before V3.23 polish: `52acfd1 Improve intraday chart markers and paper trading UI`
-- Other local branches: `main`, `fix/v3.18.3-stable-recovery`, `backup-v3.18.2-broken`
-- Runtime-only local change observed before this work: `data/watchlist.json`
 
-## Current System Shape
+## Why Main Was Not Used
 
-- Market monitor page: `/ui`
-- Screener page: `/screener`
-- Historical backtest page: `/backtest`
-- Realtime paper trading page: `/realtime-paper`
-- Paper trading API: `/api/realtime-paper/*`
-- Broker/live trading status remains disabled by design; current code is paper-only and does not connect to real brokers.
+`main` and `origin/main` are at `a964c05 Implement V3.20 scientific backtest foundation`.
+They do not contain the later V3.21 realtime-paper loop, V3.22 score provenance readiness, or V3.23 chart/paper trading polish that exists on `codex/backtest-combo-strategy-ui`.
 
-## V3.23 Work Scope Applied In This Pass
+## Branch Review
 
-- Keep intraday chart fixed to a full 09:30-15:30 session axis; no drag or zoom on intraday mode.
-- Keep daily/weekly/monthly K-line chart drag and wheel zoom behavior.
-- Clamp/wrap long marker, order book, metric and tooltip text to reduce data overflow.
-- Replace ambiguous realtime paper "tick" UI with a clear automatic simulation loop and "execute one simulation round" action.
-- Show paper simulation mode, last run time, next run countdown, positions, cost, quantity and unrealized PnL.
-- Preserve paper-only safety messaging: closed-session simulation is marked as paper replay, not live trading.
+- `codex/backtest-combo-strategy-ui`: newest and most complete local branch. Contains V3.20 backtest, V3.21 realtime paper, V3.22 scoring/provenance readiness, and partial V3.23 UX work.
+- `origin/codex/backtest-combo-strategy-ui`: at `52acfd1`, behind local branch by two commits.
+- `fix/v3.18.3-stable-recovery`: older recovery branch with backtest/paper foundation but fewer V3.21/V3.22 changes.
+- `backup-v3.18.2-broken`: older backup.
 
-## Known Data Boundaries
+GitHub CLI was unavailable on this machine. GitHub connector search did not find open or merged PRs with V3.23/realtime/broker/autotrading/backtest keywords.
 
-- Five-level order book uses public quote snapshots when available. Spoofing, cancellation behavior and precise main-force absorption require Level-2 order queue and tick-by-tick data, so the UI labels these as low-confidence observations unless such data exists.
-- Closed-market realtime simulation can replay cached/snapshot data for research only. It cannot represent real intraday execution after the market closes.
-- Missing quote, PB/PE, turnover or order-book fields must be displayed as missing/stale/unsupported rather than fabricated.
+## Existing Auto-Trading Capability Before This Pass
 
-## Verification Targets
+- Historical backtest engine and legacy backtest UI.
+- Paper-only realtime simulation engine and `/realtime-paper`.
+- Risk gateway for paper orders.
+- Human confirmation queue for paper warnings.
+- V3.22 score provenance primitives in `quant_data/factors/`.
+- Market rules config for A-share execution.
 
-- `python -m compileall -q quant_data`
-- `pytest -q`
-- Browser smoke check for `/ui?symbol=300750&frame=time`, `/ui?symbol=300750&frame=1d`, and `/realtime-paper`
+## Missing Capability Before This Pass
+
+- Explicit live-trading module and broker adapters.
+- Disabled-by-default live broker safety shell.
+- Unified V3.23 scoring namespace for backtest/paper/live.
+- Unified order lifecycle and execution router.
+- Unified trading record persistence.
+- Chart marker engine for orders/fills/risk markers.
+- Data truth contracts and source registry at the data layer.
+- V3.23 session APIs for realtime-paper.
+- `/live-trading`, `/trading-records`, `/data-center` page entries.
+
+## Scope Added In This Pass
+
+- Added data truth layer, source registry, freshness checks, PIT store and snapshot contracts.
+- Added V3.23 scoring provenance, factor engine, signal fusion and score explanation layer.
+- Added V3.23 strategy classification, suitability, sizing and exit adapters.
+- Added broker abstraction, disabled broker, simulator broker, QMT/PTrade import guards.
+- Added live trading shell with kill switch, confirmation queue and safe rejection defaults.
+- Added unified order lifecycle, execution router, chart markers and SQLite trading store.
+- Added V3.23 APIs for backtest, realtime-paper sessions, live broker, live orders, chart markers, trading records and data center.
+- Added page entries for live trading, trading records and data center.
+
+## Safety Boundary
+
+`FEATURE_LIVE_BROKER=false`, `LIVE_TRADING_ENABLED=false`, `ORDER_CONFIRM_REQUIRED=true` are the default operating assumptions. Without explicit local broker configuration and user confirmation, all true broker operations are disabled or rejected.
