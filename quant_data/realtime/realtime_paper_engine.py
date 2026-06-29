@@ -31,6 +31,7 @@ class RealtimePaperEngineV323:
             strategy_family=str(payload.get("strategy_family") or payload.get("strategy") or "hybrid"),
             interval_seconds=max(5, min(60, int(payload.get("interval_seconds") or 15))),
             status="running",
+            config=_session_config(payload),
         )
         self.sessions[session.session_id] = session
         self.active_session_id = session.session_id
@@ -98,6 +99,8 @@ class RealtimePaperEngineV323:
             return {"ok": False, "message": "session kill switch enabled", "session": session.to_dict()}
         if session and session.paused and not manual_replay:
             return {"ok": False, "message": "session paused", "session": session.to_dict()}
+        if session:
+            payload = _merge_session_signal(payload, session)
         result = self.engine.tick(payload, manual_replay=manual_replay)
         self.sync_engine_state(sid)
         if session:
@@ -216,6 +219,7 @@ class RealtimePaperEngineV323:
             data["interval_seconds"] = int(data.get("interval_seconds") or 15)
             data["paused"] = bool(data.get("paused"))
             data["kill_switch"] = bool(data.get("kill_switch"))
+            data["config"] = data.get("config") if isinstance(data.get("config"), dict) else {}
             session = RealtimeSession(**data)
             self.sessions[session.session_id] = session
             if not self.active_session_id and session.status in {"running", "paused"}:
@@ -223,6 +227,79 @@ class RealtimePaperEngineV323:
 
     def _persist_session(self, session: RealtimeSession) -> None:
         self.store.put("paper_sessions", session.to_dict(), mode="realtime_paper", session_id=session.session_id, record_id=session.session_id)
+
+
+def _session_config(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep the V3.23 auto-trading config with the paper session for restore/tick."""
+
+    keys = {
+        "strategy_combo",
+        "strategy_parameters",
+        "position_sizing",
+        "risk_controls",
+        "score_weights",
+        "event_watch",
+        "data_requirements",
+        "screener_signal_map",
+        "screener_signal_count",
+        "screener_snapshot_id",
+        "symbols_source",
+        "source_page",
+        "initial_cash",
+    }
+    return {key: payload.get(key) for key in keys if key in payload}
+
+
+def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> dict[str, Any]:
+    """Inject screener-derived scores into a realtime tick without fabricating data."""
+
+    config = session.config or {}
+    merged = {**config, **(payload or {})}
+    symbol = str(merged.get("symbol") or (session.symbols[0] if session.symbols else "")).strip()
+    signal_map = config.get("screener_signal_map") if isinstance(config.get("screener_signal_map"), dict) else {}
+    profile = dict(signal_map.get(symbol) or {}) if symbol else {}
+    if not profile:
+        return merged
+
+    merged.setdefault("symbol", symbol)
+    merged.setdefault("name", profile.get("name") or symbol)
+    score_fields = {
+        "technical_score": "technical_score",
+        "fundamental_score": "fundamental_score",
+        "information_score": "information_score",
+        "market_score": "market_score",
+        "fund_flow_score": "fund_flow_score",
+        "final_score": "final_score",
+    }
+    for payload_key, profile_key in score_fields.items():
+        if merged.get(payload_key) in {None, "", "--"}:
+            merged[payload_key] = profile.get(profile_key)
+
+    evidence = list(profile.get("evidence") or [])
+    merged.setdefault(
+        "evidence",
+        [f"来自自动交易筛选信号画像：{profile.get('action') or 'watch'}"] + evidence,
+    )
+    merged.setdefault("missing_data", list(profile.get("missing_data") or []))
+    merged["screener_signal"] = profile
+
+    action = str(profile.get("action") or "").lower()
+    if action == "avoid":
+        merged.setdefault("info_negative_veto", True)
+    elif action in {"reduce", "sell"}:
+        merged.setdefault("technical_broken", True)
+
+    risk_flags = [str(x) for x in profile.get("risk_flags") or []]
+    if risk_flags:
+        merged.setdefault("risk_flags", risk_flags)
+        anomaly = merged.get("anomaly_features")
+        if not isinstance(anomaly, dict):
+            anomaly = {}
+            merged["anomaly_features"] = anomaly
+        joined = " ".join(risk_flags)
+        if "过期" in joined or "stale" in joined.lower() or "缺失" in joined:
+            anomaly.setdefault("stale_data", True)
+    return merged
 
 
 def _symbols(value: Any) -> list[str]:

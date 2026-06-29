@@ -1474,17 +1474,165 @@ def _symbols_from_latest_screener(limit: int = 12) -> tuple[list[str], str, bool
     return symbols, snapshot_id, bool(latest.data)
 
 
+def _auto_screener_rows_for_config(payload: dict, *, prefer_latest_screener: bool = False) -> list[dict]:
+    rows = _screener_rows_from_snapshot(payload)
+    if rows:
+        return rows
+    if prefer_latest_screener or payload.get("use_latest_screener"):
+        latest = cache_state_service.latest("screener_snapshot")
+        return _screener_rows_from_snapshot(latest.data)
+    existing = cache_state_service.get("auto_trading_config", "default").data or {}
+    saved_map = existing.get("screener_signal_map") if isinstance(existing, dict) else {}
+    if isinstance(saved_map, dict):
+        saved_rows = [item.get("source_row") for item in saved_map.values() if isinstance(item, dict) and isinstance(item.get("source_row"), dict)]
+        if saved_rows:
+            return saved_rows
+    return []
+
+
+def _auto_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if value in (None, ""):
+        return []
+    return _parse_symbol_text(str(value))
+
+
+def _row_text_items(row: dict, *keys: str) -> list[str]:
+    out: list[str] = []
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, list):
+            out.extend(str(x).strip() for x in value if str(x).strip())
+        elif value not in (None, ""):
+            out.append(str(value).strip())
+    return out
+
+
+def _auto_score(row: dict, *keys: str, default: float = 50.0) -> float:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, "", "--"):
+            return _as_float(value, default)
+    return float(default)
+
+
+def _auto_action_from_screener(row: dict, final_score: float, risk_flags: list[str]) -> str:
+    grade = str(row.get("grade") or row.get("level") or "").upper()
+    risk_text = " ".join(risk_flags + _row_text_items(row, "risk_summary", "missing_data_hints", "missing_data"))
+    hard_risk_words = ("退市", "ST", "重大负面", "监管", "诉讼", "处罚", "数据不足", "缺失", "stale")
+    if any(word in risk_text for word in hard_risk_words) or grade.startswith("D") or final_score < 45:
+        return "avoid"
+    if final_score >= 70:
+        return "buy"
+    if final_score >= 58:
+        return "watch"
+    return "reduce"
+
+
+def _auto_screener_signal_map(rows: list[dict], symbols: list[str], risk_controls: dict) -> dict:
+    by_symbol: dict[str, dict] = {}
+    row_map = {_symbol_from_screener_row(row): row for row in rows if _symbol_from_screener_row(row)}
+    max_single = _as_float(risk_controls.get("max_single_position_pct"), 20.0)
+    for symbol in symbols:
+        row = dict(row_map.get(symbol) or {"symbol": symbol})
+        final_score = _auto_score(row, "final_trade_score", "total_score", "manual_review_score", "script_score", default=50.0)
+        risk_flags = _row_text_items(row, "risk_flags", "risk_tags", "risk_warnings", "missing_data_hints", "missing_data")
+        tags = _row_text_items(row, "tags", "hit_tags", "core_tags", "upgrade_reasons", "strategy_tags")
+        action = _auto_action_from_screener(row, final_score, risk_flags)
+        target_weight_hint = 0.0 if action == "avoid" else max(0.0, min(max_single, (final_score - 45.0) * 0.55))
+        by_symbol[symbol] = {
+            "symbol": symbol,
+            "name": str(row.get("name") or row.get("asset_name") or symbol),
+            "action": action,
+            "final_score": round(final_score, 4),
+            "technical_score": _auto_score(row, "technical_score", "technical_factor_score", "total_score", default=final_score),
+            "fundamental_score": _auto_score(row, "fundamental_score", "manual_review_score", "total_score", default=55.0),
+            "information_score": _auto_score(row, "information_score", "info_score", "info_sentiment_score", default=50.0),
+            "fund_flow_score": _auto_score(row, "fund_flow_score", "strength_score", "amount_score", default=50.0),
+            "market_score": _auto_score(row, "market_score", "market_mood_score", "market_sentiment_score", default=50.0),
+            "target_weight_hint_pct": round(target_weight_hint, 4),
+            "risk_flags": risk_flags[:12],
+            "strategy_tags": tags[:16],
+            "missing_data": _row_text_items(row, "missing_data_hints", "missing_data")[:12],
+            "evidence": (tags or ["来自筛选快照的综合评分"])[:10],
+            "source_row": row,
+            "source": "latest_screener" if row_map.get(symbol) else "config_symbol_only",
+        }
+    return by_symbol
+
+
+def _auto_strategy_parameters(combo: list[str], merged: dict, risk_controls: dict) -> dict:
+    raw = merged.get("strategy_parameters") or merged.get("strategy_rules") or {}
+    raw_map: dict[str, dict] = {}
+    if isinstance(raw, dict):
+        raw_map = {str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)}
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                key = str(item.get("strategy") or item.get("key") or "").strip()
+                if key:
+                    raw_map[key] = dict(item)
+    position_sizing = str(merged.get("position_sizing") or "score_weighted")
+    out: dict[str, dict] = {}
+    for key in combo:
+        override = raw_map.get(key) or {}
+        out[key] = {
+            "strategy": key,
+            "enabled": _as_bool(override.get("enabled"), True),
+            "position_sizing": str(override.get("position_sizing") or position_sizing),
+            "stop_loss_pct": _as_float(override.get("stop_loss_pct"), _as_float(risk_controls.get("stop_loss_pct"), 8.0)),
+            "take_profit_pct": _as_float(override.get("take_profit_pct"), _as_float(risk_controls.get("take_profit_pct"), 18.0)),
+            "max_drawdown_pct": _as_float(override.get("max_drawdown_pct"), _as_float(risk_controls.get("max_drawdown_pct"), 18.0)),
+            "max_single_position_pct": _as_float(override.get("max_single_position_pct"), _as_float(risk_controls.get("max_single_position_pct"), 20.0)),
+        }
+    return out
+
+
+def _apply_auto_config_to_backtest_payload(payload: dict) -> dict:
+    payload = dict(payload or {})
+    if not (payload.get("use_auto_config") or payload.get("auto_trading_config")):
+        return payload
+    config = payload.get("auto_trading_config") if isinstance(payload.get("auto_trading_config"), dict) else auto_trading_config_get()["data"]
+    risk = dict(config.get("risk_controls") or {})
+    out = {**config, **payload}
+    out.setdefault("symbols", config.get("symbols") or [])
+    out.setdefault("strategy", "combo_signal")
+    out.setdefault("strategy_combo", ",".join(config.get("strategy_combo") or []))
+    out.setdefault("position_sizing", config.get("position_sizing") or "score_weighted")
+    out.setdefault("initial_cash", config.get("initial_cash") or 100000)
+    out.setdefault("stop_loss_pct", risk.get("stop_loss_pct", 8.0))
+    out.setdefault("take_profit_pct", risk.get("take_profit_pct", 18.0))
+    out.setdefault("max_drawdown_pct", risk.get("max_drawdown_pct", 18.0))
+    out.setdefault("max_single_position_pct", risk.get("max_single_position_pct", 20.0))
+    signal_map = config.get("screener_signal_map") or {}
+    if "screener_rows" not in out and isinstance(signal_map, dict):
+        rows = [item.get("source_row") for item in signal_map.values() if isinstance(item, dict) and isinstance(item.get("source_row"), dict)]
+        if rows:
+            out["screener_rows"] = rows
+    return out
+
+
 def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_screener: bool = False) -> dict:
     payload = dict(payload or {})
     existing = cache_state_service.get("auto_trading_config", "default").data or {}
     merged = {**existing, **payload}
+    screener_rows = _auto_screener_rows_for_config(payload, prefer_latest_screener=prefer_latest_screener)
     screener_symbols, screener_snapshot_id, has_screener = _symbols_from_latest_screener()
+    row_symbols = []
+    for row in screener_rows:
+        sym = _symbol_from_screener_row(row)
+        if sym and sym not in row_symbols:
+            row_symbols.append(sym)
     watch_symbols = list(watchlist_service.list().get("symbols") or [])
     payload_symbols = _symbols_from_payload(payload)
     existing_symbols = _symbols_from_payload(existing)
     if payload_symbols:
         symbols = payload_symbols
         symbols_source = "payload"
+    elif prefer_latest_screener and row_symbols:
+        symbols = row_symbols
+        symbols_source = "latest_screener"
     elif prefer_latest_screener and screener_symbols:
         symbols = screener_symbols
         symbols_source = "latest_screener"
@@ -1511,6 +1659,17 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         or merged.get("strategies")
         or DEFAULT_AUTO_STRATEGY_COMBO
     ) or list(DEFAULT_AUTO_STRATEGY_COMBO)
+    risk_controls = {
+        "stop_loss_pct": _as_float(risk_in.get("stop_loss_pct"), 8.0),
+        "take_profit_pct": _as_float(risk_in.get("take_profit_pct"), 18.0),
+        "max_drawdown_pct": _as_float(risk_in.get("max_drawdown_pct"), 18.0),
+        "max_single_position_pct": _as_float(risk_in.get("max_single_position_pct"), 20.0),
+        "max_total_position_pct": _as_float(risk_in.get("max_total_position_pct"), 80.0),
+        "max_daily_loss_pct": _as_float(risk_in.get("max_daily_loss_pct"), 4.0),
+        "min_cash_pct": _as_float(risk_in.get("min_cash_pct"), 15.0),
+        "atr_risk_pct": _as_float(risk_in.get("atr_risk_pct"), 1.5),
+        "cooldown_days": int(_as_float(risk_in.get("cooldown_days"), 2.0)),
+    }
 
     config = {
         "config_id": str(merged.get("config_id") or "default"),
@@ -1523,17 +1682,8 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         "strategy_family": str(merged.get("strategy_family") or merged.get("strategy") or "hybrid"),
         "strategy_combo": combo,
         "position_sizing": str(merged.get("position_sizing") or "score_weighted"),
-        "risk_controls": {
-            "stop_loss_pct": _as_float(risk_in.get("stop_loss_pct"), 8.0),
-            "take_profit_pct": _as_float(risk_in.get("take_profit_pct"), 18.0),
-            "max_drawdown_pct": _as_float(risk_in.get("max_drawdown_pct"), 18.0),
-            "max_single_position_pct": _as_float(risk_in.get("max_single_position_pct"), 20.0),
-            "max_total_position_pct": _as_float(risk_in.get("max_total_position_pct"), 80.0),
-            "max_daily_loss_pct": _as_float(risk_in.get("max_daily_loss_pct"), 4.0),
-            "min_cash_pct": _as_float(risk_in.get("min_cash_pct"), 15.0),
-            "atr_risk_pct": _as_float(risk_in.get("atr_risk_pct"), 1.5),
-            "cooldown_days": int(_as_float(risk_in.get("cooldown_days"), 2.0)),
-        },
+        "risk_controls": risk_controls,
+        "strategy_parameters": _auto_strategy_parameters(combo, merged, risk_controls),
         "score_weights": {
             "technical": _as_float(score_in.get("technical"), 0.30),
             "fundamental": _as_float(score_in.get("fundamental"), 0.22),
@@ -1565,6 +1715,8 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         "source_page": str(merged.get("source_page") or "auto-trading"),
         "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
     }
+    config["screener_signal_map"] = _auto_screener_signal_map(screener_rows, config["symbols"], config["risk_controls"])
+    config["screener_signal_count"] = len([x for x in config["screener_signal_map"].values() if x.get("source") == "latest_screener"])
     config["readiness_gates"] = [
         "股票池不为空",
         "策略组合不为空",
@@ -1591,9 +1743,11 @@ def _save_auto_trading_config(config: dict, *, event_type: str = "auto_trading_c
             "symbols": config.get("symbols"),
             "strategy_family": config.get("strategy_family"),
             "strategy_combo": config.get("strategy_combo"),
+            "strategy_parameters": config.get("strategy_parameters"),
             "position_sizing": config.get("position_sizing"),
             "risk_controls": config.get("risk_controls"),
             "event_watch": config.get("event_watch"),
+            "screener_signal_count": config.get("screener_signal_count"),
             "created_at": config.get("updated_at"),
             "source_page": "auto-trading",
         },
@@ -1612,6 +1766,7 @@ def _auto_trading_readiness(config: dict) -> dict:
         {"key": "strategy_combo", "label": "策略组合", "ok": bool(config.get("strategy_combo")), "detail": ", ".join(config.get("strategy_combo") or [])},
         {"key": "position_sizing", "label": "仓位模型", "ok": bool(config.get("position_sizing")), "detail": str(config.get("position_sizing") or "--")},
         {"key": "risk_controls", "label": "止盈止损/最大回撤", "ok": bool(config.get("risk_controls")), "detail": str(config.get("risk_controls") or {})},
+        {"key": "screener_signal_map", "label": "筛选信号画像", "ok": bool(config.get("screener_signal_map")), "detail": f"{config.get('screener_signal_count') or 0}/{len(config.get('symbols') or [])} 只来自筛选快照"},
         {"key": "event_watch", "label": "财报/公告/重大事件", "ok": bool(config.get("event_watch", {}).get("financial_reports") or config.get("event_watch", {}).get("major_negative_news")), "detail": str(config.get("event_watch") or {})},
         {"key": "paper_ready", "label": "实时模拟", "ok": True, "detail": "可用，订单/成交/持仓/审计落 SQLite"},
         {"key": "live_disabled_by_default", "label": "真实交易安全状态", "ok": not bool(safety.get("LIVE_TRADING_ENABLED")), "detail": "默认关闭" if not bool(safety.get("LIVE_TRADING_ENABLED")) else "已开启，需重点复核"},
@@ -2805,6 +2960,7 @@ def backtest_run_alias_v323(run_id: str) -> dict:
 @app.post("/api/backtest/v323/run")
 def backtest_run_v323(payload: dict = Body(default_factory=dict)) -> dict:
     try:
+        payload = _apply_auto_config_to_backtest_payload(payload)
         cfg = _v319_config({**payload, "engine_version": "v3.23"})
         result = backtest_engine_v319.run(
             cfg,

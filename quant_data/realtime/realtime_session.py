@@ -16,6 +16,7 @@ class RealtimeSession:
     started_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     paused: bool = False
     kill_switch: bool = False
+    config: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

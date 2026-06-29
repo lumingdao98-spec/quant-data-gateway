@@ -24,6 +24,7 @@ def test_intraday_chart_connects_cn_lunch_with_trading_minutes_and_clamps_toolti
     assert "午休按交易分钟压缩连续" in html
     assert "function clampChartTooltip" in html
     assert "Math.min(x,r.right-tw-8)" in html
+    assert "markerBox.style.display=isTimeMode()?'none':'block'" in html
 
 
 def test_kline_marker_panel_is_collapsible_and_separate():
@@ -32,6 +33,7 @@ def test_kline_marker_panel_is_collapsible_and_separate():
     assert ".chart-area{display:flex;flex-direction:column" in html
     assert ".chart-grid.k-shell>.chart-grid.k{min-height:760px}" in html
     assert ".marker-list{flex:0 0 auto;position:relative;z-index:6" in html
+    assert ".detail>div:nth-child(2){position:relative;z-index:4;background:#101827}" in html
     assert "function renderMarkerSummaryPanel" in html
     assert "function toggleMarkerPanel" in html
     assert "marker-toggle" in html

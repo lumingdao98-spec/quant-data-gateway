@@ -21,8 +21,12 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/realtime-paper/sessions/" in html
     assert "/api/data-center/status" in html
     assert "strategyCombo" in html
+    assert "strategyParamJson" in html
     assert "positionSizing" in html
     assert "maxDrawdownPct" in html
+    assert "runConfigBacktest" in html
+    assert "technical_score:68" not in html
+    assert "fundamental_score:60" not in html
 
 
 def test_chinese_docs_include_auto_trading_v323_entrypoints():

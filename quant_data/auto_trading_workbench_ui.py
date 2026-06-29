@@ -82,6 +82,7 @@ def build_auto_trading_workbench_ui() -> str:
               </div>
               <div class="notice" id="configSummary">自动交易配置尚未加载；可一键从最新筛选结果生成模拟配置。</div>
               <div class="field"><label>策略组合（可多选，逗号/空格分隔）</label><textarea class="compact" id="strategyCombo">score_driven, ma_repair, macd_cross, volume_breakout, risk_control, event_driven, finance_quality, market_regime</textarea></div>
+              <div class="field"><label>策略参数 JSON（每个策略可单独配置仓位/止盈/止损/最大回撤）</label><textarea class="compact" id="strategyParamJson">{}</textarea></div>
               <div class="split">
                 <div class="field"><label>仓位模型</label><select id="positionSizing"><option value="score_weighted">评分加权</option><option value="atr_risk">ATR风险仓位</option><option value="volatility_target">波动率目标</option><option value="fixed_weight">固定权重</option><option value="core_satellite">核心-卫星</option><option value="cash_first_defensive">现金优先防守</option></select></div>
                 <div class="field"><label>初始资金</label><input id="initialCash" type="number" value="100000"></div>
@@ -103,7 +104,7 @@ def build_auto_trading_workbench_ui() -> str:
                 <label class="check"><input id="requireFreshQuote" type="checkbox" checked> 数据过期禁止新增仓位</label>
               </div>
               <div class="row" style="margin-bottom:12px"><button class="btn blue" onclick="oneClickConfig()">一键配置</button><button class="btn ghost" onclick="loadLatestScreenerConfig()">读取最新筛选</button><button class="btn ghost" onclick="saveAutoConfig()">保存配置</button></div>
-              <div class="row"><button class="btn" onclick="startPaper()">启动模拟 session</button><button class="btn ghost" onclick="manualTick()">执行一轮模拟</button><button class="btn ghost" onclick="pausePaper()">暂停</button><button class="btn ghost" onclick="resumePaper()">恢复</button><button class="btn red" onclick="stopPaper()">停止</button><button class="btn red" onclick="killPaper()">模拟 Kill</button></div>
+              <div class="row"><button class="btn" onclick="startPaper()">启动模拟 session</button><button class="btn ghost" onclick="manualTick()">执行一轮模拟</button><button class="btn ghost" onclick="runConfigBacktest()">用配置回测</button><button class="btn ghost" onclick="pausePaper()">暂停</button><button class="btn ghost" onclick="resumePaper()">恢复</button><button class="btn red" onclick="stopPaper()">停止</button><button class="btn red" onclick="killPaper()">模拟 Kill</button></div>
             </div>
           </div>
           <div class="panel">
@@ -201,12 +202,17 @@ function money(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('
 function sessionIdOf(item){return item?.session_id||item?.id||item?.sessionId||''}
 function num(id,fallback){const n=Number($(id)?.value);return Number.isFinite(n)?n:fallback}
 function checked(id){return !!$(id)?.checked}
+function parseStrategyParams(){
+  try{return JSON.parse($('strategyParamJson')?.value||'{}')}
+  catch(e){$('auditLog').textContent='策略参数 JSON 解析失败：'+e;return {}}
+}
 function collectAutoConfig(){
   return {
     symbols:symbols(),
     strategy_family:$('strategy').value,
     strategy_combo:strategyCombo(),
     position_sizing:$('positionSizing').value,
+    strategy_parameters:parseStrategyParams(),
     interval_seconds:Number($('interval').value||15),
     initial_cash:num('initialCash',100000),
     risk_controls:{
@@ -249,6 +255,7 @@ function applyAutoConfig(cfg){
   if(cfg.strategy_family)$('strategy').value=cfg.strategy_family;
   if(cfg.interval_seconds!=null)$('interval').value=String(cfg.interval_seconds);
   if((cfg.strategy_combo||[]).length)$('strategyCombo').value=(cfg.strategy_combo||[]).join(', ');
+  if(cfg.strategy_parameters)$('strategyParamJson').value=JSON.stringify(cfg.strategy_parameters,null,2);
   if(cfg.position_sizing)$('positionSizing').value=cfg.position_sizing;
   const r=cfg.risk_controls||{};
   if(r.stop_loss_pct!=null)$('stopLossPct').value=r.stop_loss_pct;
@@ -273,7 +280,8 @@ function renderConfigSummary(cfg, readiness){
   const source=cfg?.symbols_source||'--';
   const symbols=(cfg?.symbols||[]).slice(0,8).join(', ')||'--';
   const combo=(cfg?.strategy_combo||[]).slice(0,6).join(', ')||'--';
-  $('configSummary').innerHTML=`<b>自动交易配置</b>：股票池 ${symbols}；来源 ${esc(source)}；策略 ${esc(combo)}；仓位 ${esc(cfg?.position_sizing||'--')}；止损/止盈/回撤 ${esc(cfg?.risk_controls?.stop_loss_pct??'--')}% / ${esc(cfg?.risk_controls?.take_profit_pct??'--')}% / ${esc(cfg?.risk_controls?.max_drawdown_pct??'--')}%。<br>${esc(gateText||'等待 readiness 检查')}`;
+  const signalCount=Object.keys(cfg?.screener_signal_map||{}).length;
+  $('configSummary').innerHTML=`<b>自动交易配置</b>：股票池 ${symbols}；来源 ${esc(source)}；策略 ${esc(combo)}；仓位 ${esc(cfg?.position_sizing||'--')}；筛选信号画像 ${signalCount} 只；止损/止盈/回撤 ${esc(cfg?.risk_controls?.stop_loss_pct??'--')}% / ${esc(cfg?.risk_controls?.take_profit_pct??'--')}% / ${esc(cfg?.risk_controls?.max_drawdown_pct??'--')}%。<br>${esc(gateText||'等待 readiness 检查')}`;
 }
 function renderSessionRows(items){
   const rows=[
@@ -381,9 +389,16 @@ async function manualTick(){
   if(!activeSessionId){$('auditLog').textContent='请先启动或恢复一个实时模拟 session。';return}
   const sym=symbols()[0]||'300750';
   const cfg=collectAutoConfig();
-  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:sym,technical_score:68,fundamental_score:60,information_score:58,market_score:55,manual_replay:true,source_page:'auto-trading',...cfg})});
+  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:sym,manual_replay:true,source_page:'auto-trading',...cfg})});
   $('auditLog').textContent=JSON.stringify(js,null,2);
   refreshAll();
+}
+async function runConfigBacktest(){
+  const cfg=collectAutoConfig();
+  const sym=(cfg.symbols||[])[0]||'300750';
+  const js=await api('/api/backtest/v323/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({symbol:sym,symbols:[sym],limit:520,use_auto_config:true,auto_trading_config:cfg,source_page:'auto-trading'})});
+  $('auditLog').textContent=JSON.stringify(js,null,2);
+  if(js.run_id)window.open('/backtest?symbol='+encodeURIComponent(sym)+'&run_id='+encodeURIComponent(js.run_id),'_blank');
 }
 async function pausePaper(){if(!activeSessionId)return;$('auditLog').textContent=JSON.stringify(await api(`/api/realtime-paper/sessions/${encodeURIComponent(activeSessionId)}/pause`,{method:'POST'}),null,2);refreshAll()}
 async function resumePaper(){if(!activeSessionId)return;$('auditLog').textContent=JSON.stringify(await api(`/api/realtime-paper/sessions/${encodeURIComponent(activeSessionId)}/resume`,{method:'POST'}),null,2);refreshAll()}
