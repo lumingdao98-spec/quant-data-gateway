@@ -1604,17 +1604,167 @@ def _apply_auto_config_to_backtest_payload(payload: dict) -> dict:
     out.setdefault("strategy", "combo_signal")
     out.setdefault("strategy_combo", ",".join(config.get("strategy_combo") or []))
     out.setdefault("position_sizing", config.get("position_sizing") or "score_weighted")
+    out.setdefault("sizing", out.get("position_sizing") or "score_weighted")
     out.setdefault("initial_cash", config.get("initial_cash") or 100000)
-    out.setdefault("stop_loss_pct", risk.get("stop_loss_pct", 8.0))
-    out.setdefault("take_profit_pct", risk.get("take_profit_pct", 18.0))
-    out.setdefault("max_drawdown_pct", risk.get("max_drawdown_pct", 18.0))
-    out.setdefault("max_single_position_pct", risk.get("max_single_position_pct", 20.0))
+    combo = _strategy_combo_from(config.get("strategy_combo") or out.get("strategy_combo") or [])
+    strategy_parameters = config.get("strategy_parameters") if isinstance(config.get("strategy_parameters"), dict) else {}
+    enabled_controls = [
+        dict(strategy_parameters.get(key) or {})
+        for key in combo
+        if isinstance(strategy_parameters.get(key), dict) and _as_bool(strategy_parameters.get(key, {}).get("enabled"), True)
+    ]
+    stop_candidates = [_as_float(x.get("stop_loss_pct"), _as_float(risk.get("stop_loss_pct"), 8.0)) for x in enabled_controls]
+    take_candidates = [_as_float(x.get("take_profit_pct"), _as_float(risk.get("take_profit_pct"), 18.0)) for x in enabled_controls]
+    single_candidates = [_as_float(x.get("max_single_position_pct"), _as_float(risk.get("max_single_position_pct"), 20.0)) for x in enabled_controls]
+    stop_loss_pct = min(stop_candidates) if stop_candidates else _as_float(risk.get("stop_loss_pct"), 8.0)
+    take_profit_pct = min([x for x in take_candidates if x > 0] or [_as_float(risk.get("take_profit_pct"), 18.0)])
+    max_single_pct = min(single_candidates) if single_candidates else _as_float(risk.get("max_single_position_pct"), 20.0)
+    max_total_pct = _as_float(risk.get("max_total_position_pct"), 80.0)
+    min_cash_pct = _as_float(risk.get("min_cash_pct"), 15.0)
+    max_single_fraction = _percent_to_fraction(max_single_pct, default=0.20)
+    max_total_fraction = _percent_to_fraction(max_total_pct, default=0.80)
+    out.setdefault("stop_loss_pct", stop_loss_pct)
+    out.setdefault("take_profit_pct", take_profit_pct)
+    out.setdefault("max_drawdown_pct", min([_as_float(x.get("max_drawdown_pct"), _as_float(risk.get("max_drawdown_pct"), 18.0)) for x in enabled_controls] or [_as_float(risk.get("max_drawdown_pct"), 18.0)]))
+    out["max_single_position_pct"] = max_single_fraction
+    out["position_pct"] = _percent_to_fraction(out.get("position_pct", max_total_fraction), default=max_total_fraction)
+    out["cash_reserve_pct"] = _percent_to_fraction(out.get("cash_reserve_pct", min_cash_pct), default=_percent_to_fraction(min_cash_pct, default=0.15))
+    out["auto_trading_config_applied"] = True
+    out["auto_trading_config_snapshot"] = config
+    out["auto_strategy_parameters"] = strategy_parameters
     signal_map = config.get("screener_signal_map") or {}
     if "screener_rows" not in out and isinstance(signal_map, dict):
         rows = [item.get("source_row") for item in signal_map.values() if isinstance(item, dict) and isinstance(item.get("source_row"), dict)]
         if rows:
             out["screener_rows"] = rows
     return out
+
+
+def _percent_to_fraction(value: object, *, default: float = 0.0) -> float:
+    raw = _as_float(value, default * 100.0 if 0.0 <= default <= 1.0 else default)
+    if raw > 1.0:
+        raw = raw / 100.0
+    return round(max(0.0, min(raw, 1.0)), 6)
+
+
+def _auto_selected_strategy(profile: dict, combo: list[str], strategy_parameters: dict) -> str:
+    tags = {str(x) for x in (profile.get("strategy_tags") or profile.get("tags") or [])}
+    for key in combo:
+        if key in tags and _as_bool((strategy_parameters.get(key) or {}).get("enabled"), True):
+            return key
+    for key in combo:
+        if _as_bool((strategy_parameters.get(key) or {}).get("enabled"), True):
+            return key
+    return combo[0] if combo else "score_driven"
+
+
+def _auto_backtest_effective_controls(payload: dict, cfg: V319BacktestConfig) -> dict:
+    config = payload.get("auto_trading_config_snapshot") if isinstance(payload.get("auto_trading_config_snapshot"), dict) else {}
+    config = config or (payload.get("auto_trading_config") if isinstance(payload.get("auto_trading_config"), dict) else {})
+    risk = dict(config.get("risk_controls") or payload.get("risk_controls") or {})
+    combo = _strategy_combo_from(config.get("strategy_combo") or payload.get("strategy_combo") or [])
+    strategy_parameters = config.get("strategy_parameters") or payload.get("auto_strategy_parameters") or payload.get("strategy_parameters") or {}
+    if not isinstance(strategy_parameters, dict):
+        strategy_parameters = {}
+    signal_map = config.get("screener_signal_map") or payload.get("screener_signal_map") or {}
+    if not isinstance(signal_map, dict):
+        signal_map = {}
+    symbols = list(cfg.symbols or _symbols_from_payload(payload))
+    profiles: dict[str, dict] = {}
+    symbol_controls: dict[str, dict] = {}
+    for symbol in symbols:
+        profile = dict(signal_map.get(symbol) or {"symbol": symbol, "action": "watch", "source": "no_screener_profile"})
+        selected = _auto_selected_strategy(profile, combo, strategy_parameters)
+        controls = dict(strategy_parameters.get(selected) or {})
+        stop = _as_float(controls.get("stop_loss_pct"), _as_float(risk.get("stop_loss_pct"), cfg.stop_loss_pct))
+        take = _as_float(controls.get("take_profit_pct"), _as_float(risk.get("take_profit_pct"), cfg.take_profit_pct))
+        max_single_pct = _as_float(controls.get("max_single_position_pct"), _as_float(risk.get("max_single_position_pct"), cfg.max_single_position_pct * 100.0))
+        target_hint_pct = _as_float(profile.get("target_weight_hint_pct"), max_single_pct)
+        effective_pct = min(max_single_pct, target_hint_pct if target_hint_pct > 0 else max_single_pct)
+        profiles[symbol] = {
+            "symbol": symbol,
+            "name": profile.get("name") or symbol,
+            "action": profile.get("action") or "watch",
+            "final_score": _as_float(profile.get("final_score"), 50.0),
+            "technical_score": _as_float(profile.get("technical_score"), 50.0),
+            "fundamental_score": _as_float(profile.get("fundamental_score"), 50.0),
+            "information_score": _as_float(profile.get("information_score"), 50.0),
+            "fund_flow_score": _as_float(profile.get("fund_flow_score"), 50.0),
+            "market_score": _as_float(profile.get("market_score"), 50.0),
+            "risk_flags": list(profile.get("risk_flags") or [])[:12],
+            "missing_data": list(profile.get("missing_data") or [])[:12],
+            "evidence": list(profile.get("evidence") or [])[:10],
+            "source": profile.get("source") or "auto_config",
+        }
+        symbol_controls[symbol] = {
+            "selected_strategy": selected,
+            "position_sizing": str(controls.get("position_sizing") or config.get("position_sizing") or payload.get("position_sizing") or cfg.sizing),
+            "effective_stop_loss_pct": round(stop, 4),
+            "effective_take_profit_pct": round(take, 4),
+            "effective_max_drawdown_pct": round(_as_float(controls.get("max_drawdown_pct"), _as_float(risk.get("max_drawdown_pct"), payload.get("max_drawdown_pct", 18.0))), 4),
+            "effective_max_single_position_pct": round(effective_pct, 4),
+            "effective_position_weight": _percent_to_fraction(effective_pct, default=cfg.max_single_position_pct),
+            "target_weight_hint_pct": round(target_hint_pct, 4),
+        }
+    return {
+        "auto_trading_config_applied": bool(payload.get("auto_trading_config_applied")),
+        "config_id": config.get("config_id") or "inline",
+        "strategy_family": config.get("strategy_family") or payload.get("strategy_family") or "hybrid",
+        "strategy_combo": combo,
+        "position_sizing": config.get("position_sizing") or payload.get("position_sizing") or cfg.sizing,
+        "risk_controls": risk,
+        "strategy_parameters": strategy_parameters,
+        "screener_signal_profiles": profiles,
+        "symbols": symbol_controls,
+        "global": {
+            "position_pct": cfg.position_pct,
+            "max_single_position_pct": cfg.max_single_position_pct,
+            "cash_reserve_pct": cfg.cash_reserve_pct,
+            "stop_loss_pct": cfg.stop_loss_pct,
+            "take_profit_pct": cfg.take_profit_pct,
+            "sizing": cfg.sizing,
+        },
+        "trace_note": "V3.23 回测已读取自动交易配置；真实交易仍默认关闭，回测只做历史撮合验证。",
+    }
+
+
+def _attach_auto_config_to_backtest_data(data: dict, payload: dict, cfg: V319BacktestConfig) -> dict:
+    data = dict(data or {})
+    if not payload.get("auto_trading_config_applied"):
+        return data
+    effective = _auto_backtest_effective_controls(payload, cfg)
+    data["auto_trading_config_applied"] = True
+    data["effective_auto_controls"] = effective
+    data["screener_signal_profiles"] = effective.get("screener_signal_profiles", {})
+    data["strategy_parameters"] = effective.get("strategy_parameters", {})
+    data.setdefault("config", {})
+    data["config"].update(
+        {
+            "strategy_combo": effective.get("strategy_combo"),
+            "position_sizing": effective.get("position_sizing"),
+            "sizing": cfg.sizing,
+            "position_pct": cfg.position_pct,
+            "cash_reserve_pct": cfg.cash_reserve_pct,
+            "max_single_position_pct": cfg.max_single_position_pct,
+            "stop_loss_pct": cfg.stop_loss_pct,
+            "take_profit_pct": cfg.take_profit_pct,
+        }
+    )
+    data.setdefault("params_cn", {})
+    data["params_cn"].update(
+        {
+            "自动交易配置": "已接入 V3.23 回测内核",
+            "策略组合": "、".join(effective.get("strategy_combo") or []) or "未选择",
+            "仓位模型": str(effective.get("position_sizing") or ""),
+            "全局仓位/单票上限": f"{cfg.position_pct * 100:.2f}% / {cfg.max_single_position_pct * 100:.2f}%",
+            "止损/止盈": f"{cfg.stop_loss_pct}% / {cfg.take_profit_pct}%",
+        }
+    )
+    warnings = list(data.get("warnings") or [])
+    if not effective.get("screener_signal_profiles"):
+        warnings.append("自动交易配置未携带筛选信号画像，回测仅按历史K线技术信号验证。")
+    data["warnings"] = list(dict.fromkeys(str(x) for x in warnings if str(x)))
+    return data
 
 
 def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_screener: bool = False) -> dict:
@@ -2972,8 +3122,8 @@ def backtest_run_v323(payload: dict = Body(default_factory=dict)) -> dict:
             market_data=_v319_market_data(payload, cfg),
             screener_rows=payload.get("screener_rows") or payload.get("snapshot_rows"),
         )
-        backtest_storage_v319.save(result)
-        data = result.to_dict()
+        data = _attach_auto_config_to_backtest_data(result.to_dict(), payload, cfg)
+        backtest_storage_v319.save(data)
         for row in data.get("orders") or []:
             row["mode"] = "backtest"
             row["session_id"] = result.run_id
@@ -2990,8 +3140,27 @@ def backtest_run_v323(payload: dict = Body(default_factory=dict)) -> dict:
                 trading_store_v323.put("score_provenance", row, mode="backtest", symbol=str(row.get("symbol") or ""), session_id=result.run_id, record_id=rid)
         for symbol in result.symbols:
             chart_annotation_service_v323.rebuild(symbol, orders=data.get("orders") or [], fills=data.get("fills") or [], mode="backtest")
-        trading_store_v323.put("audit_events", {"event_type": "backtest_v323_run", "run_id": result.run_id, "metrics": result.metrics}, mode="backtest", session_id=result.run_id)
-        return _v319_response(True, run_id=result.run_id, data=data, metrics=result.metrics, warnings=result.warnings, errors=result.errors, cache_status=result.cache_status)
+        trading_store_v323.put(
+            "audit_events",
+            {
+                "event_type": "backtest_v323_run",
+                "run_id": result.run_id,
+                "metrics": result.metrics,
+                "auto_trading_config_applied": bool(data.get("auto_trading_config_applied")),
+                "effective_auto_controls": data.get("effective_auto_controls") or {},
+            },
+            mode="backtest",
+            session_id=result.run_id,
+        )
+        return _v319_response(
+            True,
+            run_id=result.run_id,
+            data=data,
+            metrics=result.metrics,
+            warnings=data.get("warnings", result.warnings),
+            errors=result.errors,
+            cache_status=result.cache_status,
+        )
     except Exception as exc:
         return _v319_response(False, errors=[str(exc)[:300]], message=str(exc)[:300])
 
