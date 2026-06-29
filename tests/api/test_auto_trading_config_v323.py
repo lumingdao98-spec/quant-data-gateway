@@ -55,13 +55,13 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
         "rows": [
             {
                 "symbol": "300750",
-                "name": "宁德时代",
+                "name": "CATL",
                 "total_score": 76,
                 "technical_score": 82,
                 "fundamental_score": 66,
                 "information_score": 61,
                 "market_score": 55,
-                "tags": ["均线修复", "量能改善"],
+                "tags": ["ma_repair", "volume_confirm"],
                 "risk_flags": [],
             }
         ],
@@ -99,6 +99,7 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
             "price": 100,
             "ts": "2026-06-01T10:00:00",
             "manual_replay": True,
+            "news_ts": "2026-06-01T09:55:00",
         },
     ).json()
 
@@ -106,4 +107,148 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
     assert tick["signal"]["technical_score"] == 82.0
     assert tick["signal"]["fundamental_score"] == 66.0
     assert tick["signal"]["information_score"] == 61.0
-    assert "来自自动交易筛选信号画像" in " ".join(tick["signal"]["evidence"])
+    assert tick["signal"]["strategy_controls"]["stop_loss_pct"] == 6.0
+    assert "screener_target_hint" in " ".join(tick["signal"]["evidence"])
+
+
+def test_realtime_paper_applies_strategy_position_and_stop_controls():
+    client = TestClient(api.app)
+    payload = {
+        "rows": [
+            {
+                "symbol": "399991",
+                "name": "CATL",
+                "total_score": 78,
+                "technical_score": 84,
+                "fundamental_score": 72,
+                "information_score": 68,
+                "market_score": 62,
+                "tags": ["ma_repair", "volume_confirm"],
+            }
+        ],
+        "symbols": ["399991"],
+        "strategy_family": "hybrid",
+        "strategy_combo": ["score_driven", "ma_repair"],
+        "position_sizing": "score_weighted",
+        "strategy_parameters": {
+            "ma_repair": {
+                "stop_loss_pct": 6,
+                "take_profit_pct": 14,
+                "max_drawdown_pct": 10,
+                "max_single_position_pct": 5,
+            }
+        },
+        "risk_controls": {"stop_loss_pct": 8, "take_profit_pct": 18, "max_drawdown_pct": 18, "max_single_position_pct": 20},
+        "initial_cash": 100000,
+    }
+    started = client.post("/api/auto-trading/start-paper", json=payload).json()
+    session_id = started["session"]["session_id"]
+
+    first = client.post(
+        "/api/realtime-paper/tick",
+        json={
+            "session_id": session_id,
+            "symbol": "399991",
+            "price": 10,
+            "ts": "2026-06-01T10:00:00",
+            "manual_replay": True,
+            "news_ts": "2026-06-01T09:55:00",
+        },
+    ).json()
+
+    assert first["ok"] is True
+    assert first["signal"]["action"] in {"buy", "add"}
+    assert first["signal"]["target_weight"] == 0.05
+    assert first["signal"]["strategy_controls"]["max_single_position_pct"] == 5.0
+    assert first["orders"] and first["orders"][0]["quantity"] == 500
+
+    second = client.post(
+        "/api/realtime-paper/tick",
+        json={
+            "session_id": session_id,
+            "symbol": "399991",
+            "price": 9.35,
+            "ts": "2026-06-02T10:00:00",
+            "manual_replay": True,
+            "news_ts": "2026-06-02T09:55:00",
+        },
+    ).json()
+
+    assert second["ok"] is True
+    assert second["signal"]["action"] == "sell"
+    assert second["signal"]["target_weight"] == 0.0
+    assert "stop_loss_triggered=6.00%" in " ".join(second["signal"]["evidence"])
+    assert second["orders"] and second["orders"][0]["side"] == "sell"
+
+
+def test_realtime_paper_event_watch_blocks_major_negative_news_buy():
+    client = TestClient(api.app)
+    payload = {
+        "rows": [
+            {
+                "symbol": "600438",
+                "name": "Tongwei",
+                "total_score": 80,
+                "technical_score": 82,
+                "fundamental_score": 75,
+                "information_score": 70,
+                "market_score": 62,
+            }
+        ],
+        "symbols": ["600438"],
+        "strategy_combo": ["score_driven", "event_driven"],
+        "event_watch": {"financial_reports": True, "major_negative_news": True, "exchange_announcements": True},
+        "initial_cash": 100000,
+    }
+    started = client.post("/api/auto-trading/start-paper", json=payload).json()
+    session_id = started["session"]["session_id"]
+
+    tick = client.post(
+        "/api/realtime-paper/tick",
+        json={
+            "session_id": session_id,
+            "symbol": "600438",
+            "price": 10,
+            "ts": "2026-06-01T10:00:00",
+            "manual_replay": True,
+            "news_ts": "2026-06-01T09:55:00",
+            "major_negative_news": True,
+        },
+    ).json()
+
+    assert tick["ok"] is True
+    assert tick["signal"]["action"] == "avoid"
+    assert tick["signal"]["event_watch_context"]["veto"] is True
+    assert "major_negative_news" in tick["signal"]["event_watch_context"]["evidence"]
+    assert tick["orders"] == []
+
+
+def test_auto_trading_start_paper_resets_account_by_default():
+    client = TestClient(api.app)
+    payload = {
+        "rows": [{"symbol": "300750", "total_score": 78, "technical_score": 84, "fundamental_score": 72, "information_score": 68, "market_score": 62}],
+        "symbols": ["300750"],
+        "strategy_combo": ["score_driven"],
+        "initial_cash": 100000,
+    }
+    first = client.post("/api/auto-trading/start-paper", json=payload).json()
+    first_session_id = first["session"]["session_id"]
+    client.post(
+        "/api/realtime-paper/tick",
+        json={
+            "session_id": first_session_id,
+            "symbol": "300750",
+            "price": 10,
+            "ts": "2026-06-01T10:00:00",
+            "manual_replay": True,
+            "news_ts": "2026-06-01T09:55:00",
+        },
+    )
+
+    second = client.post("/api/auto-trading/start-paper", json={**payload, "initial_cash": 50000}).json()
+    second_session_id = second["session"]["session_id"]
+    positions = client.get(f"/api/realtime-paper/sessions/{second_session_id}/positions").json()
+
+    assert positions["ok"] is True
+    assert positions["data"]["snapshot"]["cash"] == 50000.0
+    assert positions["data"]["snapshot"]["positions"] == {}

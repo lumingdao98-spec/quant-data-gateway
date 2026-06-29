@@ -43,7 +43,8 @@ class RealtimePaperEngine:
     def start(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
         initial_cash = float(payload.get("initial_cash") or self.account.initial_cash)
-        if initial_cash != self.account.initial_cash and not self.account.positions:
+        reset_account = bool(payload.get("reset_account", True))
+        if reset_account or (initial_cash != self.account.initial_cash and not self.account.positions):
             self.account = PaperAccount(initial_cash=initial_cash, account_mode=str(payload.get("horizon") or "hybrid"))
             self.order_manager = OrderManager(self.account, self.audit_log)
         config = RealtimePaperConfig(
@@ -127,6 +128,10 @@ class RealtimePaperEngine:
         anomaly_features = dict(payload.get("anomaly_features") or {})
         anomaly_features.setdefault("stale_data", freshness.action == "block")
         anomaly = self.anomaly_guard.check(anomaly_features)
+        event_context = self._event_watch_context(payload)
+        missing_data = list(payload.get("missing_data") or []) + list(event_context.get("missing_data") or [])
+        evidence = list(payload.get("evidence") or anomaly.evidence or ["手动 tick 生成信号"])
+        evidence.extend(event_context.get("evidence") or [])
         signal = self.signal_fusion.fuse(
             symbol=symbol,
             horizon=str(payload.get("horizon") or self.state.config.horizon),
@@ -136,14 +141,15 @@ class RealtimePaperEngine:
             market_score=self._optional(payload.get("market_score")),
             anomaly_score=anomaly.anomaly_score,
             anomaly_action=anomaly.action_suggestion,
-            info_negative_veto=bool(payload.get("info_negative_veto")),
+            info_negative_veto=bool(payload.get("info_negative_veto") or event_context.get("veto")),
             technical_broken=bool(payload.get("technical_broken")),
             fundamental_poor=bool(payload.get("fundamental_poor")),
-            evidence=list(payload.get("evidence") or anomaly.evidence or ["手动 tick 生成信号"]),
+            evidence=list(dict.fromkeys(evidence)),
             data_freshness=freshness.to_dict(),
-            missing_data=list(payload.get("missing_data") or []),
+            missing_data=list(dict.fromkeys(missing_data)),
             now=now,
         )
+        strategy_controls = self._apply_strategy_controls(signal, payload, price)
         self.signals.append(signal)
         signal_row = signal.to_dict()
         signal_row.update(
@@ -152,6 +158,8 @@ class RealtimePaperEngine:
                 "quote_price": price,
                 "session_mode": "盘中实时" if is_trading else ("休市回放" if manual_replay else "休市观察"),
                 "paper_only": True,
+                "strategy_controls": strategy_controls,
+                "event_watch_context": event_context,
             }
         )
         self.signal_meta.append(signal_row)
@@ -235,10 +243,149 @@ class RealtimePaperEngine:
 
     def _symbols(self, value: Any) -> list[str]:
         if isinstance(value, str):
+            if any(sep in value for sep in ["，", "；", "、", "|", ";", "\n", "\t", " "]):
+                text = value
+                for sep in ["，", "；", "、", "|", ";", "\n", "\t", " "]:
+                    text = text.replace(sep, ",")
+                return [x.strip() for x in text.split(",") if x.strip()]
             return [x.strip() for x in value.replace("，", ",").split(",") if x.strip()]
         if isinstance(value, list):
             return [str(x).strip() for x in value if str(x).strip()]
         return []
+
+    def _list(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(x).strip() for x in value if str(x).strip()]
+        if value in (None, ""):
+            return []
+        return self._symbols(str(value))
+
+    def _pct(self, value: Any, default: float = 0.0) -> float:
+        try:
+            if value in (None, "", "--"):
+                return float(default)
+            return float(value)
+        except Exception:
+            return float(default)
+
+    def _strategy_param_rows(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw = payload.get("strategy_parameters")
+        if not isinstance(raw, dict):
+            return []
+        combo = self._list(payload.get("strategy_combo")) or list(raw.keys())
+        rows: list[dict[str, Any]] = []
+        for key in combo:
+            item = raw.get(key)
+            if isinstance(item, dict) and item.get("enabled", True) is not False:
+                rows.append({**item, "strategy": str(item.get("strategy") or key)})
+        return rows
+
+    def _apply_strategy_controls(self, signal: UnifiedSignal, payload: dict[str, Any], price: float) -> dict[str, Any]:
+        risk = dict(payload.get("risk_controls") or {})
+        profile = dict(payload.get("screener_signal") or {})
+        rows = self._strategy_param_rows(payload)
+        stop_values = [self._pct(row.get("stop_loss_pct"), 0.0) for row in rows if self._pct(row.get("stop_loss_pct"), 0.0) > 0]
+        take_values = [self._pct(row.get("take_profit_pct"), 0.0) for row in rows if self._pct(row.get("take_profit_pct"), 0.0) > 0]
+        draw_values = [self._pct(row.get("max_drawdown_pct"), 0.0) for row in rows if self._pct(row.get("max_drawdown_pct"), 0.0) > 0]
+        single_values = [self._pct(row.get("max_single_position_pct"), 0.0) for row in rows if self._pct(row.get("max_single_position_pct"), 0.0) > 0]
+        stop_pct = min(stop_values) if stop_values else self._pct(risk.get("stop_loss_pct"), 8.0)
+        take_pct = min(take_values) if take_values else self._pct(risk.get("take_profit_pct"), 18.0)
+        max_drawdown_pct = min(draw_values) if draw_values else self._pct(risk.get("max_drawdown_pct"), 18.0)
+        max_single_pct = min(single_values) if single_values else self._pct(risk.get("max_single_position_pct"), 20.0)
+        cap = max(0.0, min(max_single_pct / 100.0, 1.0))
+        hints: list[str] = []
+
+        profile_action = str(profile.get("action") or "").lower()
+        if profile_action in {"avoid", "sell"}:
+            signal.action = "avoid" if profile_action == "avoid" else "sell"
+            signal.target_weight = 0.0
+            hints.append(f"screener_action={profile_action}")
+        elif profile_action == "reduce" and signal.action in {"buy", "add", "hold"}:
+            signal.action = "reduce"
+            signal.target_weight = min(signal.target_weight, cap * 0.35 if cap else signal.target_weight)
+            hints.append("screener_action=reduce")
+        elif profile_action == "buy" and signal.action == "hold" and signal.final_score >= 55:
+            signal.action = "buy"
+            hints.append("screener_action=buy")
+
+        hint_pct = self._pct(profile.get("target_weight_hint_pct"), 0.0)
+        if signal.action in {"buy", "add"}:
+            if hint_pct > 0:
+                signal.target_weight = max(signal.target_weight, hint_pct / 100.0)
+                hints.append(f"screener_target_hint={hint_pct:.2f}%")
+            if cap > 0:
+                signal.target_weight = min(signal.target_weight, cap)
+                hints.append(f"max_single_position={max_single_pct:.2f}%")
+
+        pos = self.account.positions.get(signal.symbol)
+        current_weight = 0.0
+        if pos and self.account.equity > 0:
+            market_price = price or pos.market_price or pos.avg_cost
+            current_value = max(0.0, pos.quantity * market_price)
+            current_weight = current_value / max(self.account.equity, 1.0)
+            if price > 0 and pos.avg_cost > 0 and stop_pct > 0 and price <= pos.avg_cost * (1 - stop_pct / 100.0):
+                signal.action = "sell"
+                signal.target_weight = 0.0
+                hints.append(f"stop_loss_triggered={stop_pct:.2f}%")
+            elif price > 0 and pos.avg_cost > 0 and take_pct > 0 and price >= pos.avg_cost * (1 + take_pct / 100.0):
+                signal.action = "reduce"
+                signal.target_weight = min(signal.target_weight, max(0.0, current_weight * 0.5))
+                hints.append(f"take_profit_reduce={take_pct:.2f}%")
+
+        if max_drawdown_pct > 0 and self.account.max_drawdown <= -(max_drawdown_pct / 100.0):
+            signal.action = "reduce" if current_weight > 0 else "hold"
+            signal.target_weight = min(signal.target_weight, max(0.0, current_weight * 0.5))
+            hints.append(f"max_drawdown_guard={max_drawdown_pct:.2f}%")
+
+        if hints:
+            signal.reason = (signal.reason + "；" if signal.reason else "") + "；".join(hints)
+            signal.evidence = list(dict.fromkeys(list(signal.evidence) + hints))
+        return {
+            "strategy_combo": self._list(payload.get("strategy_combo")),
+            "position_sizing": str(payload.get("position_sizing") or ""),
+            "active_strategy_parameters": rows,
+            "stop_loss_pct": stop_pct,
+            "take_profit_pct": take_pct,
+            "max_drawdown_pct": max_drawdown_pct,
+            "max_single_position_pct": max_single_pct,
+            "current_weight": round(current_weight, 6),
+            "applied_hints": hints,
+        }
+
+    def _event_watch_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        watch = dict(payload.get("event_watch") or {})
+        if not watch:
+            return {"enabled": False, "missing_data": [], "evidence": [], "veto": False}
+        enabled_keys = [key for key, value in watch.items() if isinstance(value, bool) and value]
+        evidence: list[str] = []
+        missing: list[str] = []
+        veto = False
+        info_present = any(payload.get(key) for key in ("news_ts", "info_snapshot_ts", "announcement_ts", "financial_report_ts"))
+        if enabled_keys and not info_present:
+            missing.append("event_watch_snapshot_missing")
+        if watch.get("financial_reports") and payload.get("financial_report_blackout"):
+            evidence.append("financial_report_blackout")
+            veto = True
+        if watch.get("half_year_reports") and payload.get("half_year_report_window"):
+            evidence.append("half_year_report_window")
+        if watch.get("exchange_announcements") and payload.get("announcement_risk"):
+            evidence.append("announcement_risk")
+            veto = True
+        if watch.get("major_negative_news") and payload.get("major_negative_news"):
+            evidence.append("major_negative_news")
+            veto = True
+        if watch.get("policy_industry_news") and payload.get("policy_industry_risk"):
+            evidence.append("policy_industry_risk")
+        return {
+            "enabled": bool(enabled_keys),
+            "enabled_keys": enabled_keys,
+            "missing_data": missing,
+            "evidence": evidence,
+            "veto": veto,
+            "lookahead_days": int(self._pct(watch.get("event_lookahead_days"), 0.0)),
+            "blackout_before_days": int(self._pct(watch.get("blackout_before_days"), 0.0)),
+            "blackout_after_days": int(self._pct(watch.get("blackout_after_days"), 0.0)),
+        }
 
     def _optional(self, value: Any) -> float | None:
         if value in (None, "", "--"):

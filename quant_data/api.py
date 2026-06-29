@@ -1388,6 +1388,10 @@ def search(keyword: str, limit: int = 30) -> dict:
 
 
 def _parse_symbol_text(symbols: str | None) -> list[str]:
+    normalized = re.sub(r"[，；;、|\s]+", ",", symbols or "")
+    parsed = [x.strip() for x in normalized.split(",") if x.strip()]
+    if parsed:
+        return parsed
     return [x.strip() for x in re.split(r"[\s,，;；、|]+", symbols or "") if x.strip()]
 
 
@@ -1711,6 +1715,7 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         },
         "interval_seconds": max(0, min(60, int(_as_float(merged.get("interval_seconds"), 15.0)))),
         "initial_cash": _as_float(merged.get("initial_cash"), 100000.0),
+        "reset_account": _as_bool(merged.get("reset_account"), True),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "source_page": str(merged.get("source_page") or "auto-trading"),
         "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",

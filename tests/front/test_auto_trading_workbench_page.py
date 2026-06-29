@@ -23,6 +23,8 @@ def test_auto_trading_workbench_page_visible():
     assert "strategyCombo" in html
     assert "strategyParamJson" in html
     assert "positionSizing" in html
+    assert "resetAccount" in html
+    assert "reset_account" in html
     assert "maxDrawdownPct" in html
     assert "runConfigBacktest" in html
     assert "technical_score:68" not in html

@@ -102,6 +102,7 @@ def build_auto_trading_workbench_ui() -> str:
                 <label class="check"><input id="watchMajorNews" type="checkbox" checked> 重大负面/舆情风险</label>
                 <label class="check"><input id="watchPolicyNews" type="checkbox" checked> 行业政策/宏观事件</label>
                 <label class="check"><input id="requireFreshQuote" type="checkbox" checked> 数据过期禁止新增仓位</label>
+                <label class="check"><input id="resetAccount" type="checkbox" checked> 启动时新建模拟账户，不继承上次持仓</label>
               </div>
               <div class="row" style="margin-bottom:12px"><button class="btn blue" onclick="oneClickConfig()">一键配置</button><button class="btn ghost" onclick="loadLatestScreenerConfig()">读取最新筛选</button><button class="btn ghost" onclick="saveAutoConfig()">保存配置</button></div>
               <div class="row"><button class="btn" onclick="startPaper()">启动模拟 session</button><button class="btn ghost" onclick="manualTick()">执行一轮模拟</button><button class="btn ghost" onclick="runConfigBacktest()">用配置回测</button><button class="btn ghost" onclick="pausePaper()">暂停</button><button class="btn ghost" onclick="resumePaper()">恢复</button><button class="btn red" onclick="stopPaper()">停止</button><button class="btn red" onclick="killPaper()">模拟 Kill</button></div>
@@ -215,6 +216,7 @@ function collectAutoConfig(){
     strategy_parameters:parseStrategyParams(),
     interval_seconds:Number($('interval').value||15),
     initial_cash:num('initialCash',100000),
+    reset_account:checked('resetAccount'),
     risk_controls:{
       stop_loss_pct:num('stopLossPct',8),
       take_profit_pct:num('takeProfitPct',18),
@@ -273,6 +275,7 @@ function applyAutoConfig(cfg){
   if(e.policy_industry_news!=null)$('watchPolicyNews').checked=!!e.policy_industry_news;
   const d=cfg.data_requirements||{};
   if(d.require_fresh_quote!=null)$('requireFreshQuote').checked=!!d.require_fresh_quote;
+  if(cfg.reset_account!=null && $('resetAccount'))$('resetAccount').checked=!!cfg.reset_account;
 }
 function renderConfigSummary(cfg, readiness){
   const gates=readiness?.gates||[];

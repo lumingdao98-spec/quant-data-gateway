@@ -246,6 +246,7 @@ def _session_config(payload: dict[str, Any]) -> dict[str, Any]:
         "symbols_source",
         "source_page",
         "initial_cash",
+        "reset_account",
     }
     return {key: payload.get(key) for key in keys if key in payload}
 
@@ -304,6 +305,11 @@ def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> 
 
 def _symbols(value: Any) -> list[str]:
     if isinstance(value, str):
+        if any(sep in value for sep in ["，", "；", "、", "|", ";", "\n", "\t", " "]):
+            text = value
+            for sep in ["，", "；", "、", "|", ";", "\n", "\t", " "]:
+                text = text.replace(sep, ",")
+            return [x.strip() for x in text.split(",") if x.strip()]
         text = value.replace("，", ",").replace("；", ",").replace(";", ",").replace("\n", ",")
         return [x.strip() for x in text.split(",") if x.strip()]
     if isinstance(value, list):
