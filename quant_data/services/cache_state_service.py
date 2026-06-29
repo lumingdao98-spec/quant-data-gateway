@@ -18,6 +18,7 @@ DEFAULT_TTLS = {
     "quote_cache": 30,
     "technical_factor_cache": 6 * 60 * 60,
     "global_news_cache": 45 * 60,
+    "auto_trading_config": 7 * 24 * 60 * 60,
 }
 
 

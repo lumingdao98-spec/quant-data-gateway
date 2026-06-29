@@ -11,16 +11,17 @@ def test_ui_exposes_auto_trading_workbench_entry():
     assert "总控台" in html
 
 
-def test_intraday_chart_compresses_cn_lunch_gap_and_clamps_tooltip():
+def test_intraday_chart_breaks_cn_lunch_gap_and_clamps_tooltip():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time").text
 
     assert "function isCnLunchGap" in html
     assert "function timeTradeFrac" in html
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
-    assert "breakLunch=false" in html
+    assert "breakLunch=true" in html
     assert "timeTradeX(d,w)" in html
-    assert "交易分钟连续" in html
+    assert "午休断线" in html
+    assert "午休区留空不断点连线" in html
     assert "function clampChartTooltip" in html
     assert "Math.min(x,r.right-tw-8)" in html
 

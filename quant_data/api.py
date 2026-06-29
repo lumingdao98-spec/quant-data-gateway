@@ -220,6 +220,16 @@ def _render_chinese_api_docs() -> str:
             ],
         ),
         (
+            "自动交易 V3.23",
+            [
+                ("GET", "/auto-trading", "自动交易总控台入口，汇总筛选、详情、回测、实时模拟、真实交易、记录和数据中心。"),
+                ("GET", "/api/auto-trading/config", "读取当前自动交易配置，包含股票池、策略组合、仓位模型、止盈止损、最大回撤和事件监控。"),
+                ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
+                ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
+                ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
+            ],
+        ),
+        (
             "信息面与大盘",
             [
                 ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
@@ -1378,7 +1388,7 @@ def search(keyword: str, limit: int = 30) -> dict:
 
 
 def _parse_symbol_text(symbols: str | None) -> list[str]:
-    return [x.strip() for x in (symbols or "").replace("，", ",").replace("\n", ",").split(",") if x.strip()]
+    return [x.strip() for x in re.split(r"[\s,，;；、|]+", symbols or "") if x.strip()]
 
 
 def _symbols_from_payload(payload: dict | None) -> list[str]:
@@ -1387,6 +1397,234 @@ def _symbols_from_payload(payload: dict | None) -> list[str]:
     if isinstance(raw, list):
         return [str(x).strip() for x in raw if str(x).strip()]
     return _parse_symbol_text(str(raw))
+
+
+AUTO_TRADING_CONFIG_TTL_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_AUTO_STRATEGY_COMBO = [
+    "score_driven",
+    "ma_repair",
+    "macd_cross",
+    "volume_breakout",
+    "risk_control",
+    "event_driven",
+    "finance_quality",
+    "market_regime",
+]
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _as_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "是", "开启", "启用"}
+
+
+def _strategy_combo_from(raw) -> list[str]:
+    if isinstance(raw, list):
+        combo = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        combo = _parse_symbol_text(str(raw or ""))
+    return list(dict.fromkeys(combo))
+
+
+def _screener_rows_from_snapshot(data) -> list[dict]:
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("results", "rows", "candidates", "items"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return [x for x in val if isinstance(x, dict)]
+    nested = data.get("data")
+    if isinstance(nested, (dict, list)):
+        return _screener_rows_from_snapshot(nested)
+    return []
+
+
+def _symbol_from_screener_row(row: dict) -> str:
+    for key in ("symbol", "code", "ts_code", "asset_code"):
+        value = row.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def _symbols_from_latest_screener(limit: int = 12) -> tuple[list[str], str, bool]:
+    latest = cache_state_service.latest("screener_snapshot")
+    rows = _screener_rows_from_snapshot(latest.data)
+    symbols: list[str] = []
+    for row in rows:
+        sym = _symbol_from_screener_row(row)
+        if sym and sym not in symbols:
+            symbols.append(sym)
+        if len(symbols) >= limit:
+            break
+    snapshot_id = str((latest.cache_status or {}).get("snapshot_id") or (latest.data or {}).get("snapshot_id") or "")
+    return symbols, snapshot_id, bool(latest.data)
+
+
+def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_screener: bool = False) -> dict:
+    payload = dict(payload or {})
+    existing = cache_state_service.get("auto_trading_config", "default").data or {}
+    merged = {**existing, **payload}
+    screener_symbols, screener_snapshot_id, has_screener = _symbols_from_latest_screener()
+    watch_symbols = list(watchlist_service.list().get("symbols") or [])
+    payload_symbols = _symbols_from_payload(payload)
+    existing_symbols = _symbols_from_payload(existing)
+    if payload_symbols:
+        symbols = payload_symbols
+        symbols_source = "payload"
+    elif prefer_latest_screener and screener_symbols:
+        symbols = screener_symbols
+        symbols_source = "latest_screener"
+    elif existing_symbols:
+        symbols = existing_symbols
+        symbols_source = "saved_config"
+    elif screener_symbols:
+        symbols = screener_symbols
+        symbols_source = "latest_screener"
+    elif watch_symbols:
+        symbols = watch_symbols
+        symbols_source = "watchlist"
+    else:
+        symbols = ["300750", "600438", "510300"]
+        symbols_source = "default_seed"
+
+    risk_in = dict(merged.get("risk_controls") or {})
+    score_in = dict(merged.get("score_weights") or {})
+    event_in = dict(merged.get("event_watch") or {})
+    data_in = dict(merged.get("data_requirements") or {})
+    combo = _strategy_combo_from(
+        merged.get("strategy_combo")
+        or merged.get("selected_strategies")
+        or merged.get("strategies")
+        or DEFAULT_AUTO_STRATEGY_COMBO
+    ) or list(DEFAULT_AUTO_STRATEGY_COMBO)
+
+    config = {
+        "config_id": str(merged.get("config_id") or "default"),
+        "version": "V3.23",
+        "mode": "auto_trading_core",
+        "symbols": list(dict.fromkeys(str(x).strip() for x in symbols if str(x).strip()))[:80],
+        "symbols_source": symbols_source,
+        "screener_snapshot_id": str(merged.get("screener_snapshot_id") or screener_snapshot_id),
+        "screener_snapshot_available": has_screener,
+        "strategy_family": str(merged.get("strategy_family") or merged.get("strategy") or "hybrid"),
+        "strategy_combo": combo,
+        "position_sizing": str(merged.get("position_sizing") or "score_weighted"),
+        "risk_controls": {
+            "stop_loss_pct": _as_float(risk_in.get("stop_loss_pct"), 8.0),
+            "take_profit_pct": _as_float(risk_in.get("take_profit_pct"), 18.0),
+            "max_drawdown_pct": _as_float(risk_in.get("max_drawdown_pct"), 18.0),
+            "max_single_position_pct": _as_float(risk_in.get("max_single_position_pct"), 20.0),
+            "max_total_position_pct": _as_float(risk_in.get("max_total_position_pct"), 80.0),
+            "max_daily_loss_pct": _as_float(risk_in.get("max_daily_loss_pct"), 4.0),
+            "min_cash_pct": _as_float(risk_in.get("min_cash_pct"), 15.0),
+            "atr_risk_pct": _as_float(risk_in.get("atr_risk_pct"), 1.5),
+            "cooldown_days": int(_as_float(risk_in.get("cooldown_days"), 2.0)),
+        },
+        "score_weights": {
+            "technical": _as_float(score_in.get("technical"), 0.30),
+            "fundamental": _as_float(score_in.get("fundamental"), 0.22),
+            "information": _as_float(score_in.get("information"), 0.20),
+            "fund_flow": _as_float(score_in.get("fund_flow"), 0.16),
+            "market_regime": _as_float(score_in.get("market_regime"), 0.12),
+        },
+        "event_watch": {
+            "financial_reports": _as_bool(event_in.get("financial_reports"), True),
+            "half_year_reports": _as_bool(event_in.get("half_year_reports"), True),
+            "earnings_preannouncements": _as_bool(event_in.get("earnings_preannouncements"), True),
+            "exchange_announcements": _as_bool(event_in.get("exchange_announcements"), True),
+            "major_negative_news": _as_bool(event_in.get("major_negative_news"), True),
+            "policy_industry_news": _as_bool(event_in.get("policy_industry_news"), True),
+            "event_lookahead_days": int(_as_float(event_in.get("event_lookahead_days"), 21.0)),
+            "blackout_before_days": int(_as_float(event_in.get("blackout_before_days"), 2.0)),
+            "blackout_after_days": int(_as_float(event_in.get("blackout_after_days"), 1.0)),
+        },
+        "data_requirements": {
+            "require_fresh_quote": _as_bool(data_in.get("require_fresh_quote"), True),
+            "block_stale_buy": _as_bool(data_in.get("block_stale_buy"), True),
+            "require_score_provenance": _as_bool(data_in.get("require_score_provenance"), True),
+            "require_info_snapshot": _as_bool(data_in.get("require_info_snapshot"), False),
+            "require_orderbook_when_available": _as_bool(data_in.get("require_orderbook_when_available"), True),
+        },
+        "interval_seconds": max(0, min(60, int(_as_float(merged.get("interval_seconds"), 15.0)))),
+        "initial_cash": _as_float(merged.get("initial_cash"), 100000.0),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "source_page": str(merged.get("source_page") or "auto-trading"),
+        "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
+    }
+    config["readiness_gates"] = [
+        "股票池不为空",
+        "策略组合不为空",
+        "仓位/止盈止损/最大回撤已配置",
+        "财报/半年报/公告/重大负面事件已纳入观察",
+        "真实交易默认关闭，未授权前只允许 paper trading",
+    ]
+    return config
+
+
+def _save_auto_trading_config(config: dict, *, event_type: str = "auto_trading_config_saved") -> dict:
+    saved = cache_state_service.put(
+        "auto_trading_config",
+        str(config.get("config_id") or "default"),
+        config,
+        ttl_seconds=AUTO_TRADING_CONFIG_TTL_SECONDS,
+        source="api/auto-trading/config",
+    )
+    trading_store_v323.put(
+        "audit_events",
+        {
+            "event_type": event_type,
+            "config_id": config.get("config_id"),
+            "symbols": config.get("symbols"),
+            "strategy_family": config.get("strategy_family"),
+            "strategy_combo": config.get("strategy_combo"),
+            "position_sizing": config.get("position_sizing"),
+            "risk_controls": config.get("risk_controls"),
+            "event_watch": config.get("event_watch"),
+            "created_at": config.get("updated_at"),
+            "source_page": "auto-trading",
+        },
+        mode="config",
+        session_id="auto_trading",
+        record_id=f"auto-config-{config.get('config_id')}-{config.get('updated_at')}",
+    )
+    return {"ok": True, "data": config, "cache_status": saved}
+
+
+def _auto_trading_readiness(config: dict) -> dict:
+    broker = live_trading_engine_v323.status()
+    safety = broker.get("safety") or {}
+    gates = [
+        {"key": "symbols", "label": "股票池", "ok": bool(config.get("symbols")), "detail": f"{len(config.get('symbols') or [])} 只"},
+        {"key": "strategy_combo", "label": "策略组合", "ok": bool(config.get("strategy_combo")), "detail": ", ".join(config.get("strategy_combo") or [])},
+        {"key": "position_sizing", "label": "仓位模型", "ok": bool(config.get("position_sizing")), "detail": str(config.get("position_sizing") or "--")},
+        {"key": "risk_controls", "label": "止盈止损/最大回撤", "ok": bool(config.get("risk_controls")), "detail": str(config.get("risk_controls") or {})},
+        {"key": "event_watch", "label": "财报/公告/重大事件", "ok": bool(config.get("event_watch", {}).get("financial_reports") or config.get("event_watch", {}).get("major_negative_news")), "detail": str(config.get("event_watch") or {})},
+        {"key": "paper_ready", "label": "实时模拟", "ok": True, "detail": "可用，订单/成交/持仓/审计落 SQLite"},
+        {"key": "live_disabled_by_default", "label": "真实交易安全状态", "ok": not bool(safety.get("LIVE_TRADING_ENABLED")), "detail": "默认关闭" if not bool(safety.get("LIVE_TRADING_ENABLED")) else "已开启，需重点复核"},
+        {"key": "broker_connected", "label": "QMT/PTrade 券商连接", "ok": bool((broker.get("broker") or {}).get("connected")), "detail": str((broker.get("broker") or {}).get("status") or "disabled/unsupported")},
+    ]
+    return {
+        "ok": True,
+        "config": config,
+        "gates": gates,
+        "ready_for_paper": all(g["ok"] for g in gates[:6]),
+        "ready_for_live": all(g["ok"] for g in gates[:6]) and bool((broker.get("broker") or {}).get("connected")) and bool(safety.get("LIVE_TRADING_ENABLED")),
+        "broker": broker,
+    }
 
 
 @app.get("/api/watchlist")
@@ -2884,6 +3122,80 @@ def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
 @app.post("/api/realtime-paper/replay")
 def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
     return realtime_paper_engine_v323.replay(payload)
+
+
+@app.get("/api/auto-trading/config")
+def auto_trading_config_get() -> dict:
+    latest = cache_state_service.get("auto_trading_config", "default")
+    if latest.data:
+        return {"ok": True, "data": latest.data, "cache_status": latest.cache_status, "defaulted": False}
+    config = _build_auto_trading_config()
+    return {"ok": True, "data": config, "cache_status": latest.cache_status, "defaulted": True}
+
+
+@app.post("/api/auto-trading/config")
+def auto_trading_config_save(payload: dict = Body(default_factory=dict)) -> dict:
+    config = _build_auto_trading_config(payload)
+    return _save_auto_trading_config(config)
+
+
+@app.post("/api/auto-trading/config/one-click")
+def auto_trading_config_one_click(payload: dict = Body(default_factory=dict)) -> dict:
+    config = _build_auto_trading_config(payload, prefer_latest_screener=True)
+    saved = _save_auto_trading_config(config, event_type="auto_trading_one_click_config")
+    readiness = _auto_trading_readiness(config)
+    return {
+        **saved,
+        "readiness": readiness,
+        "symbols_source": config.get("symbols_source"),
+        "screener_snapshot_id": config.get("screener_snapshot_id"),
+        "warnings": [] if config.get("symbols") else ["未找到可交易股票池，已阻止自动启动"],
+    }
+
+
+@app.get("/api/auto-trading/readiness")
+def auto_trading_readiness_get() -> dict:
+    config = auto_trading_config_get()["data"]
+    return _auto_trading_readiness(config)
+
+
+@app.post("/api/auto-trading/start-paper")
+def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict:
+    config = _build_auto_trading_config(payload)
+    saved = _save_auto_trading_config(config, event_type="auto_trading_start_paper_config")
+    session_payload = {
+        **payload,
+        **config,
+        "symbols": config.get("symbols") or [],
+        "strategy_family": config.get("strategy_family") or "hybrid",
+        "selected_strategies": config.get("strategy_combo") or [],
+        "interval_seconds": int(config.get("interval_seconds") or 15),
+        "initial_cash": float(config.get("initial_cash") or 100000),
+        "source_page": "auto-trading",
+    }
+    session = realtime_paper_engine_v323.start_session(session_payload)
+    session_id = str((session.get("session") or {}).get("session_id") or "")
+    trading_store_v323.put(
+        "audit_events",
+        {
+            "event_type": "auto_trading_start_paper",
+            "config": config,
+            "session": session.get("session"),
+            "engine": session.get("engine"),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        },
+        mode="realtime_paper",
+        session_id=session_id,
+        record_id=f"auto-trading-start-{session_id}",
+    )
+    return {
+        "ok": bool(session.get("ok")),
+        "config": config,
+        "session": session.get("session"),
+        "engine": session.get("engine"),
+        "saved": saved.get("cache_status"),
+        "readiness": _auto_trading_readiness(config),
+    }
 
 
 @app.post("/api/realtime-paper/sessions/start")

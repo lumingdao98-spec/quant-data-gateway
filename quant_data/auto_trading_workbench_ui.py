@@ -15,11 +15,11 @@ def build_auto_trading_workbench_ui() -> str:
 .top{height:76px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;z-index:5}.top-left,.top-right,.row{display:flex;align-items:center;gap:12px}.top-right{color:#5c6678}.icon-btn{border:1px solid var(--line);background:#fff;border-radius:10px;width:40px;height:40px;display:grid;place-items:center;cursor:pointer}
 .main{padding:28px 34px 42px}.title-row{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px}.title-row h1{font-size:24px;margin:0 0 5px}.title-row p{margin:0;color:var(--muted);line-height:1.6}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #b8ece8;background:#ebfffc;color:#06968e;border-radius:999px;padding:7px 12px;font-weight:900;font-size:13px}.pill.warn{border-color:#ffe2a3;background:#fff7df;color:#ad6a00}.pill.danger{border-color:#fecaca;background:#fff1f2;color:#be123c}
 .grid{display:grid;gap:18px}.kpis{grid-template-columns:repeat(5,minmax(150px,1fr));margin-bottom:22px}.card,.panel,.module{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:12px}.card{padding:18px}.card .label{color:#7a8498;font-size:13px}.card .value{font-size:26px;font-weight:900;margin-top:10px;overflow-wrap:anywhere}.card .sub{color:#7a8498;font-size:12px;margin-top:5px;line-height:1.5}
-.layout{display:grid;grid-template-columns:330px minmax(520px,1fr) 380px;gap:18px;align-items:start}.panel{overflow:hidden}.panel h2{font-size:18px;margin:0;padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}.panel-body{padding:16px 18px}.field{display:grid;gap:7px;margin-bottom:13px}.field label{font-size:13px;color:#667085;font-weight:800}.field input,.field select,.field textarea{border:1px solid var(--line);background:#f8fafc;border-radius:10px;padding:10px 12px;color:var(--text);min-width:0}.field textarea{min-height:82px;resize:vertical}.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}.btn{border:0;border-radius:10px;padding:10px 14px;font-weight:900;color:#fff;background:var(--cyan);cursor:pointer}.btn.blue{background:var(--blue)}.btn.dark{background:#273247}.btn.red{background:var(--red)}.btn.ghost{background:#fff;color:#334155;border:1px solid var(--line)}.btn.small{padding:7px 10px;font-size:12px}.btn:disabled{opacity:.55;cursor:not-allowed}
+.layout{display:grid;grid-template-columns:330px minmax(520px,1fr) 380px;gap:18px;align-items:start}.panel{overflow:hidden}.panel h2{font-size:18px;margin:0;padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px}.panel-body{padding:16px 18px}.field{display:grid;gap:7px;margin-bottom:13px}.field label{font-size:13px;color:#667085;font-weight:800}.field input,.field select,.field textarea{border:1px solid var(--line);background:#f8fafc;border-radius:10px;padding:10px 12px;color:var(--text);min-width:0}.field textarea{min-height:82px;resize:vertical}.field textarea.compact{min-height:58px}.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}.config-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:2px 0 12px}.check{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);background:#fbfcff;border-radius:10px;padding:9px;color:#475569;font-size:12px;font-weight:800;line-height:1.45}.check input{width:auto;margin-top:2px}.btn{border:0;border-radius:10px;padding:10px 14px;font-weight:900;color:#fff;background:var(--cyan);cursor:pointer}.btn.blue{background:var(--blue)}.btn.dark{background:#273247}.btn.red{background:var(--red)}.btn.ghost{background:#fff;color:#334155;border:1px solid var(--line)}.btn.small{padding:7px 10px;font-size:12px}.btn:disabled{opacity:.55;cursor:not-allowed}
 .module-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.module{display:block;padding:13px;background:#fbfcff}.module b{display:block;margin-bottom:6px}.module span{display:block;color:#7a8498;font-size:12px;line-height:1.55;overflow-wrap:anywhere}.module:hover{border-color:var(--cyan);background:#f0fffd}.notice{background:#fff7df;border:1px solid #ffe2a3;color:#8a5a00;border-radius:10px;padding:12px;line-height:1.65;font-size:13px;overflow-wrap:anywhere}.ok{color:var(--green)}.bad{color:var(--red)}.muted{color:#7a8498}.log{max-height:250px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;color:#334155;overflow-wrap:anywhere}.status-table{width:100%;border-collapse:collapse;table-layout:fixed}.status-table th,.status-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top;overflow-wrap:anywhere}.status-table th{color:#5c6678;background:#f8fafc}
 .decision{padding:24px;border-top:5px solid var(--cyan)}.decision h3{font-size:34px;margin:0;color:#111827}.decision p{line-height:1.75;color:#4a5568;margin:16px 0}.score-bars{display:grid;gap:10px}.bar{height:9px;background:#edf1f7;border-radius:99px;overflow:hidden}.bar span{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--blue))}.decision-grid{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);background:#fbfdff}.decision-grid div{padding:15px;text-align:center;border-right:1px solid var(--line)}.decision-grid div:last-child{border-right:0}.decision-grid b{display:block;font-size:20px;margin-top:7px;overflow-wrap:anywhere}
 .mini-card{border:1px solid var(--line);border-radius:10px;padding:11px;background:#fbfcff;margin-bottom:10px}.mini-card b{display:block;margin-bottom:6px}.source-link{color:#079d99;text-decoration:underline}.footer-note{margin-top:18px;color:#7a8498;font-size:12px;line-height:1.7}
-@media(max-width:1320px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav a{justify-content:center;padding:16px}.layout{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:780px){.app{grid-template-columns:1fr}.side{display:none}.top{position:static}.main{padding:18px}.kpis,.split,.decision-grid,.module-grid{grid-template-columns:1fr}}
+@media(max-width:1320px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav a{justify-content:center;padding:16px}.layout{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:780px){.app{grid-template-columns:1fr}.side{display:none}.top{position:static}.main{padding:18px}.kpis,.split,.decision-grid,.module-grid,.config-grid,.check-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -80,6 +80,29 @@ def build_auto_trading_workbench_ui() -> str:
                 <div class="field"><label>策略族</label><select id="strategy"><option value="hybrid">综合评分</option><option value="etf_momentum_rotation">ETF 动量轮动</option><option value="score_reversal">评分拐点修复</option><option value="core_satellite">核心-卫星</option></select></div>
                 <div class="field"><label>刷新频率</label><select id="interval"><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="0">仅手动执行一轮</option></select></div>
               </div>
+              <div class="notice" id="configSummary">自动交易配置尚未加载；可一键从最新筛选结果生成模拟配置。</div>
+              <div class="field"><label>策略组合（可多选，逗号/空格分隔）</label><textarea class="compact" id="strategyCombo">score_driven, ma_repair, macd_cross, volume_breakout, risk_control, event_driven, finance_quality, market_regime</textarea></div>
+              <div class="split">
+                <div class="field"><label>仓位模型</label><select id="positionSizing"><option value="score_weighted">评分加权</option><option value="atr_risk">ATR风险仓位</option><option value="volatility_target">波动率目标</option><option value="fixed_weight">固定权重</option><option value="core_satellite">核心-卫星</option><option value="cash_first_defensive">现金优先防守</option></select></div>
+                <div class="field"><label>初始资金</label><input id="initialCash" type="number" value="100000"></div>
+              </div>
+              <div class="config-grid">
+                <div class="field"><label>止损%</label><input id="stopLossPct" type="number" value="8" step="0.1"></div>
+                <div class="field"><label>止盈%</label><input id="takeProfitPct" type="number" value="18" step="0.1"></div>
+                <div class="field"><label>最大回撤%</label><input id="maxDrawdownPct" type="number" value="18" step="0.1"></div>
+                <div class="field"><label>单票上限%</label><input id="maxSinglePositionPct" type="number" value="20" step="0.1"></div>
+                <div class="field"><label>总仓位上限%</label><input id="maxTotalPositionPct" type="number" value="80" step="0.1"></div>
+                <div class="field"><label>现金保留%</label><input id="minCashPct" type="number" value="15" step="0.1"></div>
+              </div>
+              <div class="check-grid">
+                <label class="check"><input id="watchFinancialReports" type="checkbox" checked> 财报/业绩预告</label>
+                <label class="check"><input id="watchHalfYearReports" type="checkbox" checked> 半年报/年报窗口</label>
+                <label class="check"><input id="watchAnnouncements" type="checkbox" checked> 交易所/巨潮公告</label>
+                <label class="check"><input id="watchMajorNews" type="checkbox" checked> 重大负面/舆情风险</label>
+                <label class="check"><input id="watchPolicyNews" type="checkbox" checked> 行业政策/宏观事件</label>
+                <label class="check"><input id="requireFreshQuote" type="checkbox" checked> 数据过期禁止新增仓位</label>
+              </div>
+              <div class="row" style="margin-bottom:12px"><button class="btn blue" onclick="oneClickConfig()">一键配置</button><button class="btn ghost" onclick="loadLatestScreenerConfig()">读取最新筛选</button><button class="btn ghost" onclick="saveAutoConfig()">保存配置</button></div>
               <div class="row"><button class="btn" onclick="startPaper()">启动模拟 session</button><button class="btn ghost" onclick="manualTick()">执行一轮模拟</button><button class="btn ghost" onclick="pausePaper()">暂停</button><button class="btn ghost" onclick="resumePaper()">恢复</button><button class="btn red" onclick="stopPaper()">停止</button><button class="btn red" onclick="killPaper()">模拟 Kill</button></div>
             </div>
           </div>
@@ -165,14 +188,93 @@ def build_auto_trading_workbench_ui() -> str:
 <script>
 const $=id=>document.getElementById(id);
 let activeSessionId='';
+let lastAutoConfig=null;
 async function api(url,opt){const r=await fetch(url,opt);try{return await r.json()}catch(e){return {ok:false,message:String(e),status:r.status}}}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function symbols(){return $('symbols').value.split(/[，,;；\\s\\n]+/).map(s=>s.trim()).filter(Boolean)}
+function splitListText(v){return String(v||'').split(/[\s,，;；、|]+/).map(s=>s.trim()).filter(Boolean)}
+function symbols(){return splitListText($('symbols').value)}
+function strategyCombo(){return splitListText($('strategyCombo').value)}
 function pct(v){return Math.max(0,Math.min(100,Number(v||0)))}
 function setScore(id,val){$(id+'Score').textContent=val==null?'--':Number(val).toFixed(1);$(id+'Bar').style.width=pct(val)+'%'}
 function brief(row){return esc(row?.status||row?.event_type||row?.marker_type||row?.side||row?.order_id||row?.fill_id||row?.symbol||'--')}
 function money(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('zh-CN',{maximumFractionDigits:2}):'--'}
 function sessionIdOf(item){return item?.session_id||item?.id||item?.sessionId||''}
+function num(id,fallback){const n=Number($(id)?.value);return Number.isFinite(n)?n:fallback}
+function checked(id){return !!$(id)?.checked}
+function collectAutoConfig(){
+  return {
+    symbols:symbols(),
+    strategy_family:$('strategy').value,
+    strategy_combo:strategyCombo(),
+    position_sizing:$('positionSizing').value,
+    interval_seconds:Number($('interval').value||15),
+    initial_cash:num('initialCash',100000),
+    risk_controls:{
+      stop_loss_pct:num('stopLossPct',8),
+      take_profit_pct:num('takeProfitPct',18),
+      max_drawdown_pct:num('maxDrawdownPct',18),
+      max_single_position_pct:num('maxSinglePositionPct',20),
+      max_total_position_pct:num('maxTotalPositionPct',80),
+      min_cash_pct:num('minCashPct',15),
+      max_daily_loss_pct:4,
+      atr_risk_pct:1.5,
+      cooldown_days:2
+    },
+    score_weights:{technical:.30,fundamental:.22,information:.20,fund_flow:.16,market_regime:.12},
+    event_watch:{
+      financial_reports:checked('watchFinancialReports'),
+      half_year_reports:checked('watchHalfYearReports'),
+      earnings_preannouncements:checked('watchFinancialReports'),
+      exchange_announcements:checked('watchAnnouncements'),
+      major_negative_news:checked('watchMajorNews'),
+      policy_industry_news:checked('watchPolicyNews'),
+      event_lookahead_days:21,
+      blackout_before_days:2,
+      blackout_after_days:1
+    },
+    data_requirements:{
+      require_fresh_quote:checked('requireFreshQuote'),
+      block_stale_buy:checked('requireFreshQuote'),
+      require_score_provenance:true,
+      require_info_snapshot:false,
+      require_orderbook_when_available:true
+    },
+    source_page:'auto-trading'
+  };
+}
+function applyAutoConfig(cfg){
+  if(!cfg)return;
+  lastAutoConfig=cfg;
+  if((cfg.symbols||[]).length)$('symbols').value=(cfg.symbols||[]).join(', ');
+  if(cfg.strategy_family)$('strategy').value=cfg.strategy_family;
+  if(cfg.interval_seconds!=null)$('interval').value=String(cfg.interval_seconds);
+  if((cfg.strategy_combo||[]).length)$('strategyCombo').value=(cfg.strategy_combo||[]).join(', ');
+  if(cfg.position_sizing)$('positionSizing').value=cfg.position_sizing;
+  const r=cfg.risk_controls||{};
+  if(r.stop_loss_pct!=null)$('stopLossPct').value=r.stop_loss_pct;
+  if(r.take_profit_pct!=null)$('takeProfitPct').value=r.take_profit_pct;
+  if(r.max_drawdown_pct!=null)$('maxDrawdownPct').value=r.max_drawdown_pct;
+  if(r.max_single_position_pct!=null)$('maxSinglePositionPct').value=r.max_single_position_pct;
+  if(r.max_total_position_pct!=null)$('maxTotalPositionPct').value=r.max_total_position_pct;
+  if(r.min_cash_pct!=null)$('minCashPct').value=r.min_cash_pct;
+  if(cfg.initial_cash!=null)$('initialCash').value=cfg.initial_cash;
+  const e=cfg.event_watch||{};
+  if(e.financial_reports!=null)$('watchFinancialReports').checked=!!e.financial_reports;
+  if(e.half_year_reports!=null)$('watchHalfYearReports').checked=!!e.half_year_reports;
+  if(e.exchange_announcements!=null)$('watchAnnouncements').checked=!!e.exchange_announcements;
+  if(e.major_negative_news!=null)$('watchMajorNews').checked=!!e.major_negative_news;
+  if(e.policy_industry_news!=null)$('watchPolicyNews').checked=!!e.policy_industry_news;
+  const d=cfg.data_requirements||{};
+  if(d.require_fresh_quote!=null)$('requireFreshQuote').checked=!!d.require_fresh_quote;
+}
+function renderConfigSummary(cfg, readiness){
+  const gates=readiness?.gates||[];
+  const gateText=gates.slice(0,6).map(g=>`${g.ok?'✓':'!'} ${g.label}`).join(' · ');
+  const source=cfg?.symbols_source||'--';
+  const symbols=(cfg?.symbols||[]).slice(0,8).join(', ')||'--';
+  const combo=(cfg?.strategy_combo||[]).slice(0,6).join(', ')||'--';
+  $('configSummary').innerHTML=`<b>自动交易配置</b>：股票池 ${symbols}；来源 ${esc(source)}；策略 ${esc(combo)}；仓位 ${esc(cfg?.position_sizing||'--')}；止损/止盈/回撤 ${esc(cfg?.risk_controls?.stop_loss_pct??'--')}% / ${esc(cfg?.risk_controls?.take_profit_pct??'--')}% / ${esc(cfg?.risk_controls?.max_drawdown_pct??'--')}%。<br>${esc(gateText||'等待 readiness 检查')}`;
+}
 function renderSessionRows(items){
   const rows=[
     ['订单',items.orders?.count??items.orders?.data?.length??0,(items.orders?.data||[])[0]],
@@ -200,14 +302,18 @@ async function loadSessionDetails(session){
 }
 async function refreshAll(){
   try{
-    const [broker,sessions,records,data,queue,score]=await Promise.all([
+    const [broker,sessions,records,data,queue,score,autoConfig,readiness]=await Promise.all([
       api('/api/live-broker/status'),
       api('/api/realtime-paper/sessions'),
       api('/api/trading-records?limit=30'),
       api('/api/data-center/status'),
       api('/api/live/confirm-queue'),
-      api('/api/score/latest/300750')
+      api('/api/score/latest/300750'),
+      api('/api/auto-trading/config'),
+      api('/api/auto-trading/readiness')
     ]);
+    applyAutoConfig(autoConfig.data);
+    renderConfigSummary(autoConfig.data,readiness);
     const brokerName=broker.broker?.broker||broker.config?.broker_type||'disabled';
     const brokerStatus=broker.broker?.status||broker.status||'disabled';
     $('brokerBadge').textContent=`${brokerName} / ${brokerStatus}`;
@@ -237,12 +343,36 @@ async function refreshAll(){
     $('takePrice').textContent=latest.take_profit||'跟踪';
     $('riskAction').textContent=broker.safety?.ORDER_CONFIRM_REQUIRED?'人工确认':'白名单确认';
     await loadSessionDetails(active);
-    $('auditLog').textContent='最后刷新 '+new Date().toLocaleTimeString()+'\\n'+JSON.stringify({broker:broker.safety,active_session:activeSessionId,sessions:sessList.length,records:rows.length},null,2);
+    $('auditLog').textContent='最后刷新 '+new Date().toLocaleTimeString()+'\\n'+JSON.stringify({broker:broker.safety,auto_trading_config:autoConfig.data,readiness:readiness.gates,active_session:activeSessionId,sessions:sessList.length,records:rows.length},null,2);
   }catch(e){$('auditLog').textContent='刷新失败：'+e}
 }
+async function oneClickConfig(){
+  const body=collectAutoConfig();
+  const js=await api('/api/auto-trading/config/one-click',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  applyAutoConfig(js.data);
+  renderConfigSummary(js.data,js.readiness);
+  $('auditLog').textContent=JSON.stringify(js,null,2);
+  refreshAll();
+}
+async function saveAutoConfig(){
+  const js=await api('/api/auto-trading/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(collectAutoConfig())});
+  applyAutoConfig(js.data);
+  $('auditLog').textContent=JSON.stringify(js,null,2);
+  refreshAll();
+}
+async function loadLatestScreenerConfig(){
+  const body=collectAutoConfig();
+  delete body.symbols;
+  body.use_latest_screener=true;
+  const js=await api('/api/auto-trading/config/one-click',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  applyAutoConfig(js.data);
+  renderConfigSummary(js.data,js.readiness);
+  $('auditLog').textContent=JSON.stringify(js,null,2);
+  refreshAll();
+}
 async function startPaper(){
-  const body={symbols:symbols(),strategy_family:$('strategy').value,interval_seconds:Number($('interval').value||15),initial_cash:100000,source_page:'auto-trading'};
-  const js=await api('/api/realtime-paper/sessions/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const body=collectAutoConfig();
+  const js=await api('/api/auto-trading/start-paper',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   activeSessionId=sessionIdOf(js.session)||activeSessionId;
   $('auditLog').textContent=JSON.stringify(js,null,2);
   refreshAll();
@@ -250,7 +380,8 @@ async function startPaper(){
 async function manualTick(){
   if(!activeSessionId){$('auditLog').textContent='请先启动或恢复一个实时模拟 session。';return}
   const sym=symbols()[0]||'300750';
-  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:sym,technical_score:68,fundamental_score:60,information_score:58,market_score:55,manual_replay:true,source_page:'auto-trading'})});
+  const cfg=collectAutoConfig();
+  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:sym,technical_score:68,fundamental_score:60,information_score:58,market_score:55,manual_replay:true,source_page:'auto-trading',...cfg})});
   $('auditLog').textContent=JSON.stringify(js,null,2);
   refreshAll();
 }
