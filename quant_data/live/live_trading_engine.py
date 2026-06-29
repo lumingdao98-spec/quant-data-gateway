@@ -210,7 +210,7 @@ class LiveTradingEngine:
     def _daily_live_order_count(self) -> int:
         today = datetime.now().date().isoformat()
         rows = self.store.list("orders", mode="live", limit=5000)
-        active_statuses = {"needs_confirmation", "confirmed", "submitted", "accepted", "partially_filled", "filled"}
+        active_statuses = {"confirmed", "submitted", "accepted", "partially_filled", "filled"}
         return sum(1 for row in rows if str(row.get("created_at") or "").startswith(today) and str(row.get("status") or "") in active_statuses)
 
 

@@ -11,17 +11,17 @@ def test_ui_exposes_auto_trading_workbench_entry():
     assert "总控台" in html
 
 
-def test_intraday_chart_breaks_cn_lunch_gap_and_clamps_tooltip():
+def test_intraday_chart_connects_cn_lunch_with_trading_minutes_and_clamps_tooltip():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time").text
 
     assert "function isCnLunchGap" in html
     assert "function timeTradeFrac" in html
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
-    assert "breakLunch=true" in html
+    assert "breakLunch=false" in html
     assert "timeTradeX(d,w)" in html
-    assert "午休断线" in html
-    assert "午休区留空不断点连线" in html
+    assert "交易分钟连续" in html
+    assert "午休按交易分钟压缩连续" in html
     assert "function clampChartTooltip" in html
     assert "Math.min(x,r.right-tw-8)" in html
 
@@ -29,6 +29,9 @@ def test_intraday_chart_breaks_cn_lunch_gap_and_clamps_tooltip():
 def test_kline_marker_panel_is_collapsible_and_separate():
     html = TestClient(api.app).get("/chart/300750?frame=1d").text
 
+    assert ".chart-area{display:flex;flex-direction:column" in html
+    assert ".chart-grid.k-shell>.chart-grid.k{min-height:760px}" in html
+    assert ".marker-list{flex:0 0 auto;position:relative;z-index:6" in html
     assert "function renderMarkerSummaryPanel" in html
     assert "function toggleMarkerPanel" in html
     assert "marker-toggle" in html
