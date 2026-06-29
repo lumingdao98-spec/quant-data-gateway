@@ -1406,14 +1406,137 @@ def _symbols_from_payload(payload: dict | None) -> list[str]:
 AUTO_TRADING_CONFIG_TTL_SECONDS = 7 * 24 * 60 * 60
 DEFAULT_AUTO_STRATEGY_COMBO = [
     "score_driven",
+    "low_position",
+    "avoid_chasing_high",
+    "source_reliability",
     "ma_repair",
     "macd_cross",
+    "macd_hist_turn",
     "volume_breakout",
+    "mfi_obv_resonance",
+    "rsi_kdj_resonance",
+    "atr_risk",
+    "position_risk",
     "risk_control",
     "event_driven",
     "finance_quality",
+    "fundamental_quality",
+    "cashflow_quality",
+    "announcement_risk",
+    "policy_tailwind",
+    "macro_liquidity",
+    "main_money_est",
     "market_regime",
 ]
+
+AUTO_TRADING_VIRTUAL_STRATEGIES = {
+    "score_driven": {
+        "key": "score_driven",
+        "name": "Daily score driver",
+        "category": "core",
+        "tags": ["score", "four-side"],
+        "description": "Use technical, fundamental, information, fund-flow and market-regime scores as the main decision anchor.",
+        "default_weight": 1.0,
+        "enabled": True,
+    },
+    "market_regime": {
+        "key": "market_regime",
+        "name": "Market regime guard",
+        "category": "risk",
+        "tags": ["index", "sentiment", "risk"],
+        "description": "Reduce new exposure when broad-market mood, index trend or volatility is unfavorable.",
+        "default_weight": 0.8,
+        "enabled": True,
+    },
+}
+
+AUTO_TRADING_BEGINNER_PRESETS = {
+    "balanced": {
+        "label": "Balanced starter",
+        "description": "Default path for users who want a simple score-driven workflow with visible stops and data guards.",
+        "strategy_family": "hybrid",
+        "position_sizing": "score_weighted",
+        "strategy_combo": [
+            "score_driven",
+            "low_position",
+            "ma_repair",
+            "macd_cross",
+            "volume_breakout",
+            "risk_control",
+            "event_driven",
+            "finance_quality",
+            "market_regime",
+        ],
+        "risk_controls": {"stop_loss_pct": 8, "take_profit_pct": 18, "max_drawdown_pct": 18, "max_single_position_pct": 20, "max_total_position_pct": 80, "min_cash_pct": 15},
+    },
+    "defensive": {
+        "label": "Defensive paper trading",
+        "description": "Lower position cap, stricter stops and stronger data/risk filters for learning or weak-market periods.",
+        "strategy_family": "hybrid",
+        "position_sizing": "cash_first_defensive",
+        "strategy_combo": [
+            "score_driven",
+            "avoid_chasing_high",
+            "source_reliability",
+            "ma_repair",
+            "atr_risk",
+            "position_risk",
+            "risk_control",
+            "announcement_risk",
+            "market_regime",
+        ],
+        "risk_controls": {"stop_loss_pct": 6, "take_profit_pct": 12, "max_drawdown_pct": 10, "max_single_position_pct": 10, "max_total_position_pct": 45, "min_cash_pct": 35},
+    },
+    "etf_rotation": {
+        "label": "ETF momentum rotation",
+        "description": "ETF pool, momentum ranking, drawdown guard and paper validation before any live-confirm flow.",
+        "strategy_family": "etf_momentum_rotation",
+        "position_sizing": "equal_risk_contribution",
+        "strategy_combo": [
+            "score_driven",
+            "etf_liquidity",
+            "ma_repair",
+            "adx_trend",
+            "atr_risk",
+            "position_risk",
+            "risk_control",
+            "market_regime",
+        ],
+        "risk_controls": {"stop_loss_pct": 5, "take_profit_pct": 0, "max_drawdown_pct": 8, "max_single_position_pct": 25, "max_total_position_pct": 90, "min_cash_pct": 10},
+    },
+}
+
+
+def _auto_strategy_catalog() -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for item in strategy_library_service.list():
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key:
+            continue
+        row = dict(item)
+        row["auto_default"] = key in DEFAULT_AUTO_STRATEGY_COMBO
+        row["beginner_note"] = "Can be enabled as a modular signal; final trades still pass scoring, data freshness and risk checks."
+        rows.append(row)
+        seen.add(key)
+    for key, item in AUTO_TRADING_VIRTUAL_STRATEGIES.items():
+        if key in seen:
+            continue
+        row = dict(item)
+        row["auto_default"] = key in DEFAULT_AUTO_STRATEGY_COMBO
+        row["beginner_note"] = "Core V3.23 workflow strategy."
+        rows.insert(0, row)
+    return rows
+
+
+def _auto_strategy_meta_map() -> dict[str, dict]:
+    return {str(x.get("key")): x for x in _auto_strategy_catalog() if x.get("key")}
+
+
+def _auto_beginner_presets() -> dict:
+    return {key: dict(value) for key, value in AUTO_TRADING_BEGINNER_PRESETS.items()}
 
 
 def _as_float(value, default: float) -> float:
@@ -1578,17 +1701,25 @@ def _auto_strategy_parameters(combo: list[str], merged: dict, risk_controls: dic
                 if key:
                     raw_map[key] = dict(item)
     position_sizing = str(merged.get("position_sizing") or "score_weighted")
+    meta_map = _auto_strategy_meta_map()
     out: dict[str, dict] = {}
     for key in combo:
         override = raw_map.get(key) or {}
+        meta = meta_map.get(key) or {}
         out[key] = {
             "strategy": key,
+            "name": str(meta.get("name") or key),
+            "category": str(meta.get("category") or "custom"),
+            "description": str(meta.get("description") or "Custom strategy module."),
+            "tags": list(meta.get("tags") or []),
+            "default_weight": _as_float(override.get("default_weight"), _as_float(meta.get("default_weight"), 1.0)),
             "enabled": _as_bool(override.get("enabled"), True),
             "position_sizing": str(override.get("position_sizing") or position_sizing),
             "stop_loss_pct": _as_float(override.get("stop_loss_pct"), _as_float(risk_controls.get("stop_loss_pct"), 8.0)),
             "take_profit_pct": _as_float(override.get("take_profit_pct"), _as_float(risk_controls.get("take_profit_pct"), 18.0)),
             "max_drawdown_pct": _as_float(override.get("max_drawdown_pct"), _as_float(risk_controls.get("max_drawdown_pct"), 18.0)),
             "max_single_position_pct": _as_float(override.get("max_single_position_pct"), _as_float(risk_controls.get("max_single_position_pct"), 20.0)),
+            "beginner_note": str(meta.get("beginner_note") or "Trades still require fresh data, score provenance and risk approval."),
         }
     return out
 
@@ -1835,6 +1966,15 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         "screener_snapshot_available": has_screener,
         "strategy_family": str(merged.get("strategy_family") or merged.get("strategy") or "hybrid"),
         "strategy_combo": combo,
+        "strategy_catalog": _auto_strategy_catalog(),
+        "beginner_presets": _auto_beginner_presets(),
+        "workflow_steps": [
+            {"step": 1, "key": "screen", "label": "Screen", "description": "Build or reuse a stock pool and four-side scores."},
+            {"step": 2, "key": "configure", "label": "Configure", "description": "Choose strategy combo, position sizing and risk limits."},
+            {"step": 3, "key": "paper", "label": "Paper trade", "description": "Run realtime simulation with real quotes and stored audit."},
+            {"step": 4, "key": "backtest", "label": "Backtest", "description": "Validate orders, fills, drawdown and score provenance."},
+            {"step": 5, "key": "live_confirm", "label": "Live confirm", "description": "Only after broker status, risk gateway and manual confirmation pass."},
+        ],
         "position_sizing": str(merged.get("position_sizing") or "score_weighted"),
         "risk_controls": risk_controls,
         "strategy_parameters": _auto_strategy_parameters(combo, merged, risk_controls),
@@ -3441,8 +3581,55 @@ def realtime_paper_confirm_reject(task_id: str, payload: dict = Body(default_fac
         return {"ok": False, "message": str(exc), "paper_only": True}
 
 
+def _payload_has_trade_price(payload: dict) -> bool:
+    quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+    for value in (payload.get("price"), payload.get("last"), quote.get("last"), quote.get("price")):
+        try:
+            if value not in (None, "", "--") and float(value) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _hydrate_realtime_tick_payload(payload: dict | None) -> dict:
+    out = dict(payload or {})
+    symbol = str(out.get("symbol") or "").strip()
+    if not symbol or _payload_has_trade_price(out):
+        return out
+    missing = list(out.get("missing_data") or [])
+    try:
+        quote_obj = service.get_quote(symbol, force_refresh=False)
+        quote = quote_obj.to_dict() if hasattr(quote_obj, "to_dict") else dict(getattr(quote_obj, "__dict__", {}) or {})
+    except Exception as exc:
+        if "quote_snapshot_missing" not in missing:
+            missing.append("quote_snapshot_missing")
+        out["missing_data"] = missing
+        out["quote_hydrated"] = False
+        out["quote_hydrate_error"] = str(exc)[:180]
+        return out
+    if not quote or not _payload_has_trade_price({"quote": quote}):
+        if "quote_snapshot_missing" not in missing:
+            missing.append("quote_snapshot_missing")
+        out["missing_data"] = missing
+        out["quote_hydrated"] = False
+        return out
+    merged_quote = {**quote, **dict(out.get("quote") or {})}
+    out["quote"] = merged_quote
+    out.setdefault("price", merged_quote.get("last") or merged_quote.get("price"))
+    out.setdefault("last", merged_quote.get("last") or merged_quote.get("price"))
+    out.setdefault("quote_ts", merged_quote.get("ts") or merged_quote.get("fetched_at"))
+    out.setdefault("name", merged_quote.get("name"))
+    out["quote_hydrated"] = True
+    evidence = list(out.get("evidence") or [])
+    evidence.append("quote_hydrated_from_market_service")
+    out["evidence"] = list(dict.fromkeys(evidence))
+    return out
+
+
 @app.post("/api/realtime-paper/tick")
 def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
+    payload = _hydrate_realtime_tick_payload(payload)
     return realtime_paper_engine_v323.tick(
         payload,
         manual_replay=bool(payload.get("manual_replay") or payload.get("paper_replay")),
@@ -3458,6 +3645,9 @@ def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
 def auto_trading_config_get() -> dict:
     latest = cache_state_service.get("auto_trading_config", "default")
     if latest.data:
+        if not isinstance(latest.data, dict) or "strategy_catalog" not in latest.data or "beginner_presets" not in latest.data:
+            upgraded = _build_auto_trading_config(latest.data if isinstance(latest.data, dict) else {})
+            return {"ok": True, "data": upgraded, "cache_status": latest.cache_status, "defaulted": False, "upgraded": True}
         return {"ok": True, "data": latest.data, "cache_status": latest.cache_status, "defaulted": False}
     config = _build_auto_trading_config()
     return {"ok": True, "data": config, "cache_status": latest.cache_status, "defaulted": True}

@@ -19,7 +19,8 @@ def build_auto_trading_workbench_ui() -> str:
 .module-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.module{display:block;padding:13px;background:#fbfcff}.module b{display:block;margin-bottom:6px}.module span{display:block;color:#7a8498;font-size:12px;line-height:1.55;overflow-wrap:anywhere}.module:hover{border-color:var(--cyan);background:#f0fffd}.notice{background:#fff7df;border:1px solid #ffe2a3;color:#8a5a00;border-radius:10px;padding:12px;line-height:1.65;font-size:13px;overflow-wrap:anywhere}.ok{color:var(--green)}.bad{color:var(--red)}.muted{color:#7a8498}.log{max-height:250px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fbfcff;padding:10px;font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;color:#334155;overflow-wrap:anywhere}.status-table{width:100%;border-collapse:collapse;table-layout:fixed}.status-table th,.status-table td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;font-size:13px;vertical-align:top;overflow-wrap:anywhere}.status-table th{color:#5c6678;background:#f8fafc}
 .decision{padding:24px;border-top:5px solid var(--cyan)}.decision h3{font-size:34px;margin:0;color:#111827}.decision p{line-height:1.75;color:#4a5568;margin:16px 0}.score-bars{display:grid;gap:10px}.bar{height:9px;background:#edf1f7;border-radius:99px;overflow:hidden}.bar span{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--blue))}.decision-grid{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);background:#fbfdff}.decision-grid div{padding:15px;text-align:center;border-right:1px solid var(--line)}.decision-grid div:last-child{border-right:0}.decision-grid b{display:block;font-size:20px;margin-top:7px;overflow-wrap:anywhere}
 .mini-card{border:1px solid var(--line);border-radius:10px;padding:11px;background:#fbfcff;margin-bottom:10px}.mini-card b{display:block;margin-bottom:6px}.source-link{color:#079d99;text-decoration:underline}.footer-note{margin-top:18px;color:#7a8498;font-size:12px;line-height:1.7}
-@media(max-width:1320px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav a{justify-content:center;padding:16px}.layout{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:780px){.app{grid-template-columns:1fr}.side{display:none}.top{position:static}.main{padding:18px}.kpis,.split,.decision-grid,.module-grid,.config-grid,.check-grid{grid-template-columns:1fr}}
+.quick-flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:0 0 18px}.quick-step{border:1px solid var(--line);background:#fff;border-radius:12px;padding:12px;box-shadow:var(--shadow);display:flex;gap:10px;align-items:flex-start}.quick-step b{display:grid;place-items:center;width:28px;height:28px;border-radius:999px;background:#e7fdfa;color:#078f89;flex:0 0 auto}.quick-step strong{display:block;font-size:14px;margin-bottom:3px}.quick-step span{display:block;color:#667085;font-size:12px;line-height:1.45;overflow-wrap:anywhere}.preset-row,.catalog-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.preset-row{margin:8px 0 12px}.preset{border:1px solid var(--line);background:#f8fafc;color:#334155;border-radius:999px;padding:7px 10px;font-weight:900;font-size:12px;cursor:pointer}.preset:hover,.preset.active{border-color:var(--cyan);background:#e9fffc;color:#078f89}.strategy-catalog{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:220px;overflow:auto;margin:8px 0 12px;padding-right:3px}.strategy-chip{border:1px solid var(--line);background:#fbfcff;border-radius:10px;padding:9px;display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:flex-start;cursor:pointer}.strategy-chip input{margin-top:2px}.strategy-chip b{display:block;font-size:13px;line-height:1.25}.strategy-chip span{display:block;color:#6b7280;font-size:11px;line-height:1.35;margin-top:3px;overflow-wrap:anywhere}.strategy-chip.on{border-color:#7dd3fc;background:#f0fdff}.helper-strip{border:1px solid #c8f3ee;background:#f1fffd;color:#0f766e;border-radius:12px;padding:10px 12px;font-size:13px;line-height:1.55;margin-bottom:12px}.action-row{display:flex;flex-wrap:wrap;gap:8px}.compact-link{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-weight:900;font-size:12px;color:#334155}.compact-link:hover{border-color:var(--cyan);color:#078f89}.card .value{font-size:22px}.decision h3{font-size:28px}.main{padding:22px 24px 34px}.layout{grid-template-columns:310px minmax(540px,1fr) 340px}.module-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:1320px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav a{justify-content:center;padding:16px}.layout{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}.quick-flow{grid-template-columns:repeat(2,minmax(0,1fr))}.strategy-catalog{grid-template-columns:1fr}}@media(max-width:780px){.app{grid-template-columns:1fr}.side{display:none}.top{position:static}.main{padding:18px}.quick-flow,.kpis,.split,.decision-grid,.module-grid,.config-grid,.check-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -48,6 +49,13 @@ def build_auto_trading_workbench_ui() -> str:
         <div><h1>V3.23 / Full Auto Trading Core</h1><p>回测、实时模拟、真实券商自动交易分离运行，共享统一评分、风控、订单、持仓、审计和图表标注内核。</p></div>
         <div class="row"><span class="pill warn">不伪造真实数据</span><button class="btn blue" onclick="refreshAll()">刷新状态</button></div>
       </div>
+      <section class="quick-flow">
+        <a class="quick-step" href="/screener"><b>1</b><span><strong>先筛选</strong>生成股票池、四面评分和风险标签。</span></a>
+        <a class="quick-step" href="#paperControl"><b>2</b><span><strong>一键配置</strong>选择新手预设或策略组合，自动写入风控参数。</span></a>
+        <a class="quick-step" href="/backtest"><b>3</b><span><strong>先回测</strong>验证收益、回撤、买卖点和跑输原因。</span></a>
+        <a class="quick-step" href="/realtime-paper"><b>4</b><span><strong>再模拟</strong>真实行情驱动 paper trading，记录订单和持仓。</span></a>
+        <a class="quick-step" href="/live-trading"><b>5</b><span><strong>后实盘</strong>默认关闭，必须券商可用、风控通过并人工确认。</span></a>
+      </section>
 
       <section class="grid kpis">
         <div class="card"><div class="label">实时模拟 session</div><div class="value" id="paperSessions">--</div><div class="sub" id="activeSessionText">可恢复、可暂停、可审计</div></div>
@@ -72,7 +80,7 @@ def build_auto_trading_workbench_ui() -> str:
               <a class="module" href="/docs-cn"><b>中文 API</b><span>接口中文说明、参数和调试入口。</span></a>
             </div>
           </div>
-          <div class="panel">
+          <div class="panel" id="paperControl">
             <h2>实时模拟控制</h2>
             <div class="panel-body">
               <div class="field"><label>模拟股票池</label><textarea id="symbols">300750, 600438, 510300</textarea></div>
@@ -81,7 +89,16 @@ def build_auto_trading_workbench_ui() -> str:
                 <div class="field"><label>刷新频率</label><select id="interval"><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="0">仅手动执行一轮</option></select></div>
               </div>
               <div class="notice" id="configSummary">自动交易配置尚未加载；可一键从最新筛选结果生成模拟配置。</div>
-              <div class="field"><label>策略组合（可多选，逗号/空格分隔）</label><textarea class="compact" id="strategyCombo">score_driven, ma_repair, macd_cross, volume_breakout, risk_control, event_driven, finance_quality, market_regime</textarea></div>
+              <div class="helper-strip">新手路径：先点“均衡入门”或“防守学习”，再点“一键配置”，最后先跑回测和实时模拟。真实交易入口只做确认队列和券商状态，不会默认下单。</div>
+              <div class="catalog-head"><b>新手预设</b><span class="muted">会自动填策略组合、仓位模型、止盈止损和最大回撤</span></div>
+              <div class="preset-row" id="presetRow">
+                <button class="preset" type="button" onclick="selectBeginnerPreset('balanced')">均衡入门</button>
+                <button class="preset" type="button" onclick="selectBeginnerPreset('defensive')">防守学习</button>
+                <button class="preset" type="button" onclick="selectBeginnerPreset('etf_rotation')">ETF轮动</button>
+              </div>
+              <div class="field"><label>策略组合（可多选，逗号/空格分隔）</label><textarea class="compact" id="strategyCombo">score_driven, low_position, avoid_chasing_high, ma_repair, macd_cross, volume_breakout, atr_risk, position_risk, risk_control, event_driven, finance_quality, market_regime</textarea></div>
+              <div class="catalog-head"><b>策略目录</b><span class="muted" id="strategyCatalogHint">加载中...</span></div>
+              <div id="strategyCatalog" class="strategy-catalog"></div>
               <div class="field"><label>策略参数 JSON（每个策略可单独配置仓位/止盈/止损/最大回撤）</label><textarea class="compact" id="strategyParamJson">{}</textarea></div>
               <div class="split">
                 <div class="field"><label>仓位模型</label><select id="positionSizing"><option value="score_weighted">评分加权</option><option value="atr_risk">ATR风险仓位</option><option value="volatility_target">波动率目标</option><option value="fixed_weight">固定权重</option><option value="core_satellite">核心-卫星</option><option value="cash_first_defensive">现金优先防守</option></select></div>
@@ -207,6 +224,52 @@ function parseStrategyParams(){
   try{return JSON.parse($('strategyParamJson')?.value||'{}')}
   catch(e){$('auditLog').textContent='策略参数 JSON 解析失败：'+e;return {}}
 }
+function currentComboSet(){return new Set(strategyCombo())}
+function setComboFromList(list){
+  const unique=[...new Set((list||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  $('strategyCombo').value=unique.join(', ');
+  if(lastAutoConfig)renderStrategyCatalog(lastAutoConfig);
+}
+function renderStrategyCatalog(cfg){
+  const box=$('strategyCatalog'),hint=$('strategyCatalogHint');
+  if(!box)return;
+  const catalog=cfg?.strategy_catalog||[];
+  const selected=currentComboSet();
+  if(hint)hint.textContent=`已选 ${selected.size} 项 / 可用 ${catalog.length} 项`;
+  if(!catalog.length){box.innerHTML='<div class="muted">策略目录暂未返回，仍可手动输入策略 key。</div>';return}
+  box.innerHTML=catalog.map(item=>{
+    const key=String(item.key||'');
+    const on=selected.has(key);
+    const name=esc(item.name||key);
+    const category=esc(item.category||'custom');
+    const desc=esc(item.description||item.beginner_note||'');
+    return `<label class="strategy-chip ${on?'on':''}" title="${desc}"><input type="checkbox" data-strategy-key="${esc(key)}" ${on?'checked':''} onchange="toggleStrategyFromCatalog(this)"><span><b>${name}</b><span>${category} · ${desc}</span></span></label>`;
+  }).join('');
+}
+function toggleStrategyFromCatalog(el){
+  const key=el.dataset.strategyKey;
+  const set=currentComboSet();
+  if(el.checked)set.add(key);else set.delete(key);
+  setComboFromList([...set]);
+}
+function selectBeginnerPreset(key){
+  const preset=lastAutoConfig?.beginner_presets?.[key];
+  if(!preset){$('auditLog').textContent='预设尚未加载，请先刷新状态或点击一键配置。';return}
+  document.querySelectorAll('.preset').forEach(x=>x.classList.remove('active'));
+  const btn=[...document.querySelectorAll('.preset')].find(x=>String(x.getAttribute('onclick')||'').includes(key));
+  if(btn)btn.classList.add('active');
+  if(preset.strategy_family)$('strategy').value=preset.strategy_family;
+  if(preset.position_sizing)$('positionSizing').value=preset.position_sizing;
+  setComboFromList(preset.strategy_combo||[]);
+  const r=preset.risk_controls||{};
+  if(r.stop_loss_pct!=null)$('stopLossPct').value=r.stop_loss_pct;
+  if(r.take_profit_pct!=null)$('takeProfitPct').value=r.take_profit_pct;
+  if(r.max_drawdown_pct!=null)$('maxDrawdownPct').value=r.max_drawdown_pct;
+  if(r.max_single_position_pct!=null)$('maxSinglePositionPct').value=r.max_single_position_pct;
+  if(r.max_total_position_pct!=null)$('maxTotalPositionPct').value=r.max_total_position_pct;
+  if(r.min_cash_pct!=null)$('minCashPct').value=r.min_cash_pct;
+  $('auditLog').textContent=`已套用预设：${preset.label||key}\n${preset.description||''}`;
+}
 function collectAutoConfig(){
   return {
     symbols:symbols(),
@@ -276,6 +339,7 @@ function applyAutoConfig(cfg){
   const d=cfg.data_requirements||{};
   if(d.require_fresh_quote!=null)$('requireFreshQuote').checked=!!d.require_fresh_quote;
   if(cfg.reset_account!=null && $('resetAccount'))$('resetAccount').checked=!!cfg.reset_account;
+  renderStrategyCatalog(cfg);
 }
 function renderConfigSummary(cfg, readiness){
   const gates=readiness?.gates||[];
@@ -392,7 +456,7 @@ async function manualTick(){
   if(!activeSessionId){$('auditLog').textContent='请先启动或恢复一个实时模拟 session。';return}
   const sym=symbols()[0]||'300750';
   const cfg=collectAutoConfig();
-  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:sym,manual_replay:true,source_page:'auto-trading',...cfg})});
+  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:sym,manual_replay:true,quote_hydrate_request:true,source_page:'auto-trading',...cfg})});
   $('auditLog').textContent=JSON.stringify(js,null,2);
   refreshAll();
 }

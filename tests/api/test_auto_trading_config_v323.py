@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -49,6 +49,69 @@ def test_auto_trading_one_click_config_and_start_paper():
     assert started["config"]["symbols"] == ["300750", "600438", "510300"]
     assert started["config"]["strategy_combo"] == ["score_driven", "ma_repair", "event_driven", "risk_control"]
     assert started["readiness"]["ready_for_paper"] is True
+
+
+def test_auto_trading_config_exposes_catalog_and_beginner_presets():
+    client = TestClient(api.app)
+
+    configured = client.post(
+        "/api/auto-trading/config/one-click",
+        json={"symbols": ["300750"], "strategy_combo": ["score_driven", "ma_repair", "risk_control"]},
+    ).json()
+
+    data = configured["data"]
+    assert configured["ok"] is True
+    assert "strategy_catalog" in data
+    assert len(data["strategy_catalog"]) >= 30
+    assert {"balanced", "defensive", "etf_rotation"}.issubset(set(data["beginner_presets"]))
+    assert data["strategy_parameters"]["ma_repair"]["name"]
+    assert data["strategy_parameters"]["ma_repair"]["category"]
+    assert data["strategy_parameters"]["risk_control"]["beginner_note"]
+    assert len(data["workflow_steps"]) == 5
+
+
+def test_realtime_paper_tick_hydrates_quote_when_price_missing(monkeypatch):
+    client = TestClient(api.app)
+    now = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+
+    def fake_get_quote(symbol: str, force_refresh: bool = False):
+        return api.Quote(
+            symbol=symbol,
+            name="Hydrated",
+            ts=now,
+            last=10.0,
+            pre_close=9.6,
+            open=9.8,
+            high=10.2,
+            low=9.7,
+            volume=100000,
+            amount=1000000,
+            change=0.4,
+            change_pct=4.17,
+            source="unit_quote",
+        )
+
+    monkeypatch.setattr(api.service, "get_quote", fake_get_quote)
+    started = client.post(
+        "/api/auto-trading/start-paper",
+        json={
+            "rows": [{"symbol": "399993", "total_score": 78, "technical_score": 84, "fundamental_score": 72, "information_score": 68, "market_score": 62}],
+            "symbols": ["399993"],
+            "strategy_combo": ["score_driven"],
+            "initial_cash": 100000,
+        },
+    ).json()
+
+    tick = client.post(
+        "/api/realtime-paper/tick",
+        json={"session_id": started["session"]["session_id"], "symbol": "399993", "manual_replay": True, "now": now.isoformat(), "news_ts": now.isoformat()},
+    ).json()
+
+    assert tick["ok"] is True
+    assert tick["signal"]["quote_price"] == 10.0
+    assert tick["signal"]["name"] == "Hydrated"
+    assert "quote_hydrated_from_market_service" in " ".join(tick["signal"]["evidence"])
+    assert tick["orders"]
 
 
 def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
