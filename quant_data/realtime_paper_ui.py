@@ -15,7 +15,7 @@ def build_realtime_paper_ui() -> str:
 </head>
 <body>
 <div class="app">
-  <header class="top"><span class="dot"></span><div class="brand">实时模拟交易</div><span class="pill">研究辅助，不构成投资建议 · paper_only · 不连接真实券商</span><div class="grow"></div><button class="btn2" onclick="location.href='/backtest'">历史回测</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></header>
+  <header class="top"><span class="dot"></span><div class="brand">实时模拟交易</div><span class="pill">研究辅助，不构成投资建议 · paper_only · 不连接真实券商</span><div class="grow"></div><button class="btn2" onclick="location.href='/auto-trading'">自动交易总控台</button><button class="btn2" onclick="location.href='/backtest'">历史回测</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></header>
   <aside class="side">
     <div class="section">监控标的，逗号或换行分隔</div><textarea id="symbols">300750,600438,510300</textarea>
     <div class="grid2">

@@ -326,7 +326,7 @@ table{width:100%;border-collapse:collapse}td{padding:10px 12px;border-bottom:1px
 td:first-child{width:72px;color:#93c5fd}td:nth-child(2){width:390px}code{color:#bfdbfe;background:#172033;border:1px solid #26364f;border-radius:8px;padding:3px 6px}
 .note{color:#9fb2d4;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:12px;margin:12px 0}
 a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</h1></header><main>
-<div class="note">这是中文 API 总览页。需要填写参数并直接调用接口时使用 <a href="/docs">/docs 交互调试页</a>；程序化调试可使用 <a href="/openapi.json">/openapi.json</a>；页面入口包括 <a href="/ui">行情监控</a>、<a href="/screener">筛选系统</a>、<a href="/backtest">交易回测</a>。</div>
+<div class="note">这是中文 API 总览页。需要填写参数并直接调用接口时使用 <a href="/docs">/docs 交互调试页</a>；程序化调试可使用 <a href="/openapi.json">/openapi.json</a>；页面入口包括 <a href="/auto-trading">自动交易总控台 V3.23</a>、<a href="/ui">行情监控</a>、<a href="/screener">筛选系统</a>、<a href="/backtest">交易回测</a>、<a href="/realtime-paper">实时模拟</a>、<a href="/live-trading">真实交易</a>、<a href="/trading-records">交易记录</a>、<a href="/data-center">数据中心</a>。</div>
 """ + "".join(sections) + "</main></body></html>"
 
 

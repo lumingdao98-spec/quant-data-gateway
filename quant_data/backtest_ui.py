@@ -19,7 +19,7 @@ def build_backtest_ui() -> str:
 </head>
 <body>
 <div class="app">
-  <div class="top"><span class="dot"></span><div class="brand">交易回测系统</div><span class="pill">legacy 快速验证 · 科学组合回测走 V3.20 API</span><div class="grow"></div><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></div>
+  <div class="top"><span class="dot"></span><div class="brand">交易回测系统</div><span class="pill">legacy 快速验证 · 科学组合回测走 V3.20 API</span><div class="grow"></div><button class="btn2" onclick="location.href='/auto-trading'">自动交易总控台</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></div>
   <aside class="side">
     <div class="section">标的代码</div>
     <input id="symbol" value="300750" />
@@ -297,7 +297,7 @@ def build_paper_ui() -> str:
 </style>
 </head>
 <body>
-<header><span class="dot"></span><div class="brand">纸面交易系统 V3.19</div><span class="disclaimer">研究辅助，不构成投资建议；未接入真实券商</span><div class="grow"></div><button class="btn2" onclick="location.href='/backtest'">交易回测</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button></header>
+<header><span class="dot"></span><div class="brand">纸面交易系统 V3.19</div><span class="disclaimer">研究辅助，不构成投资建议；未接入真实券商</span><div class="grow"></div><button class="btn2" onclick="location.href='/auto-trading'">自动交易总控台</button><button class="btn2" onclick="location.href='/backtest'">交易回测</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button></header>
 <main>
   <section class="panel">
     <div class="panel-h">纸面信号</div>

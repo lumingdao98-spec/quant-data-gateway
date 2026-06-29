@@ -57,6 +57,7 @@ def build_screener_ui() -> str:
     <span class="pill green">保留V1.9行情/分时/K线详情</span>
     <span class="pill yellow">筛选评分仅作研究辅助</span>
     <div class="grow"></div>
+    <button class="btn2" onclick="location.href='/auto-trading'">自动交易总控台</button>
     <button class="btn2" onclick="location.href='/ui'">行情监控</button>
     <button class="btn2" onclick="openBacktestPage()">交易回测</button>
     <button class="btn2" onclick="openSelectedDetail()">打开选中详情</button>
