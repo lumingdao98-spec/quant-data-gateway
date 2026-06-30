@@ -1255,13 +1255,42 @@ def _fill_screener_theme_from_profile(item: dict) -> None:
 @app.get("/api/timeline/{symbol}")
 def timeline(symbol: str, force: bool = False, refresh: bool = False) -> dict:
     force = bool(force or refresh)
+    market = _detect_market(symbol)
+    session = _market_session(market)
+    if not force and not session.get("can_refresh"):
+        cache_read = cache_state_service.get("quote_cache", symbol, allow_stale=True)
+        q = _quote_from_dict((cache_read.data or {}).get("quote") if cache_read.data else None)
+        points = _clean_intraday_points(service.cache.get_intraday(symbol))
+        if q is not None:
+            points = _filter_timeline_quote_range(points, q)
+        latest_date = _timeline_latest_date(points)
+        return {
+            "ok": True,
+            "server_time": datetime.now().isoformat(timespec="seconds"),
+            "force": force,
+            "symbol": symbol,
+            "session": session,
+            "quote": q.to_dict() if q else None,
+            "quote_extra": _quote_extra(q) if q else {},
+            "count": len(points),
+            "cache_fast_path": True,
+            "data_quality": {
+                "expected_date": None,
+                "latest_date": latest_date.isoformat() if latest_date else None,
+                "fresh_for_session": bool(points),
+                "stale_cache_rejected": False,
+                "note": "休市/午休不可刷新：已直接返回本地真实分时缓存；无缓存时前端显示缺失，不触发外部慢接口。",
+                "quote_cache_status": cache_read.cache_status,
+            },
+            "data": [p.to_dict() for p in points],
+        }
     q = None
     try:
         q = _enrich_quote_real(symbol, force=force)[0]
     except Exception:
         q = None
     points = _timeline_with_fallback(symbol, q, force=force)
-    market = q.market if q else _detect_market(symbol)
+    market = q.market if q else market
     expected_date = _timeline_expected_date(q)
     latest_date = _timeline_latest_date(points)
     stale_rejected = bool(expected_date is not None and latest_date is None)
@@ -1432,19 +1461,19 @@ DEFAULT_AUTO_STRATEGY_COMBO = [
 AUTO_TRADING_VIRTUAL_STRATEGIES = {
     "score_driven": {
         "key": "score_driven",
-        "name": "Daily score driver",
-        "category": "core",
+        "name": "日常评分驱动",
+        "category": "核心评分",
         "tags": ["score", "four-side"],
-        "description": "Use technical, fundamental, information, fund-flow and market-regime scores as the main decision anchor.",
+        "description": "把技术面、基本面、信息面、资金面和大盘情绪作为主决策锚点，适合作为新手默认策略骨架。",
         "default_weight": 1.0,
         "enabled": True,
     },
     "market_regime": {
         "key": "market_regime",
-        "name": "Market regime guard",
-        "category": "risk",
+        "name": "大盘情绪过滤",
+        "category": "风险控制",
         "tags": ["index", "sentiment", "risk"],
-        "description": "Reduce new exposure when broad-market mood, index trend or volatility is unfavorable.",
+        "description": "当上证、创业板、宽基指数趋势或市场波动不利时，降低新开仓和追高冲动。",
         "default_weight": 0.8,
         "enabled": True,
     },
@@ -1452,8 +1481,8 @@ AUTO_TRADING_VIRTUAL_STRATEGIES = {
 
 AUTO_TRADING_BEGINNER_PRESETS = {
     "balanced": {
-        "label": "Balanced starter",
-        "description": "Default path for users who want a simple score-driven workflow with visible stops and data guards.",
+        "label": "均衡入门",
+        "description": "给金融基础不多的用户使用：评分驱动为主，保留清晰止损、止盈、仓位上限和数据新鲜度检查。",
         "strategy_family": "hybrid",
         "position_sizing": "score_weighted",
         "strategy_combo": [
@@ -1470,8 +1499,8 @@ AUTO_TRADING_BEGINNER_PRESETS = {
         "risk_controls": {"stop_loss_pct": 8, "take_profit_pct": 18, "max_drawdown_pct": 18, "max_single_position_pct": 20, "max_total_position_pct": 80, "min_cash_pct": 15},
     },
     "defensive": {
-        "label": "Defensive paper trading",
-        "description": "Lower position cap, stricter stops and stronger data/risk filters for learning or weak-market periods.",
+        "label": "防守学习",
+        "description": "适合弱市或刚开始学习：单票仓位更低，止损更严格，重大负面、数据缺失和大盘风险优先拦截。",
         "strategy_family": "hybrid",
         "position_sizing": "cash_first_defensive",
         "strategy_combo": [
@@ -1488,8 +1517,8 @@ AUTO_TRADING_BEGINNER_PRESETS = {
         "risk_controls": {"stop_loss_pct": 6, "take_profit_pct": 12, "max_drawdown_pct": 10, "max_single_position_pct": 10, "max_total_position_pct": 45, "min_cash_pct": 35},
     },
     "etf_rotation": {
-        "label": "ETF momentum rotation",
-        "description": "ETF pool, momentum ranking, drawdown guard and paper validation before any live-confirm flow.",
+        "label": "ETF动量轮动",
+        "description": "维护 ETF 池，按动量和趋势排序，先通过回撤、滑点和实时模拟验证，再进入实盘确认流程。",
         "strategy_family": "etf_momentum_rotation",
         "position_sizing": "equal_risk_contribution",
         "strategy_combo": [
@@ -1518,7 +1547,7 @@ def _auto_strategy_catalog() -> list[dict]:
             continue
         row = dict(item)
         row["auto_default"] = key in DEFAULT_AUTO_STRATEGY_COMBO
-        row["beginner_note"] = "Can be enabled as a modular signal; final trades still pass scoring, data freshness and risk checks."
+        row["beginner_note"] = "可作为组合里的一个信号开关；最终买卖仍会经过统一评分、数据新鲜度和风控网关。"
         rows.append(row)
         seen.add(key)
     for key, item in AUTO_TRADING_VIRTUAL_STRATEGIES.items():
@@ -1526,7 +1555,7 @@ def _auto_strategy_catalog() -> list[dict]:
             continue
         row = dict(item)
         row["auto_default"] = key in DEFAULT_AUTO_STRATEGY_COMBO
-        row["beginner_note"] = "Core V3.23 workflow strategy."
+        row["beginner_note"] = "V3.23 自动交易工作流核心策略。"
         rows.insert(0, row)
     return rows
 
@@ -1969,11 +1998,11 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         "strategy_catalog": _auto_strategy_catalog(),
         "beginner_presets": _auto_beginner_presets(),
         "workflow_steps": [
-            {"step": 1, "key": "screen", "label": "Screen", "description": "Build or reuse a stock pool and four-side scores."},
-            {"step": 2, "key": "configure", "label": "Configure", "description": "Choose strategy combo, position sizing and risk limits."},
-            {"step": 3, "key": "paper", "label": "Paper trade", "description": "Run realtime simulation with real quotes and stored audit."},
-            {"step": 4, "key": "backtest", "label": "Backtest", "description": "Validate orders, fills, drawdown and score provenance."},
-            {"step": 5, "key": "live_confirm", "label": "Live confirm", "description": "Only after broker status, risk gateway and manual confirmation pass."},
+            {"step": 1, "key": "screen", "label": "筛选建池", "description": "复用最新筛选结果、自选池或手动股票池，形成四面评分和风险标签。"},
+            {"step": 2, "key": "configure", "label": "一键配置", "description": "选择策略组合、仓位模型、止盈止损、最大回撤和事件监控。"},
+            {"step": 3, "key": "backtest", "label": "历史回测", "description": "验证订单、成交、回撤、评分溯源和跑输/跑赢原因。"},
+            {"step": 4, "key": "paper", "label": "实时模拟", "description": "开盘期间用真实行情跑 paper trading，订单、持仓和审计落库。"},
+            {"step": 5, "key": "live_confirm", "label": "实盘确认", "description": "只有券商状态、风控网关和人工确认全部通过后才可能真实下单。"},
         ],
         "position_sizing": str(merged.get("position_sizing") or "score_weighted"),
         "risk_controls": risk_controls,
@@ -3645,10 +3674,8 @@ def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
 def auto_trading_config_get() -> dict:
     latest = cache_state_service.get("auto_trading_config", "default")
     if latest.data:
-        if not isinstance(latest.data, dict) or "strategy_catalog" not in latest.data or "beginner_presets" not in latest.data:
-            upgraded = _build_auto_trading_config(latest.data if isinstance(latest.data, dict) else {})
-            return {"ok": True, "data": upgraded, "cache_status": latest.cache_status, "defaulted": False, "upgraded": True}
-        return {"ok": True, "data": latest.data, "cache_status": latest.cache_status, "defaulted": False}
+        upgraded = _build_auto_trading_config(latest.data if isinstance(latest.data, dict) else {})
+        return {"ok": True, "data": upgraded, "cache_status": latest.cache_status, "defaulted": False, "upgraded": True}
     config = _build_auto_trading_config()
     return {"ok": True, "data": config, "cache_status": latest.cache_status, "defaulted": True}
 

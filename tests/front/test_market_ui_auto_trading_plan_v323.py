@@ -12,7 +12,7 @@ def test_ui_exposes_auto_trading_workbench_entry():
     assert "config/one-click" in client.get("/auto-trading").text
 
 
-def test_intraday_chart_uses_compressed_lunch_axis_and_clamps_tooltip():
+def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time").text
 
     assert "function isCnLunchGap" in html
@@ -20,11 +20,11 @@ def test_intraday_chart_uses_compressed_lunch_axis_and_clamps_tooltip():
     assert "function timeTradeFrac" in html
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
-    assert "lunchStart=11*60+30,lunchEnd=13*60,end=15*60+30" in html
+    assert "const start=9*60+30,end=15*60+30" in html
     assert "11:30/13:00" in html
-    assert "交易分钟连续" in html
-    assert "午休压缩" in html
-    assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,false)" in html
+    assert "固定09:30-15:30" in html
+    assert "午休断线" in html
+    assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,true)" in html
     assert "function clampChartTooltip" in html
     assert "Math.min(x,r.right-tw-8)" in html
     assert "markerBox.style.display=isTimeMode()?'none':'block'" in html

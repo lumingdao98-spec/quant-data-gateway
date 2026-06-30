@@ -6,7 +6,11 @@ import quant_data.api as api
 def test_auto_trading_workbench_page_visible():
     html = TestClient(api.app).get("/auto-trading").text
 
-    assert "V3.23 / Full Auto Trading Core" in html
+    assert "自动交易总控台" in html
+    assert "当前推荐路径" in html
+    assert "新手交易路径" in html
+    assert "strategySelectedSummary" in html
+    assert "renderStrategySelectionSummary" in html
     assert "QMT / PTrade" in html
     assert "paperControl" in html
     assert "quick-flow" in html

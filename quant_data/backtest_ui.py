@@ -16,6 +16,9 @@ def build_backtest_ui() -> str:
 .trade-drawer{position:fixed;inset:0;background:rgba(3,7,18,.58);z-index:30;display:none;justify-content:flex-end}.trade-drawer.open{display:flex}.trade-drawer-panel{width:min(960px,calc(100vw - 42px));height:100%;background:#0f172a;border-left:1px solid var(--line);box-shadow:-24px 0 60px rgba(0,0,0,.4);display:flex;flex-direction:column}.trade-drawer-body{padding:12px;overflow:auto;min-height:0}.drawer-summary{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:10px}.drawer-summary div{background:#121c31;border:1px solid #26364f;border-radius:10px;padding:8px}.drawer-summary span{display:block;color:#91a7c7;font-size:11px}.drawer-summary b{display:block;text-align:right;font-size:18px}.detail-table-wrap{max-height:none;height:calc(100vh - 170px)}.detail-table-wrap td:nth-child(8),.detail-table-wrap td:nth-child(9){white-space:normal;min-width:220px;text-align:left;line-height:1.45}.trade-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}@media(max-width:1180px){.drawer-summary{grid-template-columns:repeat(2,1fr)}.trade-drawer-panel{width:100vw}}
 .combo-box{margin-top:10px;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.combo-checks{display:grid;grid-template-columns:1fr;gap:6px;max-height:168px;overflow:auto;margin-top:8px}.combo-checks label{display:flex;gap:8px;align-items:flex-start;background:#121c31;border:1px solid #26364f;border-radius:10px;padding:7px;font-size:12px}.combo-checks input{width:auto;margin-top:2px}.combo-rules{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.v321-box{margin-top:10px;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.v321-box .mini{display:grid;grid-template-columns:1fr 1fr;gap:8px}.v321-box label.check{display:flex;gap:8px;align-items:center;font-size:12px;color:#b6c7e2;margin-top:8px}.v321-box label.check input{width:auto}.trade-drawer-panel{width:min(1180px,calc(100vw - 24px));max-width:100vw}.table-wrap.trade-table-wrap{max-height:300px;overflow:auto}.trade-table{min-width:1360px;table-layout:auto}.trade-table td.reason,.trade-table th.reason{white-space:normal;min-width:320px;text-align:left;line-height:1.45}.trade-table td{vertical-align:top}.detail-table-wrap{overflow:auto}.detail-table-wrap .trade-table{min-width:1420px}.param-cn{margin-top:8px;background:#0d1428;border:1px solid #26364f;border-radius:10px;padding:8px;color:#b6c7e2;font-size:12px;line-height:1.55}.param-cn b{color:#bfdbfe}.main-trade-panel{display:none}.main-trade-panel .panel-b{padding:10px}
 </style>
+<style>
+.auto-config-box{margin-top:10px;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.auto-config-box .head{display:flex;align-items:center;justify-content:space-between;gap:8px}.auto-config-box .mini-line{font-size:12px;color:#9fb4d4;line-height:1.5;margin-top:6px;overflow-wrap:anywhere}.auto-catalog{display:grid;grid-template-columns:1fr;gap:6px;max-height:146px;overflow:auto;margin-top:8px;padding-right:2px}.auto-catalog label{display:flex;gap:8px;align-items:flex-start;background:#121c31;border:1px solid #26364f;border-radius:10px;padding:7px;font-size:12px;line-height:1.35}.auto-catalog input{width:auto;margin-top:2px}.auto-catalog b{color:#bfdbfe}.auto-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+</style>
 </head>
 <body>
 <div class="app">
@@ -71,6 +74,12 @@ def build_backtest_ui() -> str:
         <div><div class="section">信息面权重</div><input id="informationWeight" type="number" value="0.24" min="0" max="1" step="0.01"></div>
         <div><div class="section">大盘权重</div><input id="marketWeight" type="number" value="0.14" min="0" max="1" step="0.01"></div>
       </div>
+    </div>
+    <div class="auto-config-box">
+      <div class="head"><b>V3.23 自动交易配置</b><button class="link-btn" onclick="loadAutoConfigForBacktest(true)">读取总控台</button></div>
+      <div id="autoBacktestSummary" class="mini-line">读取总控台配置后，可把筛选策略、仓位模型、止盈止损、最大回撤和信息节点一起带入回测。</div>
+      <div id="autoStrategyCatalog" class="auto-catalog"></div>
+      <div class="auto-actions"><button class="btn2" onclick="applyAutoConfigToBacktest(backtestAutoConfig)">应用到参数</button><button class="btn2" onclick="runAutoConfigBacktest()">用配置回测</button><button class="btn2" onclick="location.href='/auto-trading'">打开总控台</button></div>
     </div>
     <div class="row" style="margin-top:12px"><button id="runBtn" class="btn-green" onclick="runBacktest()">运行回测</button><button class="btn2" onclick="fillSelected()">使用筛选选中</button></div>
     <div class="row" style="margin-top:8px"><button class="btn2" onclick="compareStrategies()">比较策略收益</button><button class="btn2" onclick="applyScorePreset()">宽松评分</button></div>
@@ -134,6 +143,47 @@ function cls(n){return Number(n)>=0?'up':'down'}
 function fillSelected(){try{const s=localStorage.getItem('qdg_screener_selected');if(s){$('symbol').value=s;log('已读取筛选页选中标的 '+s)}else{log('未找到筛选页选中标的')}}catch(e){log('读取失败 '+e)}}
 function selectedComboStrategies(){return Array.from(document.querySelectorAll('.combo-strategy:checked')).map(x=>x.value)}
 function toggleComboBox(){const show=$('strategy').value==='combo_signal';$('comboBox').style.display=show?'block':'none'}
+let backtestAutoConfig=null;
+function splitListText(v){return String(v||'').split(/[\s,，;；、|]+/).map(s=>s.trim()).filter(Boolean)}
+function setComboStrategies(keys){
+  const chosen=new Set(keys||[]);
+  document.querySelectorAll('.combo-strategy').forEach(x=>{x.checked=chosen.has(x.value)});
+  if($('autoStrategyCatalog'))$('autoStrategyCatalog').querySelectorAll('.combo-strategy').forEach(x=>{x.checked=chosen.has(x.value)});
+}
+function renderAutoStrategyCatalog(cfg){
+  const box=$('autoStrategyCatalog');if(!box)return;
+  const catalog=cfg?.strategy_catalog||[],selected=new Set((cfg?.strategy_combo&&cfg.strategy_combo.length)?cfg.strategy_combo:selectedComboStrategies());
+  if(!catalog.length){box.innerHTML='<div class="muted">策略目录暂未返回，仍可使用上方固定策略。</div>';return}
+  box.innerHTML=catalog.map(item=>{const key=String(item.key||''),on=selected.has(key);return `<label title="${esc(item.description||item.beginner_note||'')}"><input class="combo-strategy" type="checkbox" value="${esc(key)}" ${on?'checked':''}><span><b>${esc(item.name||key)}</b><br><span class="muted">${esc(item.category||'策略')} · ${esc(item.beginner_note||item.description||'')}</span></span></label>`}).join('');
+}
+function renderAutoBacktestSummary(cfg){
+  if(!$('autoBacktestSummary'))return;
+  const combo=(cfg?.strategy_combo||[]).slice(0,8).join('、')||'--',r=cfg?.risk_controls||{};
+  $('autoBacktestSummary').innerHTML=`股票池 ${(cfg?.symbols||[]).slice(0,6).join(', ')||'--'}；策略 ${esc(combo)}；仓位 ${esc(cfg?.position_sizing||'--')}；止损/止盈/最大回撤 ${esc(r.stop_loss_pct??'--')}% / ${esc(r.take_profit_pct??'--')}% / ${esc(r.max_drawdown_pct??'--')}%；财报/公告/重大负面将作为事件风控进入参数。`;
+}
+function applyAutoConfigToBacktest(cfg){
+  if(!cfg)return;
+  backtestAutoConfig=cfg;
+  if((cfg.symbols||[]).length)$('symbol').value=cfg.symbols[0];
+  $('strategy').value='combo_signal';
+  if((cfg.strategy_combo||[]).length)setComboStrategies(cfg.strategy_combo);
+  if(cfg.position_sizing&&$('sizingMode'))$('sizingMode').value=cfg.position_sizing;
+  if(cfg.initial_cash!=null)$('cash').value=cfg.initial_cash;
+  const r=cfg.risk_controls||{};
+  if(r.stop_loss_pct!=null)$('stop').value=r.stop_loss_pct;
+  if(r.take_profit_pct!=null)$('take').value=r.take_profit_pct;
+  if(r.max_single_position_pct!=null)$('position').value=r.max_single_position_pct;
+  const w=cfg.score_weights||{};
+  if(w.fundamental!=null)$('fundamentalWeight').value=w.fundamental;
+  if(w.technical!=null)$('technicalWeight').value=w.technical;
+  if(w.information!=null)$('informationWeight').value=w.information;
+  if(w.market_regime!=null)$('marketWeight').value=w.market_regime;
+  toggleComboBox();renderAutoStrategyCatalog(cfg);renderAutoBacktestSummary(cfg);
+}
+async function loadAutoConfigForBacktest(apply=false){
+  try{const r=await fetch('/api/auto-trading/config',{cache:'no-store'});const js=await r.json();backtestAutoConfig=js.data||{};renderAutoStrategyCatalog(backtestAutoConfig);renderAutoBacktestSummary(backtestAutoConfig);if(apply)applyAutoConfigToBacktest(backtestAutoConfig);log('已读取总控台自动交易配置')}catch(e){$('autoBacktestSummary').textContent='总控台配置读取失败：'+e}
+}
+async function runAutoConfigBacktest(){if(!backtestAutoConfig)await loadAutoConfigForBacktest(true);applyAutoConfigToBacktest(backtestAutoConfig);await runBacktest()}
 function params(){
   const p=new URLSearchParams();
   p.set('legacy','true');
@@ -233,6 +283,7 @@ if(q.get('horizon')&&$('horizonMode'))$('horizonMode').value=q.get('horizon');
 if(q.get('compound_returns')&&$('compoundReturns'))$('compoundReturns').checked=q.get('compound_returns')!=='false';
 [['dcaAmount','dca_amount'],['pyramidStep','pyramid_step_pct'],['pyramidAdds','pyramid_max_adds'],['atrRisk','atr_risk_pct'],['fundamentalWeight','fundamental_weight'],['technicalWeight','technical_weight'],['informationWeight','information_weight'],['marketWeight','market_weight']].forEach(([id,key])=>{if(q.get(key)&&$(id))$(id).value=q.get(key)});
 toggleComboBox();
+loadAutoConfigForBacktest(false).catch(e=>log('总控台配置初始化失败 '+e));
 window.addEventListener('resize',()=>{if(lastBacktest)render(lastBacktest)});
 if(q.get('autorun')==='1'||q.get('symbol'))runBacktest();
 </script>
