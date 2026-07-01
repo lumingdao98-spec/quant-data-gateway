@@ -76,17 +76,17 @@ def build_auto_trading_workbench_ui() -> str:
         <button class="coach-action primary" type="button" onclick="oneClickConfig()">一键生成配置<small>从股票池和预设写入策略/仓位/风控</small></button>
         <button class="coach-action" type="button" onclick="runConfigBacktest()">跑一次回测<small>先看收益、回撤和买卖点是否合理</small></button>
         <button class="coach-action" type="button" onclick="startPaper()">启动实时模拟<small>开盘用真实行情，休市只做观察回放</small></button>
-        <button class="coach-action" type="button" onclick="location.href='/trading-records'">查看交易记录<small>订单、成交、持仓、审计统一查看</small></button>
+        <button class="coach-action" type="button" onclick="openWorkspaceKey('records','交易记录')">查看交易记录<small>订单、成交、持仓、审计统一查看</small></button>
       </section>
       <nav class="module-jump">
-        <a class="primary" href="/screener">筛选建池</a>
+        <a class="primary" href="/screener" onclick="openWorkspaceKey('screener','筛选建池');return false">筛选建池</a>
         <a href="#paperControl">一键配置</a>
-        <a href="/backtest">历史回测</a>
-        <a href="/realtime-paper">实时模拟</a>
-        <a href="/live-trading">实盘确认</a>
-        <a href="/trading-records">交易记录</a>
-        <a href="/data-center">数据中心</a>
-        <a href="/docs-cn">中文 API</a>
+        <a href="/backtest" onclick="openWorkspaceKey('backtest','历史回测');return false">历史回测</a>
+        <a href="/realtime-paper" onclick="openWorkspaceKey('realtime','实时模拟');return false">实时模拟</a>
+        <a href="/live-trading" onclick="openWorkspaceKey('live','实盘确认');return false">实盘确认</a>
+        <a href="/trading-records" onclick="openWorkspaceKey('records','交易记录');return false">交易记录</a>
+        <a href="/data-center" onclick="openWorkspaceKey('data','数据中心');return false">数据中心</a>
+        <a href="/docs-cn" onclick="openWorkspaceKey('docs','中文 API');return false">中文 API</a>
       </nav>
       <section class="embedded-workspace" id="embeddedWorkspace">
         <div class="workspace-head">
@@ -98,15 +98,15 @@ def build_auto_trading_workbench_ui() -> str:
           </div>
         </div>
         <div class="workspace-tabs" id="workspaceTabs">
-          <button class="workspace-tab active" type="button" data-url="/screener" onclick="openWorkspaceModule('/screener','股票筛选',this)">股票筛选</button>
-          <button class="workspace-tab" type="button" data-url="/ui?symbol=300750&frame=time" onclick="openWorkspaceModule('/ui?symbol=300750&frame=time','行情监控/分时',this)">行情监控</button>
-          <button class="workspace-tab" type="button" data-url="/detail/300750?frame=1d" onclick="openWorkspaceModule('/detail/300750?frame=1d','详情/K线',this)">详情/K线</button>
-          <button class="workspace-tab" type="button" data-url="/backtest?symbol=300750" onclick="openWorkspaceModule('/backtest?symbol=300750','历史回测',this)">历史回测</button>
-          <button class="workspace-tab" type="button" data-url="/realtime-paper" onclick="openWorkspaceModule('/realtime-paper','实时模拟',this)">实时模拟</button>
-          <button class="workspace-tab" type="button" data-url="/live-trading" onclick="openWorkspaceModule('/live-trading','真实交易',this)">真实交易</button>
-          <button class="workspace-tab" type="button" data-url="/trading-records" onclick="openWorkspaceModule('/trading-records','交易记录',this)">交易记录</button>
-          <button class="workspace-tab" type="button" data-url="/data-center" onclick="openWorkspaceModule('/data-center','数据中心',this)">数据中心</button>
-          <button class="workspace-tab" type="button" data-url="/docs-cn" onclick="openWorkspaceModule('/docs-cn','中文 API',this)">中文 API</button>
+          <button class="workspace-tab active" type="button" data-module="screener" data-url="/screener" data-label="股票筛选" onclick="openWorkspaceKey('screener','股票筛选',this)">股票筛选</button>
+          <button class="workspace-tab" type="button" data-module="quote" data-url="/ui?symbol=300750&frame=time" data-label="行情监控/分时" onclick="openWorkspaceKey('quote','行情监控/分时',this)">行情监控</button>
+          <button class="workspace-tab" type="button" data-module="detail" data-url="/detail/300750?frame=1d" data-label="详情/K线" onclick="openWorkspaceKey('detail','详情/K线',this)">详情/K线</button>
+          <button class="workspace-tab" type="button" data-module="backtest" data-url="/backtest?symbol=300750" data-label="历史回测" onclick="openWorkspaceKey('backtest','历史回测',this)">历史回测</button>
+          <button class="workspace-tab" type="button" data-module="realtime" data-url="/realtime-paper" data-label="实时模拟" onclick="openWorkspaceKey('realtime','实时模拟',this)">实时模拟</button>
+          <button class="workspace-tab" type="button" data-module="live" data-url="/live-trading" data-label="真实交易" onclick="openWorkspaceKey('live','真实交易',this)">真实交易</button>
+          <button class="workspace-tab" type="button" data-module="records" data-url="/trading-records" data-label="交易记录" onclick="openWorkspaceKey('records','交易记录',this)">交易记录</button>
+          <button class="workspace-tab" type="button" data-module="data" data-url="/data-center" data-label="数据中心" onclick="openWorkspaceKey('data','数据中心',this)">数据中心</button>
+          <button class="workspace-tab" type="button" data-module="docs" data-url="/docs-cn" data-label="中文 API" onclick="openWorkspaceKey('docs','中文 API',this)">中文 API</button>
         </div>
         <div class="workspace-frame-wrap">
           <iframe id="workspaceFrame" class="workspace-frame" title="V3.23 自动交易内置模块工作区" src="/screener"></iframe>
@@ -121,33 +121,33 @@ def build_auto_trading_workbench_ui() -> str:
         <div class="path-card">
           <strong><i>1</i>从筛选生成交易配置</strong>
           <p>把最新筛选结果、自选池或手动股票池转换成策略组合，自动带入仓位、止盈止损、回撤和事件监控。</p>
-          <div class="mini-actions"><button class="primary" onclick="loadLatestScreenerConfig()">读取最新筛选</button><button onclick="oneClickConfig()">一键配置</button><a href="/screener">去筛选</a></div>
+          <div class="mini-actions"><button class="primary" onclick="loadLatestScreenerConfig()">读取最新筛选</button><button onclick="oneClickConfig()">一键配置</button><a href="/screener" onclick="openWorkspaceKey('screener','去筛选');return false">去筛选</a></div>
           <div class="workflow-status"><span>股票池 <b id="wfSymbols">--</b></span><span>策略 <b id="wfCombo">--</b></span><span>仓位 <b id="wfSizing">--</b></span><span>事件 <b id="wfEvents">开启</b></span></div>
         </div>
         <div class="path-card">
           <strong><i>2</i>先回测，不直接实盘</strong>
           <p>用同一套配置回放历史 K 线，检查收益、最大回撤、交易次数、买卖点和跑输原因。</p>
-          <div class="mini-actions"><button class="blue" onclick="runConfigBacktest()">用配置回测</button><a href="/backtest">打开回测页</a></div>
+          <div class="mini-actions"><button class="blue" onclick="runConfigBacktest()">用配置回测</button><a href="/backtest" onclick="openWorkspaceKey('backtest','打开回测页');return false">打开回测页</a></div>
         </div>
         <div class="path-card">
           <strong><i>3</i>再实时模拟</strong>
           <p>开盘时按真实行情生成 paper 信号；休市只做观察回放，不伪装真实成交。订单、持仓、标注和审计都会落库。</p>
-          <div class="mini-actions"><button class="primary" onclick="startPaper()">启动模拟</button><button onclick="manualTick()">执行一轮</button><a href="/realtime-paper">打开模拟页</a></div>
+          <div class="mini-actions"><button class="primary" onclick="startPaper()">启动模拟</button><button onclick="manualTick()">执行一轮</button><a href="/realtime-paper" onclick="openWorkspaceKey('realtime','打开模拟页');return false">打开模拟页</a></div>
           <div class="workflow-status"><span>session <b id="wfSession">--</b></span><span>记录 <b id="wfRecords">--</b></span><span>确认 <b id="wfConfirm">--</b></span><span>数据 <b id="wfData">--</b></span></div>
         </div>
         <div class="path-card">
           <strong><i>4</i>最后才进入实盘确认</strong>
           <p>QMT/PTrade 默认关闭。未授权只显示状态；真实订单必须通过风控、确认队列和 kill switch 检查。</p>
-          <div class="mini-actions"><a class="red" href="/live-trading">实盘确认页</a><a href="/trading-records">交易记录</a><a href="/data-center">数据中心</a></div>
+          <div class="mini-actions"><a class="red" href="/live-trading" onclick="openWorkspaceKey('live','实盘确认页');return false">实盘确认页</a><a href="/trading-records" onclick="openWorkspaceKey('records','交易记录');return false">交易记录</a><a href="/data-center" onclick="openWorkspaceKey('data','数据中心');return false">数据中心</a></div>
           <div class="workflow-status"><span>券商 <b id="wfBroker">--</b></span><span>实盘 <b id="wfLive">关闭</b></span><span>风控 <b id="wfRisk">确认</b></span><span>Kill <b id="wfKill">--</b></span></div>
         </div>
       </section>
       <section class="quick-flow">
-        <a class="quick-step" href="/screener"><b>1</b><span><strong>先筛选</strong>生成股票池、四面评分和风险标签。</span></a>
+        <a class="quick-step" href="/screener" onclick="openWorkspaceKey('screener','先筛选');return false"><b>1</b><span><strong>先筛选</strong>生成股票池、四面评分和风险标签。</span></a>
         <a class="quick-step" href="#paperControl"><b>2</b><span><strong>一键配置</strong>选择新手预设或策略组合，自动写入风控参数。</span></a>
-        <a class="quick-step" href="/backtest"><b>3</b><span><strong>先回测</strong>验证收益、回撤、买卖点和跑输原因。</span></a>
-        <a class="quick-step" href="/realtime-paper"><b>4</b><span><strong>再模拟</strong>真实行情驱动 paper trading，记录订单和持仓。</span></a>
-        <a class="quick-step" href="/live-trading"><b>5</b><span><strong>后实盘</strong>默认关闭，必须券商可用、风控通过并人工确认。</span></a>
+        <a class="quick-step" href="/backtest" onclick="openWorkspaceKey('backtest','先回测');return false"><b>3</b><span><strong>先回测</strong>验证收益、回撤、买卖点和跑输原因。</span></a>
+        <a class="quick-step" href="/realtime-paper" onclick="openWorkspaceKey('realtime','再模拟');return false"><b>4</b><span><strong>再模拟</strong>真实行情驱动 paper trading，记录订单和持仓。</span></a>
+        <a class="quick-step" href="/live-trading" onclick="openWorkspaceKey('live','后实盘');return false"><b>5</b><span><strong>后实盘</strong>默认关闭，必须券商可用、风控通过并人工确认。</span></a>
       </section>
 
       <section class="grid kpis">
@@ -163,20 +163,20 @@ def build_auto_trading_workbench_ui() -> str:
           <div class="panel">
             <h2>模块入口</h2>
             <div class="panel-body module-grid">
-              <a class="module" href="/screener"><b>股票筛选</b><span>四面评分、策略适配、加入回测/模拟/实盘观察池。</span></a>
-              <a class="module" href="/detail/300750"><b>详情决策</b><span>分时、K线、信息面、基本面、资金面和风控原因。</span></a>
-              <a class="module" href="/backtest"><b>历史回测</b><span>订单、成交、买卖点、收益诊断和评分溯源。</span></a>
-              <a class="module" href="/realtime-paper"><b>实时模拟</b><span>真实行情驱动的 paper trading session。</span></a>
-              <a class="module" href="/live-trading"><b>真实交易</b><span>QMT/PTrade 状态、确认队列、kill switch。</span></a>
-              <a class="module" href="/trading-records"><b>交易记录</b><span>回测、模拟、实盘统一流水和审计。</span></a>
-              <a class="module" href="/data-center"><b>数据中心</b><span>缓存、缺失字段、数据源错误、后台任务。</span></a>
-              <a class="module" href="/docs-cn"><b>中文 API</b><span>接口中文说明、参数和调试入口。</span></a>
+              <a class="module" href="/screener" onclick="openWorkspaceKey('screener','股票筛选');return false"><b>股票筛选</b><span>四面评分、策略适配、加入回测/模拟/实盘观察池。</span></a>
+              <a class="module" href="/detail/300750" onclick="openWorkspaceKey('detail','详情决策');return false"><b>详情决策</b><span>分时、K线、信息面、基本面、资金面和风控原因。</span></a>
+              <a class="module" href="/backtest" onclick="openWorkspaceKey('backtest','历史回测');return false"><b>历史回测</b><span>订单、成交、买卖点、收益诊断和评分溯源。</span></a>
+              <a class="module" href="/realtime-paper" onclick="openWorkspaceKey('realtime','实时模拟');return false"><b>实时模拟</b><span>真实行情驱动的 paper trading session。</span></a>
+              <a class="module" href="/live-trading" onclick="openWorkspaceKey('live','真实交易');return false"><b>真实交易</b><span>QMT/PTrade 状态、确认队列、kill switch。</span></a>
+              <a class="module" href="/trading-records" onclick="openWorkspaceKey('records','交易记录');return false"><b>交易记录</b><span>回测、模拟、实盘统一流水和审计。</span></a>
+              <a class="module" href="/data-center" onclick="openWorkspaceKey('data','数据中心');return false"><b>数据中心</b><span>缓存、缺失字段、数据源错误、后台任务。</span></a>
+              <a class="module" href="/docs-cn" onclick="openWorkspaceKey('docs','中文 API');return false"><b>中文 API</b><span>接口中文说明、参数和调试入口。</span></a>
             </div>
           </div>
           <div class="panel" id="paperControl">
             <h2>实时模拟控制</h2>
             <div class="panel-body">
-              <div class="field"><label>模拟股票池</label><textarea id="symbols">300750, 600438, 510300</textarea></div>
+              <div class="field"><label>模拟股票池</label><textarea id="symbols" oninput="syncWorkspaceTabUrls()">300750, 600438, 510300</textarea></div>
               <div class="split">
                 <div class="field"><label>策略族</label><select id="strategy"><option value="hybrid">综合评分</option><option value="etf_momentum_rotation">ETF 动量轮动</option><option value="score_reversal">评分拐点修复</option><option value="core_satellite">核心-卫星</option></select></div>
                 <div class="field"><label>刷新频率</label><select id="interval"><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="0">仅手动执行一轮</option></select></div>
@@ -290,7 +290,7 @@ def build_auto_trading_workbench_ui() -> str:
               </div>
               <div class="field"><label>QMT_PATH / PTRADE_PATH</label><input readonly placeholder="从环境变量读取，不在页面保存"></div>
               <div class="field"><label>账号/会话</label><input readonly placeholder="从环境变量读取，不提交 Git"></div>
-              <div class="row"><button class="btn blue" onclick="connectLive()">连接检查</button><button class="btn red" onclick="killLive()">Live Kill Switch</button><a class="btn ghost" href="/live-trading">进入实盘页</a></div>
+              <div class="row"><button class="btn blue" onclick="connectLive()">连接检查</button><button class="btn red" onclick="killLive()">Live Kill Switch</button><a class="btn ghost" href="/live-trading" onclick="openWorkspaceKey('live','进入实盘页');return false">进入实盘页</a></div>
             </div>
           </div>
           <div class="panel">
@@ -319,7 +319,34 @@ let lastAutoConfig=null;
 let currentWorkspaceUrl='/screener';
 async function api(url,opt){const r=await fetch(url,opt);try{return await r.json()}catch(e){return {ok:false,message:String(e),status:r.status}}}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function primarySymbol(){const list=typeof symbols==='function'?symbols():splitListText($('symbols')?.value);return (list[0]||'300750').trim()||'300750'}
+function workspaceUrl(key){
+  const sym=encodeURIComponent(primarySymbol());
+  const map={
+    screener:'/screener',
+    quote:'/ui?symbol='+sym+'&frame=time',
+    detail:'/detail/'+sym+'?frame=1d',
+    backtest:'/backtest?symbol='+sym,
+    realtime:'/realtime-paper',
+    live:'/live-trading',
+    records:'/trading-records',
+    data:'/data-center',
+    docs:'/docs-cn',
+  };
+  return map[key]||'/screener';
+}
+function syncWorkspaceTabUrls(){
+  document.querySelectorAll('#workspaceTabs .workspace-tab[data-module]').forEach(tab=>{
+    tab.dataset.url=workspaceUrl(tab.dataset.module);
+  });
+}
+function openWorkspaceKey(key,label,btn){
+  syncWorkspaceTabUrls();
+  const tab=btn||document.querySelector(`#workspaceTabs .workspace-tab[data-module="${key}"]`);
+  openWorkspaceModule(workspaceUrl(key),label||tab?.dataset.label||key,tab);
+}
 function workspaceTabForUrl(url){
+  syncWorkspaceTabUrls();
   const tabs=[...document.querySelectorAll('#workspaceTabs .workspace-tab')];
   return tabs.find(t=>t.dataset.url===url)||tabs.find(t=>url.startsWith((t.dataset.url||'').split('?')[0]));
 }
@@ -338,6 +365,7 @@ function openWorkspaceModule(url,label,btn){
 function reloadWorkspaceFrame(){const frame=$('workspaceFrame');if(frame)frame.src=frame.src}
 function openWorkspaceInNewWindow(){window.open(currentWorkspaceUrl||$('workspaceFrame')?.getAttribute('src')||'/screener','_blank','noopener')}
 function initWorkspaceFrame(){
+  syncWorkspaceTabUrls();
   let saved='/screener',label='股票筛选';
   try{saved=localStorage.getItem('v323_auto_workspace_url')||saved;label=localStorage.getItem('v323_auto_workspace_label')||label}catch(e){}
   const btn=workspaceTabForUrl(saved);
@@ -723,7 +751,7 @@ async function startPaper(){
   const js=await api('/api/auto-trading/start-paper',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   activeSessionId=sessionIdOf(js.session)||activeSessionId;
   $('auditLog').textContent=JSON.stringify(js,null,2);
-  openWorkspaceModule('/realtime-paper','实时模拟',workspaceTabForUrl('/realtime-paper'));
+  openWorkspaceKey('realtime','实时模拟');
   refreshAll();
 }
 async function manualTick(){
@@ -740,7 +768,7 @@ async function runConfigBacktest(){
   const js=await api('/api/backtest/v323/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({symbol:sym,symbols:[sym],limit:520,use_auto_config:true,auto_trading_config:cfg,source_page:'auto-trading'})});
   $('auditLog').textContent=JSON.stringify(js,null,2);
   const url='/backtest?symbol='+encodeURIComponent(sym)+(js.run_id?'&run_id='+encodeURIComponent(js.run_id):'');
-  openWorkspaceModule(url,'历史回测结果',workspaceTabForUrl('/backtest?symbol=300750'));
+  openWorkspaceModule(url,'历史回测结果',workspaceTabForUrl('/backtest'));
 }
 async function pausePaper(){if(!activeSessionId)return;$('auditLog').textContent=JSON.stringify(await api(`/api/realtime-paper/sessions/${encodeURIComponent(activeSessionId)}/pause`,{method:'POST'}),null,2);refreshAll()}
 async function resumePaper(){if(!activeSessionId)return;$('auditLog').textContent=JSON.stringify(await api(`/api/realtime-paper/sessions/${encodeURIComponent(activeSessionId)}/resume`,{method:'POST'}),null,2);refreshAll()}

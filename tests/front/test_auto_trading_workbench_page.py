@@ -19,9 +19,16 @@ def test_auto_trading_workbench_page_visible():
     assert "workspaceFrame" in html
     assert "workspaceTabs" in html
     assert "openWorkspaceModule" in html
+    assert "openWorkspaceKey" in html
+    assert "workspaceUrl" in html
+    assert "primarySymbol" in html
+    assert "syncWorkspaceTabUrls" in html
     assert "reloadWorkspaceFrame" in html
     assert "openWorkspaceInNewWindow" in html
     assert 'src="/screener"' in html
+    assert 'data-module="quote"' in html
+    assert 'data-module="detail"' in html
+    assert 'data-module="backtest"' in html
     assert "data-url=\"/ui?symbol=300750&frame=time\"" in html
     assert "data-url=\"/detail/300750?frame=1d\"" in html
     assert "data-url=\"/backtest?symbol=300750\"" in html
@@ -45,6 +52,14 @@ def test_auto_trading_workbench_page_visible():
     assert "strategyParamRows" in html
     assert "renderStrategyParamEditor" in html
     assert "collectStrategyParamEditor" in html
+    assert 'oninput="syncWorkspaceTabUrls()"' in html
+    assert "openWorkspaceKey('screener','股票筛选')" in html
+    assert "openWorkspaceKey('backtest','历史回测')" in html
+    assert "openWorkspaceKey('realtime','实时模拟')" in html
+    assert "openWorkspaceKey('live','真实交易')" in html
+    assert "openWorkspaceKey('records','交易记录')" in html
+    assert "openWorkspaceKey('data','数据中心')" in html
+    assert "openWorkspaceKey('docs','中文 API')" in html
     assert "dimensionStrip" in html
     assert "renderScoreDimensions" in html
     assert "positionSizing" in html
