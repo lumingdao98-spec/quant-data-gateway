@@ -15,6 +15,20 @@ def test_auto_trading_workbench_page_visible():
     assert "paperControl" in html
     assert "quick-flow" in html
     assert "quick-step" in html
+    assert "embeddedWorkspace" in html
+    assert "workspaceFrame" in html
+    assert "workspaceTabs" in html
+    assert "openWorkspaceModule" in html
+    assert "reloadWorkspaceFrame" in html
+    assert "openWorkspaceInNewWindow" in html
+    assert 'src="/screener"' in html
+    assert "data-url=\"/ui?symbol=300750&frame=time\"" in html
+    assert "data-url=\"/detail/300750?frame=1d\"" in html
+    assert "data-url=\"/backtest?symbol=300750\"" in html
+    assert "data-url=\"/realtime-paper\"" in html
+    assert "data-url=\"/live-trading\"" in html
+    assert "data-url=\"/trading-records\"" in html
+    assert "data-url=\"/data-center\"" in html
     assert "presetRow" in html
     assert "strategyCatalog" in html
     assert "selectBeginnerPreset" in html
@@ -28,6 +42,11 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/data-center/status" in html
     assert "strategyCombo" in html
     assert "strategyParamJson" in html
+    assert "strategyParamRows" in html
+    assert "renderStrategyParamEditor" in html
+    assert "collectStrategyParamEditor" in html
+    assert "dimensionStrip" in html
+    assert "renderScoreDimensions" in html
     assert "positionSizing" in html
     assert "resetAccount" in html
     assert "reset_account" in html

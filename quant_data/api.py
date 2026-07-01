@@ -1744,13 +1744,99 @@ def _auto_strategy_parameters(combo: list[str], merged: dict, risk_controls: dic
             "default_weight": _as_float(override.get("default_weight"), _as_float(meta.get("default_weight"), 1.0)),
             "enabled": _as_bool(override.get("enabled"), True),
             "position_sizing": str(override.get("position_sizing") or position_sizing),
+            "position_control": str(override.get("position_control") or override.get("position_sizing") or position_sizing),
             "stop_loss_pct": _as_float(override.get("stop_loss_pct"), _as_float(risk_controls.get("stop_loss_pct"), 8.0)),
             "take_profit_pct": _as_float(override.get("take_profit_pct"), _as_float(risk_controls.get("take_profit_pct"), 18.0)),
             "max_drawdown_pct": _as_float(override.get("max_drawdown_pct"), _as_float(risk_controls.get("max_drawdown_pct"), 18.0)),
+            "max_strategy_drawdown_pct": _as_float(
+                override.get("max_strategy_drawdown_pct"),
+                _as_float(override.get("max_drawdown_pct"), _as_float(risk_controls.get("max_drawdown_pct"), 18.0)),
+            ),
             "max_single_position_pct": _as_float(override.get("max_single_position_pct"), _as_float(risk_controls.get("max_single_position_pct"), 20.0)),
+            "buy_threshold": _as_float(override.get("buy_threshold"), 62.0),
+            "sell_threshold": _as_float(override.get("sell_threshold"), 45.0),
+            "reduce_threshold": _as_float(override.get("reduce_threshold"), 50.0),
+            "stop_loss_mode": str(override.get("stop_loss_mode") or ("atr_or_fixed" if "atr" in key else "fixed_pct")),
+            "take_profit_mode": str(override.get("take_profit_mode") or ("trailing_or_staged" if key in {"ma_repair", "macd_cross", "score_driven"} else "fixed_pct")),
             "beginner_note": str(meta.get("beginner_note") or "Trades still require fresh data, score provenance and risk approval."),
         }
     return out
+
+
+def _auto_parameter_schema() -> list[dict]:
+    return [
+        {"field": "enabled", "label": "启用", "type": "bool", "help": "关闭后该策略不参与组合判断。"},
+        {"field": "default_weight", "label": "策略权重", "type": "number", "min": 0, "max": 5, "step": 0.1, "help": "用于多策略投票和排序，不直接等于仓位。"},
+        {"field": "position_sizing", "label": "仓位控制", "type": "select", "options": ["score_weighted", "atr_risk", "volatility_target", "fixed_weight", "core_satellite", "cash_first_defensive"], "help": "决定买入时用评分、ATR、波动率或固定比例确定目标仓位。"},
+        {"field": "max_single_position_pct", "label": "单票上限%", "type": "number", "min": 0, "max": 100, "step": 0.5, "help": "该策略允许的单只股票最大仓位。"},
+        {"field": "stop_loss_pct", "label": "止损%", "type": "number", "min": 0, "max": 50, "step": 0.5, "help": "0 表示关闭固定止损；实盘仍会经过风控网关。"},
+        {"field": "take_profit_pct", "label": "止盈%", "type": "number", "min": 0, "max": 200, "step": 0.5, "help": "0 表示不固定止盈，可用移动止盈/分批止盈。"},
+        {"field": "max_strategy_drawdown_pct", "label": "策略最大回撤%", "type": "number", "min": 0, "max": 80, "step": 0.5, "help": "该策略触发降仓/暂停的最大回撤阈值。"},
+        {"field": "buy_threshold", "label": "买入评分", "type": "number", "min": 0, "max": 100, "step": 0.5, "help": "筛选画像和实时评分达到该值才允许新增仓位。"},
+        {"field": "sell_threshold", "label": "卖出评分", "type": "number", "min": 0, "max": 100, "step": 0.5, "help": "低于该值时倾向减仓或卖出。"},
+    ]
+
+
+def _auto_strategy_matrix(strategy_parameters: dict) -> list[dict]:
+    rows: list[dict] = []
+    for key, item in (strategy_parameters or {}).items():
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "key": key,
+                "strategy": key,
+                "name": item.get("name") or key,
+                "category": item.get("category") or "custom",
+                "enabled": _as_bool(item.get("enabled"), True),
+                "weight": _as_float(item.get("default_weight"), 1.0),
+                "position_sizing": item.get("position_sizing") or item.get("position_control") or "score_weighted",
+                "max_single_position_pct": _as_float(item.get("max_single_position_pct"), 20.0),
+                "stop_loss_pct": _as_float(item.get("stop_loss_pct"), 8.0),
+                "take_profit_pct": _as_float(item.get("take_profit_pct"), 18.0),
+                "max_strategy_drawdown_pct": _as_float(item.get("max_strategy_drawdown_pct"), _as_float(item.get("max_drawdown_pct"), 18.0)),
+                "buy_threshold": _as_float(item.get("buy_threshold"), 62.0),
+                "sell_threshold": _as_float(item.get("sell_threshold"), 45.0),
+                "stop_loss_mode": item.get("stop_loss_mode") or "fixed_pct",
+                "take_profit_mode": item.get("take_profit_mode") or "fixed_pct",
+                "beginner_note": item.get("beginner_note") or "",
+            }
+        )
+    return rows
+
+
+def _auto_decision_policy(risk_controls: dict, score_weights: dict) -> dict:
+    return {
+        "action_source": "screener_signal_map_first_then_realtime_score",
+        "buy_rule": "筛选画像为 buy/watch 且综合交易分达到买入阈值，数据新鲜且风控通过，才允许新增仓位。",
+        "sell_rule": "筛选画像为 reduce/avoid/sell、分数跌破卖出阈值、止损/最大回撤/重大负面触发时减仓或卖出。",
+        "hold_rule": "评分处于观察区间、缺少关键数据或事件窗口未确认时只观察，不自动新增仓位。",
+        "global_buy_threshold": 62.0,
+        "global_sell_threshold": 45.0,
+        "risk_controls": risk_controls,
+        "score_weights": score_weights,
+    }
+
+
+def _auto_integrated_dimensions(score_weights: dict) -> list[dict]:
+    return [
+        {"key": "technical", "label": "技术面", "weight": score_weights.get("technical"), "examples": ["均线", "MACD", "KDJ", "支撑压力", "量价结构"]},
+        {"key": "fundamental", "label": "基本面", "weight": score_weights.get("fundamental"), "examples": ["PE/PB", "ROE", "利润", "现金流", "行业/是否ST"]},
+        {"key": "information", "label": "信息面", "weight": score_weights.get("information"), "examples": ["公告", "财报", "半年报", "新闻", "重大负面"]},
+        {"key": "fund_flow", "label": "资金面", "weight": score_weights.get("fund_flow"), "examples": ["成交额", "换手率", "量比", "盘口", "公开资金流"]},
+        {"key": "market_regime", "label": "大盘情绪", "weight": score_weights.get("market_regime"), "examples": ["上证指数", "创业板", "宽基ETF", "市场波动"]},
+    ]
+
+
+def _auto_key_event_watchlist(event_watch: dict) -> list[dict]:
+    return [
+        {"key": "financial_reports", "label": "财报披露", "enabled": bool(event_watch.get("financial_reports")), "action": "披露窗口前后进入观察或人工确认。"},
+        {"key": "half_year_reports", "label": "半年报/年报窗口", "enabled": bool(event_watch.get("half_year_reports")), "action": "半年度/年度报告前后避免无确认追高。"},
+        {"key": "earnings_preannouncements", "label": "业绩预告", "enabled": bool(event_watch.get("earnings_preannouncements")), "action": "预增/预减/亏损预告进入信息面评分。"},
+        {"key": "exchange_announcements", "label": "交易所/巨潮公告", "enabled": bool(event_watch.get("exchange_announcements")), "action": "监管问询、诉讼、处罚等重大事项可 veto 买入。"},
+        {"key": "major_negative_news", "label": "重大负面", "enabled": bool(event_watch.get("major_negative_news")), "action": "重大负面默认阻断新增仓位。"},
+        {"key": "policy_industry_news", "label": "政策/行业事件", "enabled": bool(event_watch.get("policy_industry_news")), "action": "行业政策和宏观事件进入大盘/信息面调分。"},
+    ]
 
 
 def _apply_auto_config_to_backtest_payload(payload: dict) -> dict:
@@ -1984,6 +2070,32 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         "atr_risk_pct": _as_float(risk_in.get("atr_risk_pct"), 1.5),
         "cooldown_days": int(_as_float(risk_in.get("cooldown_days"), 2.0)),
     }
+    score_weights = {
+        "technical": _as_float(score_in.get("technical"), 0.30),
+        "fundamental": _as_float(score_in.get("fundamental"), 0.22),
+        "information": _as_float(score_in.get("information"), 0.20),
+        "fund_flow": _as_float(score_in.get("fund_flow"), 0.16),
+        "market_regime": _as_float(score_in.get("market_regime"), 0.12),
+    }
+    event_watch = {
+        "financial_reports": _as_bool(event_in.get("financial_reports"), True),
+        "half_year_reports": _as_bool(event_in.get("half_year_reports"), True),
+        "earnings_preannouncements": _as_bool(event_in.get("earnings_preannouncements"), True),
+        "exchange_announcements": _as_bool(event_in.get("exchange_announcements"), True),
+        "major_negative_news": _as_bool(event_in.get("major_negative_news"), True),
+        "policy_industry_news": _as_bool(event_in.get("policy_industry_news"), True),
+        "event_lookahead_days": int(_as_float(event_in.get("event_lookahead_days"), 21.0)),
+        "blackout_before_days": int(_as_float(event_in.get("blackout_before_days"), 2.0)),
+        "blackout_after_days": int(_as_float(event_in.get("blackout_after_days"), 1.0)),
+    }
+    data_requirements = {
+        "require_fresh_quote": _as_bool(data_in.get("require_fresh_quote"), True),
+        "block_stale_buy": _as_bool(data_in.get("block_stale_buy"), True),
+        "require_score_provenance": _as_bool(data_in.get("require_score_provenance"), True),
+        "require_info_snapshot": _as_bool(data_in.get("require_info_snapshot"), False),
+        "require_orderbook_when_available": _as_bool(data_in.get("require_orderbook_when_available"), True),
+    }
+    strategy_parameters = _auto_strategy_parameters(combo, merged, risk_controls)
 
     config = {
         "config_id": str(merged.get("config_id") or "default"),
@@ -2006,32 +2118,16 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         ],
         "position_sizing": str(merged.get("position_sizing") or "score_weighted"),
         "risk_controls": risk_controls,
-        "strategy_parameters": _auto_strategy_parameters(combo, merged, risk_controls),
-        "score_weights": {
-            "technical": _as_float(score_in.get("technical"), 0.30),
-            "fundamental": _as_float(score_in.get("fundamental"), 0.22),
-            "information": _as_float(score_in.get("information"), 0.20),
-            "fund_flow": _as_float(score_in.get("fund_flow"), 0.16),
-            "market_regime": _as_float(score_in.get("market_regime"), 0.12),
-        },
-        "event_watch": {
-            "financial_reports": _as_bool(event_in.get("financial_reports"), True),
-            "half_year_reports": _as_bool(event_in.get("half_year_reports"), True),
-            "earnings_preannouncements": _as_bool(event_in.get("earnings_preannouncements"), True),
-            "exchange_announcements": _as_bool(event_in.get("exchange_announcements"), True),
-            "major_negative_news": _as_bool(event_in.get("major_negative_news"), True),
-            "policy_industry_news": _as_bool(event_in.get("policy_industry_news"), True),
-            "event_lookahead_days": int(_as_float(event_in.get("event_lookahead_days"), 21.0)),
-            "blackout_before_days": int(_as_float(event_in.get("blackout_before_days"), 2.0)),
-            "blackout_after_days": int(_as_float(event_in.get("blackout_after_days"), 1.0)),
-        },
-        "data_requirements": {
-            "require_fresh_quote": _as_bool(data_in.get("require_fresh_quote"), True),
-            "block_stale_buy": _as_bool(data_in.get("block_stale_buy"), True),
-            "require_score_provenance": _as_bool(data_in.get("require_score_provenance"), True),
-            "require_info_snapshot": _as_bool(data_in.get("require_info_snapshot"), False),
-            "require_orderbook_when_available": _as_bool(data_in.get("require_orderbook_when_available"), True),
-        },
+        "strategy_parameters": strategy_parameters,
+        "parameter_schema": _auto_parameter_schema(),
+        "strategy_matrix": _auto_strategy_matrix(strategy_parameters),
+        "strategy_blueprints": _auto_strategy_matrix(strategy_parameters),
+        "score_weights": score_weights,
+        "decision_policy": _auto_decision_policy(risk_controls, score_weights),
+        "integrated_score_dimensions": _auto_integrated_dimensions(score_weights),
+        "event_watch": event_watch,
+        "key_event_watchlist": _auto_key_event_watchlist(event_watch),
+        "data_requirements": data_requirements,
         "interval_seconds": max(0, min(60, int(_as_float(merged.get("interval_seconds"), 15.0)))),
         "initial_cash": _as_float(merged.get("initial_cash"), 100000.0),
         "reset_account": _as_bool(merged.get("reset_account"), True),
@@ -2068,9 +2164,12 @@ def _save_auto_trading_config(config: dict, *, event_type: str = "auto_trading_c
             "strategy_family": config.get("strategy_family"),
             "strategy_combo": config.get("strategy_combo"),
             "strategy_parameters": config.get("strategy_parameters"),
+            "strategy_matrix": config.get("strategy_matrix"),
+            "decision_policy": config.get("decision_policy"),
             "position_sizing": config.get("position_sizing"),
             "risk_controls": config.get("risk_controls"),
             "event_watch": config.get("event_watch"),
+            "key_event_watchlist": config.get("key_event_watchlist"),
             "screener_signal_count": config.get("screener_signal_count"),
             "created_at": config.get("updated_at"),
             "source_page": "auto-trading",

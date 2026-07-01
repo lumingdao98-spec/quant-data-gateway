@@ -20,11 +20,12 @@ def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     assert "function timeTradeFrac" in html
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
-    assert "const start=9*60+30,end=15*60+30" in html
+    assert "lunchStart=11*60+30,lunchEnd=13*60" in html
+    assert "traded=m<=lunchStart?m-start" in html
     assert "11:30/13:00" in html
-    assert "固定09:30-15:30" in html
-    assert "午休断线" in html
-    assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,true)" in html
+    assert "breakLunch=false" in html
+    assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,breakLunch)" in html
+    assert "drawSegmentedTimeLine(ctx,data,d=>d.avg_price||d.price,(d)=>timeTradeX(d,w),y,'#f59e0b',2,breakLunch)" in html
     assert "function clampChartTooltip" in html
     assert "Math.min(x,r.right-tw-8)" in html
     assert "markerBox.style.display=isTimeMode()?'none':'block'" in html

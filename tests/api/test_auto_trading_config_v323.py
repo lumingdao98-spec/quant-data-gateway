@@ -70,6 +70,65 @@ def test_auto_trading_config_exposes_catalog_and_beginner_presets():
     assert len(data["workflow_steps"]) == 5
 
 
+def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
+    client = TestClient(api.app)
+    configured = client.post(
+        "/api/auto-trading/config/one-click",
+        json={
+            "symbols": ["300750", "600438"],
+            "strategy_combo": ["score_driven", "ma_repair", "fund_flow_watch", "risk_control"],
+            "score_weights": {
+                "technical": 0.34,
+                "fundamental": 0.22,
+                "information": 0.16,
+                "fund_flow": 0.18,
+                "market": 0.10,
+            },
+            "event_watch": {
+                "financial_reports": True,
+                "half_year_reports": True,
+                "exchange_announcements": True,
+                "major_negative_news": True,
+            },
+            "strategy_parameters": {
+                "ma_repair": {
+                    "enabled": True,
+                    "position_sizing": "atr_risk",
+                    "max_single_position_pct": 8,
+                    "stop_loss_pct": 6,
+                    "take_profit_pct": 15,
+                    "max_strategy_drawdown_pct": 9,
+                    "buy_threshold": 63,
+                    "sell_threshold": 46,
+                },
+                "fund_flow_watch": {
+                    "enabled": True,
+                    "position_sizing": "score_weighted",
+                    "max_single_position_pct": 6,
+                    "stop_loss_pct": 5,
+                    "take_profit_pct": 12,
+                    "max_strategy_drawdown_pct": 8,
+                    "buy_threshold": 66,
+                    "sell_threshold": 48,
+                },
+            },
+        },
+    ).json()
+
+    assert configured["ok"] is True
+    data = configured["data"]
+    assert "parameter_schema" in data
+    assert "strategy_matrix" in data
+    assert "decision_policy" in data
+    assert data["decision_policy"]["action_source"] == "screener_signal_map_first_then_realtime_score"
+    assert any(item["key"] == "fund_flow" for item in data["integrated_score_dimensions"])
+    assert any(item["key"] == "half_year_reports" and item["enabled"] for item in data["key_event_watchlist"])
+    matrix = {row["key"]: row for row in data["strategy_matrix"]}
+    assert matrix["ma_repair"]["max_strategy_drawdown_pct"] == 9.0
+    assert matrix["ma_repair"]["buy_threshold"] == 63.0
+    assert data["strategy_parameters"]["fund_flow_watch"]["take_profit_pct"] == 12.0
+
+
 def test_realtime_paper_tick_hydrates_quote_when_price_missing(monkeypatch):
     client = TestClient(api.app)
     now = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
@@ -125,6 +184,7 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
                 "technical_score": 82,
                 "fundamental_score": 66,
                 "information_score": 61,
+                "fund_flow_score": 58,
                 "market_score": 55,
                 "tags": ["ma_repair", "volume_confirm"],
                 "risk_flags": [],
@@ -133,6 +193,7 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
         "strategy_family": "hybrid",
         "strategy_combo": ["score_driven", "ma_repair"],
         "position_sizing": "atr_risk",
+        "event_watch": {"financial_reports": True, "half_year_reports": True},
         "strategy_parameters": {
             "ma_repair": {
                 "position_sizing": "atr_risk",
@@ -172,6 +233,8 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
     assert tick["signal"]["technical_score"] == 82.0
     assert tick["signal"]["fundamental_score"] == 66.0
     assert tick["signal"]["information_score"] == 61.0
+    assert tick["signal"]["fund_flow_score"] == 58.0
+    assert tick["signal"]["event_watch_context"]["event_watch_enabled"] is True
     assert tick["signal"]["strategy_controls"]["stop_loss_pct"] == 6.0
     assert "screener_target_hint" in " ".join(tick["signal"]["evidence"])
 

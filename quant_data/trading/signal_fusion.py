@@ -19,6 +19,7 @@ class UnifiedSignal:
     fundamental_score: float | None = None
     technical_score: float | None = None
     information_score: float | None = None
+    fund_flow_score: float | None = None
     market_score: float | None = None
     anomaly_score: float = 0.0
     risk_level: str = "medium"
@@ -39,6 +40,7 @@ class SignalFusionConfig:
     fundamental_weight: float = 0.28
     technical_weight: float = 0.34
     information_weight: float = 0.24
+    fund_flow_weight: float = 0.16
     market_weight: float = 0.14
     buy_threshold: float = 62.0
     sell_threshold: float = 45.0
@@ -59,7 +61,9 @@ class SignalFusionEngine:
         fundamental_score: float | None = None,
         technical_score: float | None = None,
         information_score: float | None = None,
+        fund_flow_score: float | None = None,
         market_score: float | None = None,
+        score_weights: dict[str, Any] | None = None,
         anomaly_score: float = 0.0,
         evidence: list[str] | None = None,
         data_freshness: dict[str, Any] | None = None,
@@ -75,14 +79,35 @@ class SignalFusionEngine:
             "fundamental": fundamental_score,
             "technical": technical_score,
             "information": information_score,
+            "fund_flow": fund_flow_score,
             "market": market_score,
         }
         weights = {
             "fundamental": cfg.fundamental_weight,
             "technical": cfg.technical_weight,
             "information": cfg.information_weight,
+            "fund_flow": cfg.fund_flow_weight,
             "market": cfg.market_weight,
         }
+        if score_weights:
+            aliases = {
+                "fundamental": ("fundamental", "fundamental_score"),
+                "technical": ("technical", "technical_score"),
+                "information": ("information", "information_score", "info"),
+                "fund_flow": ("fund_flow", "fund_flow_score", "capital", "money"),
+                "market": ("market", "market_regime", "market_score"),
+            }
+            for key, names in aliases.items():
+                for name in names:
+                    if name not in score_weights:
+                        continue
+                    try:
+                        value = float(score_weights[name])
+                    except (TypeError, ValueError):
+                        continue
+                    if value > 0:
+                        weights[key] = value
+                    break
         usable = {k: v for k, v in scores.items() if v is not None}
         missing = list(missing_data or []) + [k for k in scores if scores[k] is None]
         if usable:
@@ -126,7 +151,8 @@ class SignalFusionEngine:
             base_weight = 0.0
         elif action == "reduce":
             base_weight = min(base_weight, cfg.max_target_weight * 0.35)
-        confidence = min(1.0, max(0.0, len(usable) / 4.0 * (1.0 - min(anomaly_score, 80) / 120.0)))
+        expected_dims = 5.0 if fund_flow_score is not None else 4.0
+        confidence = min(1.0, max(0.0, len(usable) / expected_dims * (1.0 - min(anomaly_score, 80) / 120.0)))
         risk_level = "low" if anomaly_score < 20 and final_score >= 65 else "high" if anomaly_score >= 45 or final_score < 45 else "medium"
         freshness = data_freshness or {}
         requires_confirm = bool(missing or freshness.get("action") in {"reduce", "refresh_required"} or anomaly_action == "manual_confirm")
@@ -140,6 +166,7 @@ class SignalFusionEngine:
             fundamental_score=fundamental_score,
             technical_score=technical_score,
             information_score=information_score,
+            fund_flow_score=fund_flow_score,
             market_score=market_score,
             anomaly_score=round(float(anomaly_score or 0.0), 2),
             risk_level=risk_level,

@@ -138,7 +138,9 @@ class RealtimePaperEngine:
             fundamental_score=self._optional(payload.get("fundamental_score")),
             technical_score=self._optional(payload.get("technical_score")),
             information_score=self._optional(payload.get("information_score")),
+            fund_flow_score=self._optional(payload.get("fund_flow_score")),
             market_score=self._optional(payload.get("market_score")),
+            score_weights=payload.get("score_weights") if isinstance(payload.get("score_weights"), dict) else None,
             anomaly_score=anomaly.anomaly_score,
             anomaly_action=anomaly.action_suggestion,
             info_negative_veto=bool(payload.get("info_negative_veto") or event_context.get("veto")),
@@ -223,7 +225,11 @@ class RealtimePaperEngine:
         payload = payload or {}
         ticks = list(payload.get("ticks") or [])
         if not ticks and payload.get("symbol"):
-            base = {k: payload.get(k) for k in ["symbol", "price", "fundamental_score", "technical_score", "information_score", "market_score"] if k in payload}
+            base = {
+                k: payload.get(k)
+                for k in ["symbol", "price", "fundamental_score", "technical_score", "information_score", "fund_flow_score", "market_score"]
+                if k in payload
+            }
             ticks = [base]
         outputs = []
         for idx, tick in enumerate(ticks):
@@ -378,7 +384,9 @@ class RealtimePaperEngine:
             evidence.append("policy_industry_risk")
         return {
             "enabled": bool(enabled_keys),
+            "event_watch_enabled": bool(enabled_keys),
             "enabled_keys": enabled_keys,
+            "watched_events": enabled_keys,
             "missing_data": missing,
             "evidence": evidence,
             "veto": veto,

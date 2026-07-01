@@ -27,6 +27,23 @@ def build_auto_trading_workbench_ui() -> str:
 .path-board{display:grid;grid-template-columns:1.1fr 1fr 1fr 1fr;gap:10px;margin:0 0 14px}.path-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px;box-shadow:var(--shadow);min-width:0}.path-card strong{display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:6px}.path-card strong i{font-style:normal;display:grid;place-items:center;width:24px;height:24px;border-radius:999px;background:#e7fdfa;color:#078f89}.path-card p{margin:0;color:#667085;font-size:12px;line-height:1.45;overflow-wrap:anywhere}.path-card .mini-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.path-card .mini-actions button,.path-card .mini-actions a{border:1px solid var(--line);border-radius:999px;background:#f8fafc;color:#334155;padding:6px 9px;font-size:12px;font-weight:900;cursor:pointer}.path-card .mini-actions .primary{background:#19c6c0;border-color:#19c6c0;color:#fff}.path-card .mini-actions .blue{background:#2f7cf6;border-color:#2f7cf6;color:#fff}.path-card .mini-actions .red{background:#fff1f2;border-color:#fecaca;color:#be123c}.workflow-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:8px}.workflow-status span{border:1px solid var(--line);background:#fbfcff;border-radius:8px;padding:6px;font-size:11px;color:#667085;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workflow-status b{color:#172033}.module-jump{position:sticky;top:64px;background:linear-gradient(#f4f7fb 70%,rgba(244,247,251,.72));z-index:4;padding:4px 0 8px}@media(max-width:1320px){.path-board{grid-template-columns:1fr 1fr}.module-jump{position:static}}@media(max-width:780px){.path-board,.workflow-status{grid-template-columns:1fr}}
 .coach-strip{display:grid;grid-template-columns:minmax(220px,1.2fr) repeat(4,minmax(120px,.8fr));gap:8px;align-items:stretch;margin:0 0 12px}.coach-strip .coach-copy{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;box-shadow:var(--shadow);min-width:0}.coach-strip b{display:block;font-size:14px}.coach-strip span{display:block;color:#667085;font-size:12px;line-height:1.45;margin-top:3px;overflow-wrap:anywhere}.coach-action{border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 12px;text-align:left;font-weight:900;box-shadow:var(--shadow);cursor:pointer;min-width:0}.coach-action small{display:block;color:#667085;font-size:11px;font-weight:700;line-height:1.35;margin-top:3px}.coach-action.primary{background:#19c6c0;border-color:#19c6c0;color:#fff}.coach-action.primary small{color:#ecfeff}.selected-strategy-summary{border:1px solid #c8f3ee;background:#f1fffd;border-radius:10px;padding:9px 10px;font-size:12px;line-height:1.5;color:#0f766e;margin:-2px 0 9px;max-height:72px;overflow:auto}.advanced-box{border:1px dashed var(--line);border-radius:10px;padding:8px 10px;margin-bottom:10px;background:#fbfcff}.advanced-box summary{cursor:pointer;font-weight:900;color:#475569;font-size:12px}.advanced-box .field{margin-top:8px;margin-bottom:0}.mini-help{color:#667085;font-size:12px;line-height:1.45;margin-top:-4px;margin-bottom:8px;overflow-wrap:anywhere}@media(max-width:1320px){.coach-strip{grid-template-columns:1fr 1fr}}@media(max-width:780px){.coach-strip{grid-template-columns:1fr}}
 </style>
+<style>
+.strategy-param-panel{border:1px solid var(--line);border-radius:12px;background:#fbfcff;margin:8px 0 12px;overflow:hidden}.strategy-param-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;border-bottom:1px solid var(--line);font-size:12px;color:#475569}.strategy-param-table-wrap{max-height:230px;overflow:auto}.strategy-param-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}.strategy-param-table th,.strategy-param-table td{border-bottom:1px solid var(--line);padding:7px;vertical-align:middle;overflow-wrap:anywhere}.strategy-param-table th{position:sticky;top:0;background:#eef6ff;color:#334155;z-index:1}.strategy-param-table input,.strategy-param-table select{padding:6px 7px;border-radius:8px}.strategy-param-table .strategy-name{font-weight:900;color:#172033}.strategy-param-table .strategy-note{display:block;color:#667085;font-size:11px;line-height:1.35;margin-top:2px}.dimension-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:8px 0 10px}.dimension-strip div{border:1px solid #dbeafe;background:#f8fbff;border-radius:10px;padding:8px;font-size:11px;line-height:1.35;color:#475569}.dimension-strip b{display:block;color:#1d4ed8;margin-bottom:2px}@media(max-width:1320px){.dimension-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.strategy-param-table{min-width:820px}}@media(max-width:780px){.dimension-strip{grid-template-columns:1fr}}
+</style>
+<style>
+.embedded-workspace{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;margin:0 0 14px}
+.workspace-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,#f0fffd,#f8fbff)}
+.workspace-head b{display:block;font-size:16px}.workspace-head span{display:block;color:#667085;font-size:12px;line-height:1.45;margin-top:3px;overflow-wrap:anywhere}
+.workspace-tabs{display:flex;gap:8px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line);background:#fbfcff}
+.workspace-tab{border:1px solid var(--line);background:#fff;border-radius:999px;color:#334155;padding:7px 10px;font-weight:900;font-size:12px;cursor:pointer}
+.workspace-tab.active{background:#19c6c0;border-color:#19c6c0;color:#fff}
+.workspace-frame-wrap{height:min(78vh,900px);min-height:620px;background:#0b1020;position:relative}
+.workspace-frame{width:100%;height:100%;border:0;display:block;background:#0b1020}
+.workspace-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.workspace-tools a,.workspace-tools button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:900;color:#334155;cursor:pointer}
+.workspace-status{color:#667085;font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1320px){.workspace-frame-wrap{height:760px;min-height:560px}.workspace-head{align-items:flex-start;flex-direction:column}.workspace-status{max-width:100%}}
+@media(max-width:780px){.workspace-frame-wrap{height:700px;min-height:520px}.workspace-tabs{overflow:auto;flex-wrap:nowrap}.workspace-tab{flex:0 0 auto}}
+</style>
 </head>
 <body>
 <div class="app">
@@ -71,6 +88,30 @@ def build_auto_trading_workbench_ui() -> str:
         <a href="/data-center">数据中心</a>
         <a href="/docs-cn">中文 API</a>
       </nav>
+      <section class="embedded-workspace" id="embeddedWorkspace">
+        <div class="workspace-head">
+          <div><b>一页式模块工作区</b><span>下面直接嵌入原来的完整页面：筛选、行情详情、回测、实时模拟、真实交易、交易记录、数据中心和中文 API 都保留原功能，不做缩水版。</span></div>
+          <div class="workspace-tools">
+            <span class="workspace-status" id="workspaceStatus">当前：股票筛选</span>
+            <button type="button" onclick="reloadWorkspaceFrame()">刷新内置页</button>
+            <button type="button" onclick="openWorkspaceInNewWindow()">新窗口打开</button>
+          </div>
+        </div>
+        <div class="workspace-tabs" id="workspaceTabs">
+          <button class="workspace-tab active" type="button" data-url="/screener" onclick="openWorkspaceModule('/screener','股票筛选',this)">股票筛选</button>
+          <button class="workspace-tab" type="button" data-url="/ui?symbol=300750&frame=time" onclick="openWorkspaceModule('/ui?symbol=300750&frame=time','行情监控/分时',this)">行情监控</button>
+          <button class="workspace-tab" type="button" data-url="/detail/300750?frame=1d" onclick="openWorkspaceModule('/detail/300750?frame=1d','详情/K线',this)">详情/K线</button>
+          <button class="workspace-tab" type="button" data-url="/backtest?symbol=300750" onclick="openWorkspaceModule('/backtest?symbol=300750','历史回测',this)">历史回测</button>
+          <button class="workspace-tab" type="button" data-url="/realtime-paper" onclick="openWorkspaceModule('/realtime-paper','实时模拟',this)">实时模拟</button>
+          <button class="workspace-tab" type="button" data-url="/live-trading" onclick="openWorkspaceModule('/live-trading','真实交易',this)">真实交易</button>
+          <button class="workspace-tab" type="button" data-url="/trading-records" onclick="openWorkspaceModule('/trading-records','交易记录',this)">交易记录</button>
+          <button class="workspace-tab" type="button" data-url="/data-center" onclick="openWorkspaceModule('/data-center','数据中心',this)">数据中心</button>
+          <button class="workspace-tab" type="button" data-url="/docs-cn" onclick="openWorkspaceModule('/docs-cn','中文 API',this)">中文 API</button>
+        </div>
+        <div class="workspace-frame-wrap">
+          <iframe id="workspaceFrame" class="workspace-frame" title="V3.23 自动交易内置模块工作区" src="/screener"></iframe>
+        </div>
+      </section>
       <section class="beginner-note">
         <div><b>不会金融也能用</b>先选“均衡入门/防守学习/ETF轮动”，系统会自动填仓位、止损止盈、最大回撤和事件监控。</div>
         <div><b>交易方向来自筛选</b>筛选分、技术面、资金面、信息面、基本面和大盘情绪共同进入信号，不用手动猜买卖方向。</div>
@@ -152,6 +193,16 @@ def build_auto_trading_workbench_ui() -> str:
               <div id="strategySelectedSummary" class="selected-strategy-summary">已选策略会在这里翻译成中文，方便确认系统到底在看什么。</div>
               <div class="catalog-head"><b>策略目录</b><span class="muted" id="strategyCatalogHint">加载中...</span></div>
               <div id="strategyCatalog" class="strategy-catalog"></div>
+              <div id="dimensionStrip" class="dimension-strip"></div>
+              <div class="strategy-param-panel">
+                <div class="strategy-param-head"><b>组合策略参数表</b><span>每个策略可独立设置仓位控制、止损、止盈和最大回撤</span></div>
+                <div class="strategy-param-table-wrap">
+                  <table class="strategy-param-table">
+                    <thead><tr><th>策略</th><th>启用</th><th>仓位</th><th>单票%</th><th>止损%</th><th>止盈%</th><th>最大回撤%</th><th>买入分</th><th>卖出分</th></tr></thead>
+                    <tbody id="strategyParamRows"><tr><td colspan="9" class="muted">选择策略或一键配置后自动生成</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
               <details class="advanced-box">
                 <summary>高级策略参数 JSON（可选，不懂可以不填）</summary>
                 <div class="field"><label>每个策略可单独配置仓位/止盈/止损/最大回撤</label><textarea class="compact" id="strategyParamJson">{}</textarea></div>
@@ -265,8 +316,33 @@ def build_auto_trading_workbench_ui() -> str:
 const $=id=>document.getElementById(id);
 let activeSessionId='';
 let lastAutoConfig=null;
+let currentWorkspaceUrl='/screener';
 async function api(url,opt){const r=await fetch(url,opt);try{return await r.json()}catch(e){return {ok:false,message:String(e),status:r.status}}}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function workspaceTabForUrl(url){
+  const tabs=[...document.querySelectorAll('#workspaceTabs .workspace-tab')];
+  return tabs.find(t=>t.dataset.url===url)||tabs.find(t=>url.startsWith((t.dataset.url||'').split('?')[0]));
+}
+function setWorkspaceActive(btn){
+  document.querySelectorAll('#workspaceTabs .workspace-tab').forEach(t=>t.classList.toggle('active',t===btn));
+}
+function openWorkspaceModule(url,label,btn){
+  currentWorkspaceUrl=url||'/screener';
+  const frame=$('workspaceFrame');
+  if(frame&&frame.getAttribute('src')!==currentWorkspaceUrl)frame.src=currentWorkspaceUrl;
+  const status=$('workspaceStatus');
+  if(status)status.textContent='当前：'+(label||currentWorkspaceUrl);
+  setWorkspaceActive(btn||workspaceTabForUrl(currentWorkspaceUrl));
+  try{localStorage.setItem('v323_auto_workspace_url',currentWorkspaceUrl);localStorage.setItem('v323_auto_workspace_label',label||'')}catch(e){}
+}
+function reloadWorkspaceFrame(){const frame=$('workspaceFrame');if(frame)frame.src=frame.src}
+function openWorkspaceInNewWindow(){window.open(currentWorkspaceUrl||$('workspaceFrame')?.getAttribute('src')||'/screener','_blank','noopener')}
+function initWorkspaceFrame(){
+  let saved='/screener',label='股票筛选';
+  try{saved=localStorage.getItem('v323_auto_workspace_url')||saved;label=localStorage.getItem('v323_auto_workspace_label')||label}catch(e){}
+  const btn=workspaceTabForUrl(saved);
+  openWorkspaceModule(saved,label,btn);
+}
 function splitListText(v){return String(v||'').split(/[\s,，;；、|]+/).map(s=>s.trim()).filter(Boolean)}
 function symbols(){return splitListText($('symbols').value)}
 function strategyCombo(){return splitListText($('strategyCombo').value)}
@@ -278,8 +354,76 @@ function sessionIdOf(item){return item?.session_id||item?.id||item?.sessionId||'
 function num(id,fallback){const n=Number($(id)?.value);return Number.isFinite(n)?n:fallback}
 function checked(id){return !!$(id)?.checked}
 function parseStrategyParams(){
-  try{return JSON.parse($('strategyParamJson')?.value||'{}')}
-  catch(e){$('auditLog').textContent='策略参数 JSON 解析失败：'+e;return {}}
+  let raw={};
+  try{raw=JSON.parse($('strategyParamJson')?.value||'{}')}
+  catch(e){$('auditLog').textContent='策略参数 JSON 解析失败：'+e;raw={}}
+  return {...raw,...collectStrategyParamEditor(raw)};
+}
+function strategyParamNumber(el,fallback){
+  const n=Number(el?.value);
+  return Number.isFinite(n)?n:fallback;
+}
+function collectStrategyParamEditor(base={}){
+  const rows=[...document.querySelectorAll('[data-strategy-row]')];
+  const out={};
+  rows.forEach(row=>{
+    const key=row.dataset.strategyRow;
+    if(!key)return;
+    const current={...(base[key]||{})};
+    out[key]={
+      ...current,
+      strategy:key,
+      enabled:!!row.querySelector('[data-param="enabled"]')?.checked,
+      position_sizing:row.querySelector('[data-param="position_sizing"]')?.value||current.position_sizing||$('positionSizing')?.value||'score_weighted',
+      position_control:row.querySelector('[data-param="position_sizing"]')?.value||current.position_control||$('positionSizing')?.value||'score_weighted',
+      max_single_position_pct:strategyParamNumber(row.querySelector('[data-param="max_single_position_pct"]'),Number(current.max_single_position_pct??$('maxSinglePositionPct')?.value??20)),
+      stop_loss_pct:strategyParamNumber(row.querySelector('[data-param="stop_loss_pct"]'),Number(current.stop_loss_pct??$('stopLossPct')?.value??8)),
+      take_profit_pct:strategyParamNumber(row.querySelector('[data-param="take_profit_pct"]'),Number(current.take_profit_pct??$('takeProfitPct')?.value??18)),
+      max_drawdown_pct:strategyParamNumber(row.querySelector('[data-param="max_strategy_drawdown_pct"]'),Number(current.max_strategy_drawdown_pct??current.max_drawdown_pct??$('maxDrawdownPct')?.value??18)),
+      max_strategy_drawdown_pct:strategyParamNumber(row.querySelector('[data-param="max_strategy_drawdown_pct"]'),Number(current.max_strategy_drawdown_pct??current.max_drawdown_pct??$('maxDrawdownPct')?.value??18)),
+      buy_threshold:strategyParamNumber(row.querySelector('[data-param="buy_threshold"]'),Number(current.buy_threshold??62)),
+      sell_threshold:strategyParamNumber(row.querySelector('[data-param="sell_threshold"]'),Number(current.sell_threshold??45))
+    };
+  });
+  return out;
+}
+function renderScoreDimensions(cfg){
+  const box=$('dimensionStrip');if(!box)return;
+  const dims=cfg?.integrated_score_dimensions||[
+    {label:'技术面',weight:.30,examples:['均线','MACD','量价']},
+    {label:'基本面',weight:.22,examples:['PE/PB','ROE','现金流']},
+    {label:'信息面',weight:.20,examples:['公告','财报','新闻']},
+    {label:'资金面',weight:.16,examples:['成交额','量比','盘口']},
+    {label:'大盘情绪',weight:.12,examples:['上证','创业板','宽基']}
+  ];
+  box.innerHTML=dims.map(d=>`<div><b>${esc(d.label||d.key)}</b>权重 ${esc(d.weight??'--')}<br>${esc((d.examples||[]).slice(0,3).join(' / '))}</div>`).join('');
+}
+function renderStrategyParamEditor(cfg){
+  const body=$('strategyParamRows');if(!body)return;
+  const matrix=cfg?.strategy_matrix||[];
+  const byKey={};
+  matrix.forEach(x=>{if(x?.strategy)byKey[String(x.strategy)]=x});
+  const params=cfg?.strategy_parameters||{};
+  const combo=strategyCombo();
+  if(!combo.length){body.innerHTML='<tr><td colspan="9" class="muted">请先选择策略组合</td></tr>';return}
+  body.innerHTML=combo.map(key=>{
+    const row={...(params[key]||{}),...(byKey[key]||{})};
+    const label=strategyLabel(key,cfg);
+    const sizing=row.position_sizing||row.position_control||$('positionSizing')?.value||'score_weighted';
+    const enabled=row.enabled!==false;
+    const opt=v=>`<option value="${v}" ${sizing===v?'selected':''}>${v}</option>`;
+    return `<tr data-strategy-row="${esc(key)}">
+      <td><span class="strategy-name">${esc(label)}</span><span class="strategy-note">${esc(key)} · ${esc(row.category||'custom')}</span></td>
+      <td><input type="checkbox" data-param="enabled" ${enabled?'checked':''}></td>
+      <td><select data-param="position_sizing">${['score_weighted','atr_risk','volatility_target','fixed_weight','core_satellite','cash_first_defensive'].map(opt).join('')}</select></td>
+      <td><input data-param="max_single_position_pct" type="number" step="0.5" value="${esc(row.max_single_position_pct??$('maxSinglePositionPct')?.value??20)}"></td>
+      <td><input data-param="stop_loss_pct" type="number" step="0.5" value="${esc(row.stop_loss_pct??$('stopLossPct')?.value??8)}"></td>
+      <td><input data-param="take_profit_pct" type="number" step="0.5" value="${esc(row.take_profit_pct??$('takeProfitPct')?.value??18)}"></td>
+      <td><input data-param="max_strategy_drawdown_pct" type="number" step="0.5" value="${esc(row.max_strategy_drawdown_pct??row.max_drawdown_pct??$('maxDrawdownPct')?.value??18)}"></td>
+      <td><input data-param="buy_threshold" type="number" step="0.5" value="${esc(row.buy_threshold??62)}"></td>
+      <td><input data-param="sell_threshold" type="number" step="0.5" value="${esc(row.sell_threshold??45)}"></td>
+    </tr>`;
+  }).join('');
 }
 function strategyNameMap(cfg){
   const out={};
@@ -318,6 +462,7 @@ function setComboFromList(list){
   $('strategyCombo').value=unique.join(', ');
   if(lastAutoConfig)renderStrategyCatalog(lastAutoConfig);
   renderStrategySelectionSummary(lastAutoConfig);
+  renderStrategyParamEditor(lastAutoConfig||{});
 }
 function renderStrategyCatalog(cfg){
   const box=$('strategyCatalog'),hint=$('strategyCatalogHint');
@@ -326,6 +471,8 @@ function renderStrategyCatalog(cfg){
   const selected=currentComboSet();
   if(hint)hint.textContent=`已选 ${selected.size} 项 / 可用 ${catalog.length} 项`;
   renderStrategySelectionSummary(cfg);
+  renderScoreDimensions(cfg);
+  renderStrategyParamEditor(cfg);
   if(!catalog.length){box.innerHTML='<div class="muted">策略目录暂未返回，仍可手动输入策略 key。</div>';return}
   box.innerHTML=catalog.map(item=>{
     const key=String(item.key||'');
@@ -431,6 +578,8 @@ function applyAutoConfig(cfg){
   if(cfg.reset_account!=null && $('resetAccount'))$('resetAccount').checked=!!cfg.reset_account;
   renderStrategyCatalog(cfg);
   renderStrategySelectionSummary(cfg);
+  renderScoreDimensions(cfg);
+  renderStrategyParamEditor(cfg);
 }
 function setText(id,value){const el=$(id);if(el)el.textContent=value}
 function updateWorkflowStatus(state={}){
@@ -466,9 +615,10 @@ function renderConfigSummary(cfg, readiness){
   const gateText=gates.slice(0,6).map(g=>`${g.ok?'✓':'!'} ${g.label}`).join(' · ');
   const source=cfg?.symbols_source||'--';
   const symbols=(cfg?.symbols||[]).slice(0,8).join(', ')||'--';
-  const combo=(cfg?.strategy_combo||[]).slice(0,6).join(', ')||'--';
+  const combo=(cfg?.strategy_combo||[]).slice(0,6).map(k=>strategyLabel(k,cfg)).join('、')||'--';
+  const events=(cfg?.key_event_watchlist||[]).filter(x=>x.enabled).slice(0,4).map(x=>x.label).join('、')||'未开启';
   const signalCount=Object.keys(cfg?.screener_signal_map||{}).length;
-  $('configSummary').innerHTML=`<b>自动交易配置</b>：股票池 ${symbols}；来源 ${esc(source)}；策略 ${esc(combo)}；仓位 ${esc(cfg?.position_sizing||'--')}；筛选信号画像 ${signalCount} 只；止损/止盈/回撤 ${esc(cfg?.risk_controls?.stop_loss_pct??'--')}% / ${esc(cfg?.risk_controls?.take_profit_pct??'--')}% / ${esc(cfg?.risk_controls?.max_drawdown_pct??'--')}%。<br>${esc(gateText||'等待 readiness 检查')}`;
+  $('configSummary').innerHTML=`<b>自动交易配置</b>：股票池 ${symbols}；来源 ${esc(source)}；策略 ${esc(combo)}；仓位 ${esc(cfg?.position_sizing||'--')}；筛选信号画像 ${signalCount} 只；止损/止盈/回撤 ${esc(cfg?.risk_controls?.stop_loss_pct??'--')}% / ${esc(cfg?.risk_controls?.take_profit_pct??'--')}% / ${esc(cfg?.risk_controls?.max_drawdown_pct??'--')}%；关键事件 ${esc(events)}。<br>${esc(gateText||'等待 readiness 检查')}`;
   renderStrategySelectionSummary(cfg);
   updateWorkflowStatus({cfg,readiness});
 }
@@ -573,6 +723,7 @@ async function startPaper(){
   const js=await api('/api/auto-trading/start-paper',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   activeSessionId=sessionIdOf(js.session)||activeSessionId;
   $('auditLog').textContent=JSON.stringify(js,null,2);
+  openWorkspaceModule('/realtime-paper','实时模拟',workspaceTabForUrl('/realtime-paper'));
   refreshAll();
 }
 async function manualTick(){
@@ -588,7 +739,8 @@ async function runConfigBacktest(){
   const sym=(cfg.symbols||[])[0]||'300750';
   const js=await api('/api/backtest/v323/run',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({symbol:sym,symbols:[sym],limit:520,use_auto_config:true,auto_trading_config:cfg,source_page:'auto-trading'})});
   $('auditLog').textContent=JSON.stringify(js,null,2);
-  if(js.run_id)window.open('/backtest?symbol='+encodeURIComponent(sym)+'&run_id='+encodeURIComponent(js.run_id),'_blank');
+  const url='/backtest?symbol='+encodeURIComponent(sym)+(js.run_id?'&run_id='+encodeURIComponent(js.run_id):'');
+  openWorkspaceModule(url,'历史回测结果',workspaceTabForUrl('/backtest?symbol=300750'));
 }
 async function pausePaper(){if(!activeSessionId)return;$('auditLog').textContent=JSON.stringify(await api(`/api/realtime-paper/sessions/${encodeURIComponent(activeSessionId)}/pause`,{method:'POST'}),null,2);refreshAll()}
 async function resumePaper(){if(!activeSessionId)return;$('auditLog').textContent=JSON.stringify(await api(`/api/realtime-paper/sessions/${encodeURIComponent(activeSessionId)}/resume`,{method:'POST'}),null,2);refreshAll()}
@@ -603,6 +755,7 @@ async function previewOrder(){
   refreshAll();
 }
 async function loadConfirmQueue(){const js=await api('/api/live/confirm-queue');$('liveLog').textContent=JSON.stringify(js,null,2)}
+initWorkspaceFrame();
 refreshAll();
 </script>
 </body>
