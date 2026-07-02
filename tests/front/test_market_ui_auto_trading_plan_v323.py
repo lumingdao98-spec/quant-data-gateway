@@ -21,7 +21,9 @@ def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
     assert "lunchStart=11*60+30,lunchEnd=13*60" in html
-    assert "traded=m<=lunchStart?m-start" in html
+    assert "afternoonOffset=1" in html
+    assert "total=(lunchStart-start)+afternoonOffset+(end-lunchEnd)" in html
+    assert "traded=m<=lunchStart?m-start:(lunchStart-start)+afternoonOffset+(m-lunchEnd)" in html
     assert "11:30/13:00" in html
     assert "breakLunch=false" in html
     assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,breakLunch)" in html

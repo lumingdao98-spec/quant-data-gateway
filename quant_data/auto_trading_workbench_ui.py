@@ -38,7 +38,8 @@ def build_auto_trading_workbench_ui() -> str:
 .workspace-tab{border:1px solid var(--line);background:#fff;border-radius:999px;color:#334155;padding:7px 10px;font-weight:900;font-size:12px;cursor:pointer}
 .workspace-tab.active{background:#19c6c0;border-color:#19c6c0;color:#fff}
 .workspace-frame-wrap{height:min(78vh,900px);min-height:620px;background:#0b1020;position:relative}
-.workspace-frame{width:100%;height:100%;border:0;display:block;background:#0b1020}
+.workspace-frame{width:100%;height:100%;border:0;display:none;background:#0b1020}
+.workspace-frame.active{display:block}
 .workspace-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.workspace-tools a,.workspace-tools button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 10px;font-size:12px;font-weight:900;color:#334155;cursor:pointer}
 .workspace-status{color:#667085;font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1320px){.workspace-frame-wrap{height:760px;min-height:560px}.workspace-head{align-items:flex-start;flex-direction:column}.workspace-status{max-width:100%}}
@@ -109,7 +110,15 @@ def build_auto_trading_workbench_ui() -> str:
           <button class="workspace-tab" type="button" data-module="docs" data-url="/docs-cn" data-label="中文 API" onclick="openWorkspaceKey('docs','中文 API',this)">中文 API</button>
         </div>
         <div class="workspace-frame-wrap">
-          <iframe id="workspaceFrame" class="workspace-frame" title="V3.23 自动交易内置模块工作区" src="/screener"></iframe>
+          <iframe id="workspaceFrame" class="workspace-frame active" data-module="screener" data-src="/screener" data-current-url="/screener" data-loaded="true" title="V3.23 自动交易内置模块工作区 · 股票筛选" src="/screener"></iframe>
+          <iframe id="workspaceFrameQuote" class="workspace-frame" data-module="quote" data-src="/ui?symbol=300750&frame=time" title="V3.23 自动交易内置模块工作区 · 行情监控/分时"></iframe>
+          <iframe id="workspaceFrameDetail" class="workspace-frame" data-module="detail" data-src="/detail/300750?frame=1d" title="V3.23 自动交易内置模块工作区 · 详情/K线"></iframe>
+          <iframe id="workspaceFrameBacktest" class="workspace-frame" data-module="backtest" data-src="/backtest?symbol=300750" title="V3.23 自动交易内置模块工作区 · 历史回测"></iframe>
+          <iframe id="workspaceFrameRealtime" class="workspace-frame" data-module="realtime" data-src="/realtime-paper" title="V3.23 自动交易内置模块工作区 · 实时模拟"></iframe>
+          <iframe id="workspaceFrameLive" class="workspace-frame" data-module="live" data-src="/live-trading" title="V3.23 自动交易内置模块工作区 · 真实交易"></iframe>
+          <iframe id="workspaceFrameRecords" class="workspace-frame" data-module="records" data-src="/trading-records" title="V3.23 自动交易内置模块工作区 · 交易记录"></iframe>
+          <iframe id="workspaceFrameData" class="workspace-frame" data-module="data" data-src="/data-center" title="V3.23 自动交易内置模块工作区 · 数据中心"></iframe>
+          <iframe id="workspaceFrameDocs" class="workspace-frame" data-module="docs" data-src="/docs-cn" title="V3.23 自动交易内置模块工作区 · 中文 API"></iframe>
         </div>
       </section>
       <section class="beginner-note">
@@ -337,7 +346,10 @@ function workspaceUrl(key){
 }
 function syncWorkspaceTabUrls(){
   document.querySelectorAll('#workspaceTabs .workspace-tab[data-module]').forEach(tab=>{
-    tab.dataset.url=workspaceUrl(tab.dataset.module);
+    const url=workspaceUrl(tab.dataset.module);
+    tab.dataset.url=url;
+    const frame=workspaceFrameForModule(tab.dataset.module);
+    if(frame && frame.dataset.loaded!=='true')frame.dataset.src=url;
   });
 }
 function openWorkspaceKey(key,label,btn){
@@ -353,17 +365,44 @@ function workspaceTabForUrl(url){
 function setWorkspaceActive(btn){
   document.querySelectorAll('#workspaceTabs .workspace-tab').forEach(t=>t.classList.toggle('active',t===btn));
 }
+function workspaceKeyForUrl(url,btn){
+  if(btn?.dataset?.module)return btn.dataset.module;
+  const tab=workspaceTabForUrl(url||'');
+  return tab?.dataset?.module||'screener';
+}
+function workspaceFrameForModule(key){
+  return document.querySelector(`.workspace-frame[data-module="${key}"]`)||$('workspaceFrame');
+}
+function activeWorkspaceFrame(){
+  return document.querySelector('.workspace-frame.active')||$('workspaceFrame');
+}
+function setWorkspaceFrameActive(frame){
+  document.querySelectorAll('.workspace-frame').forEach(f=>f.classList.toggle('active',f===frame));
+}
+function ensureWorkspaceFrame(key,url){
+  const frame=workspaceFrameForModule(key);
+  if(!frame)return null;
+  const next=url||frame.dataset.src||workspaceUrl(key);
+  frame.dataset.src=next;
+  if(frame.dataset.currentUrl!==next || frame.dataset.loaded!=='true'){
+    frame.src=next;
+    frame.dataset.currentUrl=next;
+    frame.dataset.loaded='true';
+  }
+  setWorkspaceFrameActive(frame);
+  return frame;
+}
 function openWorkspaceModule(url,label,btn){
   currentWorkspaceUrl=url||'/screener';
-  const frame=$('workspaceFrame');
-  if(frame&&frame.getAttribute('src')!==currentWorkspaceUrl)frame.src=currentWorkspaceUrl;
+  const key=workspaceKeyForUrl(currentWorkspaceUrl,btn);
+  ensureWorkspaceFrame(key,currentWorkspaceUrl);
   const status=$('workspaceStatus');
   if(status)status.textContent='当前：'+(label||currentWorkspaceUrl);
   setWorkspaceActive(btn||workspaceTabForUrl(currentWorkspaceUrl));
   try{localStorage.setItem('v323_auto_workspace_url',currentWorkspaceUrl);localStorage.setItem('v323_auto_workspace_label',label||'')}catch(e){}
 }
-function reloadWorkspaceFrame(){const frame=$('workspaceFrame');if(frame)frame.src=frame.src}
-function openWorkspaceInNewWindow(){window.open(currentWorkspaceUrl||$('workspaceFrame')?.getAttribute('src')||'/screener','_blank','noopener')}
+function reloadWorkspaceFrame(){const frame=activeWorkspaceFrame();if(frame)frame.src=frame.src||frame.dataset.src||currentWorkspaceUrl||'/screener'}
+function openWorkspaceInNewWindow(){const frame=activeWorkspaceFrame();window.open(currentWorkspaceUrl||frame?.getAttribute('src')||frame?.dataset.src||'/screener','_blank','noopener')}
 function initWorkspaceFrame(){
   syncWorkspaceTabUrls();
   let saved='/screener',label='股票筛选';

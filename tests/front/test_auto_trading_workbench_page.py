@@ -18,9 +18,25 @@ def test_auto_trading_workbench_page_visible():
     assert "embeddedWorkspace" in html
     assert "workspaceFrame" in html
     assert "workspaceTabs" in html
+    assert html.count('class="workspace-frame') >= 9
+    assert 'class="workspace-frame active"' in html
+    assert 'data-current-url="/screener"' in html
+    assert 'data-loaded="true"' in html
+    assert 'data-src="/ui?symbol=300750&frame=time"' in html
+    assert 'data-src="/detail/300750?frame=1d"' in html
+    assert 'data-src="/backtest?symbol=300750"' in html
+    assert 'data-src="/realtime-paper"' in html
+    assert 'data-src="/live-trading"' in html
+    assert 'data-src="/trading-records"' in html
+    assert 'data-src="/data-center"' in html
+    assert 'data-src="/docs-cn"' in html
     assert "openWorkspaceModule" in html
     assert "openWorkspaceKey" in html
     assert "workspaceUrl" in html
+    assert "workspaceFrameForModule" in html
+    assert "setWorkspaceFrameActive" in html
+    assert "activeWorkspaceFrame" in html
+    assert "ensureWorkspaceFrame" in html
     assert "primarySymbol" in html
     assert "syncWorkspaceTabUrls" in html
     assert "reloadWorkspaceFrame" in html
