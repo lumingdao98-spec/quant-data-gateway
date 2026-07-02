@@ -491,3 +491,49 @@ def test_v323_backtest_embeds_auto_trading_controls(tmp_path, monkeypatch):
     assert controls["effective_position_weight"] == 0.05
     assert controls["effective_stop_loss_pct"] == 6.0
     assert data["params_cn"]["自动交易配置"] == "已接入 V3.23 回测内核"
+
+
+def test_legacy_backtest_get_can_use_saved_auto_trading_config():
+    client = TestClient(api.app)
+    payload = {
+        "rows": [
+            {
+                "symbol": "300750",
+                "name": "宁德时代",
+                "total_score": 76,
+                "technical_score": 82,
+                "fundamental_score": 66,
+                "information_score": 61,
+                "fund_flow_score": 58,
+                "market_score": 55,
+                "tags": ["ma_repair", "volume_confirm"],
+            }
+        ],
+        "symbols": ["300750"],
+        "strategy_combo": ["score_driven", "ma_repair"],
+        "position_sizing": "atr_risk",
+        "strategy_parameters": {
+            "ma_repair": {
+                "stop_loss_pct": 6,
+                "take_profit_pct": 14,
+                "max_drawdown_pct": 10,
+                "max_single_position_pct": 5,
+            }
+        },
+        "risk_controls": {"stop_loss_pct": 8, "take_profit_pct": 18, "max_drawdown_pct": 18, "max_single_position_pct": 20},
+    }
+    client.post("/api/auto-trading/config/one-click", json=payload)
+
+    response = client.get(
+        "/api/backtest/run",
+        params={"symbol": "300750", "use_auto_config": "true", "limit": 120, "legacy": "true"},
+    ).json()
+
+    assert response["ok"] is True
+    data = response["data"]
+    assert data["auto_trading_config_applied"] is True
+    assert data["config"]["strategy_combo"] == ["score_driven", "ma_repair"]
+    assert data["config"]["stop_loss_pct"] == 6.0
+    assert data["config"]["take_profit_pct"] == 14.0
+    assert data["strategy_parameters"]["ma_repair"]["max_single_position_pct"] == 5.0
+    assert data["effective_auto_controls"]["symbols"]["300750"]["selected_strategy"] == "ma_repair"

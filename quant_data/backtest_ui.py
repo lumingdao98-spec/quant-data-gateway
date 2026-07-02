@@ -183,7 +183,7 @@ function applyAutoConfigToBacktest(cfg){
 async function loadAutoConfigForBacktest(apply=false){
   try{const r=await fetch('/api/auto-trading/config',{cache:'no-store'});const js=await r.json();backtestAutoConfig=js.data||{};renderAutoStrategyCatalog(backtestAutoConfig);renderAutoBacktestSummary(backtestAutoConfig);if(apply)applyAutoConfigToBacktest(backtestAutoConfig);log('已读取总控台自动交易配置')}catch(e){$('autoBacktestSummary').textContent='总控台配置读取失败：'+e}
 }
-async function runAutoConfigBacktest(){if(!backtestAutoConfig)await loadAutoConfigForBacktest(true);applyAutoConfigToBacktest(backtestAutoConfig);await runBacktest()}
+async function runAutoConfigBacktest(){if(!backtestAutoConfig)await loadAutoConfigForBacktest(true);applyAutoConfigToBacktest(backtestAutoConfig);await runBacktest(true)}
 function params(){
   const p=new URLSearchParams();
   p.set('legacy','true');
@@ -219,7 +219,7 @@ function params(){
   p.set('market_weight',$('marketWeight')?.value||'0.14');
   return p
 }
-async function runBacktest(){const btn=$('runBtn');btn.disabled=true;btn.textContent='运行中...';try{log('开始回测');const resp=await fetch('/api/backtest/run?'+params().toString(),{cache:'no-store'});const js=await resp.json();if(!resp.ok||!js.ok)throw new Error(js.message||('HTTP '+resp.status));render(js.data);log('完成：'+js.data.symbol+' '+js.data.strategy_name)}catch(e){log('ERROR '+e);$('assumptions').innerHTML='<div class="warn">回测失败：'+esc(e)+'</div>'}finally{btn.disabled=false;btn.textContent='运行回测'}}
+async function runBacktest(useAutoConfig=false){const btn=$('runBtn');btn.disabled=true;btn.textContent='运行中...';try{log(useAutoConfig?'开始回测（使用总控台自动交易配置）':'开始回测');const p=params();if(useAutoConfig)p.set('use_auto_config','true');const resp=await fetch('/api/backtest/run?'+p.toString(),{cache:'no-store'});const js=await resp.json();if(!resp.ok||!js.ok)throw new Error(js.message||('HTTP '+resp.status));render(js.data);log('完成：'+js.data.symbol+' '+js.data.strategy_name+(js.data.auto_trading_config_applied?' · 已接入自动交易配置':''))}catch(e){log('ERROR '+e);$('assumptions').innerHTML='<div class="warn">回测失败：'+esc(e)+'</div>'}finally{btn.disabled=false;btn.textContent='运行回测'}}
 function render(d){
   lastBacktest=d;
   $('title').textContent=d.name+' '+d.symbol+' · '+d.strategy_name;

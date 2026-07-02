@@ -2699,6 +2699,7 @@ def backtest_run(
     technical_weight: float = 0.34,
     information_weight: float = 0.24,
     market_weight: float = 0.14,
+    use_auto_config: bool = False,
 ) -> dict:
     symbol = str(symbol or "300750").strip()
     limit = max(60, min(int(limit or 520), 1200))
@@ -2718,6 +2719,21 @@ def backtest_run(
         if not force and len(bars) < min(limit, 120):
             bars = service.get_kline(symbol, frame="1d", limit=limit, adjust=adjust, force_refresh=True)
         sizing_mode = str(sizing_mode or position_sizing or "score_weighted")
+        auto_payload: dict = {}
+        if use_auto_config:
+            auto_payload = _apply_auto_config_to_backtest_payload(
+                {"use_auto_config": True, "symbol": symbol, "limit": limit, "adjust": adjust}
+            )
+            strategy = str(auto_payload.get("strategy") or strategy)
+            strategy_combo = str(auto_payload.get("strategy_combo") or strategy_combo)
+            position_sizing = str(auto_payload.get("position_sizing") or position_sizing)
+            sizing_mode = str(auto_payload.get("sizing") or auto_payload.get("sizing_mode") or position_sizing)
+            initial_cash = _as_float(auto_payload.get("initial_cash"), initial_cash)
+            position_pct = _as_float(auto_payload.get("position_pct"), position_pct)
+            stop_loss_pct = _as_float(auto_payload.get("stop_loss_pct"), stop_loss_pct)
+            take_profit_pct = _as_float(auto_payload.get("take_profit_pct"), take_profit_pct)
+            if strategy == "combo_signal":
+                legacy = True
         effective = _v321_effective_legacy_params(
             position_pct=position_pct,
             stop_loss_pct=stop_loss_pct,
@@ -2769,6 +2785,8 @@ def backtest_run(
                 },
             )
             data = _attach_v321_effective_controls(data, effective)
+            if auto_payload:
+                data = _attach_auto_config_to_backtest_data(data, auto_payload, cfg)
             backtest_storage_v319.save(result_v320)
             return _v319_response(
                 True,
@@ -2827,6 +2845,21 @@ def backtest_run(
             },
         )
         result = _attach_v321_effective_controls(result, effective)
+        if auto_payload:
+            legacy_auto_cfg = V319BacktestConfig(
+                strategy="combo_signal",
+                symbols=[symbol],
+                initial_cash=initial_cash,
+                position_pct=effective["position_pct"],
+                sizing=sizing_mode,
+                commission_rate=fee_rate,
+                slippage_bps=slippage_rate * 10000,
+                stop_loss_pct=effective["stop_loss_pct"],
+                take_profit_pct=effective["take_profit_pct"],
+                max_single_position_pct=_as_float(auto_payload.get("max_single_position_pct"), effective["position_pct"]),
+                cash_reserve_pct=_as_float(auto_payload.get("cash_reserve_pct"), 0.02),
+            )
+            result = _attach_auto_config_to_backtest_data(result, auto_payload, legacy_auto_cfg)
         return {"ok": True, "data": result}
     except Exception as exc:
         return {"ok": False, "message": str(exc)[:240], "symbol": symbol, "strategy": strategy}
