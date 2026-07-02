@@ -27,6 +27,12 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/realtime-paper/sessions/" in html
     assert "/api/data-center/status" in html
     assert "/api/macro/global-events" in html
+    assert "/api/news/global/stream" in html
+    assert "globalTicker" in html
+    assert "globalStream" in html
+    assert "loadGlobalStream" in html
+    assert "startGlobalStreamLoop" in html
+    assert "暂停轮播" in html
 
 
 def test_auto_trading_workbench_uses_single_right_overlay_iframe():

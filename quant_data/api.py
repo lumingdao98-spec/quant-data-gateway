@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time as time_module
+from concurrent.futures import ThreadPoolExecutor
 import re
 from dataclasses import fields, replace
 from datetime import datetime, time
@@ -5075,6 +5077,190 @@ def global_news(limit: int = 80, force: bool = False) -> dict:
     data, cache_status = _read_global_news_cached(limit=limit, force=force)
     data["cache_status"] = cache_status
     return {"ok": True, "cache_status": cache_status, "data": data}
+
+
+def _global_stream_items(items: list[dict]) -> list[dict]:
+    stream: list[dict] = []
+    for idx, item in enumerate(items or []):
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or item.get("source_name") or item.get("media") or "全球信息源")
+        title = str(item.get("title") or item.get("summary") or item.get("content") or "").strip()
+        if not title:
+            continue
+        published_at = (
+            item.get("published_at")
+            or item.get("published_at_norm")
+            or item.get("date_display")
+            or item.get("publish_time")
+            or item.get("event_time")
+            or item.get("crawl_time")
+            or ""
+        )
+        url = str(item.get("url") or "")
+        stream.append(
+            {
+                "rank": idx + 1,
+                "title": title[:220],
+                "summary": str(item.get("summary") or title)[:360],
+                "source": source,
+                "source_ref": url,
+                "published_at": published_at,
+                "category": item.get("category") or "全球要闻",
+                "message_dimension": item.get("message_dimension") or item.get("dimension") or "全球快讯",
+                "impact_scope": item.get("impact_scope") or "",
+                "sentiment_label": item.get("sentiment_label") or "",
+                "event_label": item.get("event_label") or "",
+                "is_jin10": ("金十" in source) or ("jin10" in url.lower()),
+                "quality_status": "ok",
+            }
+        )
+    return stream
+
+
+def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全球快讯") -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for idx, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        source = str(row.get("_source_name") or row.get("source") or row.get("文章来源") or row.get("媒体") or fallback_source)
+        title = str(row.get("标题") or row.get("新闻标题") or row.get("title") or row.get("内容") or row.get("content") or "").strip()
+        summary = str(row.get("摘要") or row.get("summary") or row.get("内容") or row.get("content") or title).strip()
+        if not title and summary:
+            title = summary[:140]
+        if not title:
+            continue
+        key = re.sub(r"\W+", "", f"{source}:{title}")[:120]
+        if key in seen:
+            continue
+        seen.add(key)
+        published_at = str(row.get("发布时间") or row.get("发布日期") or row.get("时间") or row.get("datetime") or row.get("pub_time") or row.get("发布于") or "")
+        url = str(row.get("链接") or row.get("新闻链接") or row.get("url") or "")
+        category_hint = str(row.get("_category") or "")
+        text = f"{title} {summary} {category_hint}"
+        try:
+            dimension = news_service._global_message_dimension(text, source, category_hint)  # noqa: SLF001
+            category = news_service._global_market_category(text, category_hint)  # noqa: SLF001
+            impact_scope = news_service._infer_impact_scope(text, "macro", source)  # noqa: SLF001
+        except Exception:
+            dimension = "全球快讯"
+            category = category_hint or "全球要闻"
+            impact_scope = ""
+        out.append(
+            {
+                "rank": idx + 1,
+                "title": title[:220],
+                "summary": summary[:360],
+                "source": source,
+                "source_ref": url,
+                "published_at": published_at,
+                "category": category,
+                "message_dimension": dimension,
+                "impact_scope": impact_scope,
+                "sentiment_label": "",
+                "event_label": "",
+                "is_jin10": ("金十" in source) or ("jin10" in url.lower()),
+                "quality_status": "ok",
+            }
+        )
+    return out
+
+
+def _fetch_global_stream_fast(limit: int = 80, *, force: bool = False) -> tuple[list[dict], list[dict]]:
+    limit = max(20, min(int(limit or 80), 160))
+    jobs = [
+        ("金十/金十期货快讯", lambda: news_service._search_jin10_flash(limit=min(limit, 100))),  # noqa: SLF001
+        ("东方财富快讯:全球", lambda: news_service._search_eastmoney_kuaixun("https://kuaixun.eastmoney.com/qqgs.html", "全球", limit=min(limit, 50))),  # noqa: SLF001
+        ("东方财富快讯:商品", lambda: news_service._search_eastmoney_kuaixun("https://kuaixun.eastmoney.com/jjsj.html", "商品", limit=min(limit, 50))),  # noqa: SLF001
+    ]
+    rows: list[dict] = []
+    status: list[dict] = []
+    executor = ThreadPoolExecutor(max_workers=len(jobs))
+    futures = [(name, executor.submit(fn)) for name, fn in jobs]
+    deadline = time_module.monotonic() + (7.5 if force else 4.5)
+    try:
+        for name, future in futures:
+            timeout = max(0.05, deadline - time_module.monotonic())
+            try:
+                got = list(future.result(timeout=timeout) or [])
+                rows.extend(got)
+                status.append({"source": name, "count": len(got), "status": "ok" if got else "无公开数据或页面结构变化"})
+            except Exception as exc:
+                status.append({"source": name, "count": 0, "status": str(exc)[:160], "skipped_reason": "fast_stream_timeout_or_error"})
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return _global_stream_items_from_rows(rows, "全球快讯")[:limit], status
+
+
+def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool = True) -> tuple[dict, dict]:
+    limit = max(20, min(int(limit or 80), 160))
+    key = f"stream:{limit}"
+    if not force:
+        cached = cache_state_service.get("global_news_cache", key, allow_stale=False, ttl_seconds=45)
+        if cached.data and cached.data.get("items"):
+            return dict(cached.data), cached.cache_status
+        latest = cache_state_service.latest("global_news_cache", allow_stale=True)
+        if latest.data and latest.data.get("items") and not live:
+            payload = {
+                "items": _global_stream_items(list(latest.data.get("items") or [])[:limit]),
+                "raw_count": len(latest.data.get("items") or []),
+                "sources_status": latest.data.get("source_logs") or latest.data.get("sources_status") or [],
+                "updated_at": latest.data.get("updated_at") or latest.data.get("created_at"),
+                "stream_mode": "cache_latest",
+                "refresh_seconds": 35,
+                "missing_reason": "",
+            }
+            return payload, latest.cache_status
+    if not live and not force:
+        return {
+            "items": [],
+            "raw_count": 0,
+            "sources_status": [{"source": "global_news_cache", "status": "miss_live_disabled", "count": 0}],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "cache_only",
+            "refresh_seconds": 35,
+            "missing_reason": "当前没有全球快讯缓存，且本次请求关闭了联网刷新。",
+        }, cache_state_service.status("miss", key=key, ttl_seconds=45, source="global_news_stream", error="cache miss and live=false")
+    try:
+        items, source_status = _fetch_global_stream_fast(limit=limit, force=force)
+        payload = {
+            "items": items,
+            "raw_count": len(items),
+            "sources_status": source_status,
+            "sources_used": sorted({x.get("source", "") for x in items if x.get("source")}),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "fast_live_fetch",
+            "cache_info": {"hit": False, "fast_stream": True, "ttl_seconds": 45},
+            "refresh_seconds": 35,
+            "missing_reason": "" if items else "全球快讯源暂未返回有效条目；不会伪造新闻。",
+            "source_candidates": ["金十/金十期货快讯", "东方财富快讯", "华尔街见闻快讯", "财联社电报", "新浪财经7x24"],
+        }
+        status = cache_state_service.put("global_news_cache", key, payload, ttl_seconds=45, source="news_global_stream")
+        return payload, status
+    except Exception as exc:
+        return {
+            "items": [],
+            "raw_count": 0,
+            "sources_status": [{"source": "global_news_stream", "status": "error", "count": 0, "skipped_reason": str(exc)[:180]}],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "error",
+            "refresh_seconds": 35,
+            "missing_reason": f"全球快讯联网刷新失败：{str(exc)[:180]}",
+        }, cache_state_service.status("error", key=key, ttl_seconds=45, source="global_news_stream", error=str(exc)[:180])
+
+
+@app.get("/api/news/global/stream")
+def global_news_stream(limit: int = 80, force: bool = False, live: bool = True) -> dict:
+    data, cache_status = _read_global_news_stream(limit=limit, force=force, live=live)
+    return {
+        "ok": True,
+        "data": data,
+        "items": data.get("items", []),
+        "cache_status": cache_status,
+        "refresh_seconds": data.get("refresh_seconds", 35),
+        "disclaimer": "全球快讯只展示真实可追溯来源；抓不到时显示缺失/错误，不伪造新闻，不构成投资建议。",
+    }
 
 
 def _macro_event_watchlist(items: list[dict]) -> list[dict]:

@@ -642,12 +642,12 @@ class NewsAnalysisService:
             if tm:
                 title_attr = tm.group(1)
             title = self._clean_text(body) or self._clean_text(title_attr)
+            href = m.group("href") or ""
             ok, _reason = self.valid_news_item(title, "", source=source, url=urljoin(base_url, href), source_type="macro", allow_macro=True)
             if not ok:
                 continue
             if len(title) > 160:
                 title = title[:160]
-            href = m.group("href") or ""
             if href.startswith("//"):
                 href = "https:" + href
             link = urljoin(base_url, href)
