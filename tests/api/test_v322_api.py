@@ -42,9 +42,10 @@ def test_strategy_library_returns_full_strategy_set():
     data = TestClient(api.app).get("/api/strategy/library").json()
 
     assert data["ok"] is True
-    assert len(data["data"]) >= 35
+    assert len(data["data"]) >= 55
     assert len(data["default_keys"]) >= 8
     assert any(item["key"] == "macro_liquidity" for item in data["data"])
+    assert any(item["key"] == "fake_order_cancel_watch" for item in data["data"])
 
 
 def test_v322_readiness_and_market_rules_endpoints():

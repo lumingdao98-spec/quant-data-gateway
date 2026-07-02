@@ -660,12 +660,52 @@ class ScreenerService:
                 total += 2; strategy_tags.append("策略:BOLL中轨突破")
             if "amount_active" in strategies and q.amount and q.amount >= 200_000_000:
                 total += 2; strategy_tags.append("策略:成交额活跃")
+            if "fund_flow_watch" in strategies:
+                if strength_score >= 10 or (q.amount and q.amount >= 300_000_000 and (q.volume_ratio or 0) >= 1.1):
+                    total += 1.6; strategy_tags.append("策略:资金面观察")
+                elif not q.amount:
+                    strategy_risks.append("策略:资金面数据源缺失")
             if "finance_quality" in strategies and value_score >= 10 and not value_risks:
                 total += 1.5; strategy_tags.append("策略:财报/估值质量可观察")
             if "main_money_est" in strategies and strength_score >= 10:
                 total += 2; strategy_tags.append("策略:资金强度估算")
+            if "vwap_reclaim" in strategies and vwap20 is not None and last >= vwap20 and strength_score >= 8:
+                total += 1.6; strategy_tags.append("策略:VWAP收复")
+            if "volume_dryup_reversal" in strategies and vol5_20 is not None and vol5_20 <= 0.85 and ma20 and last >= ma20 * 0.96:
+                total += 1.4; strategy_tags.append("策略:缩量企稳")
+            if "orderbook_imbalance_watch" in strategies:
+                order_ratio = getattr(q, "order_ratio", None)
+                order_diff = getattr(q, "order_diff", None)
+                if order_ratio is None and order_diff is None:
+                    strategy_risks.append("策略:公开源缺盘口委比/委差")
+                elif (order_ratio is not None and order_ratio >= 20) or (order_diff is not None and order_diff > 0):
+                    total += .8; strategy_tags.append("策略:盘口偏承接")
+                elif order_ratio is not None and order_ratio <= -20:
+                    total -= 1.0; strategy_risks.append("策略:盘口卖压偏重")
+            if "fake_order_cancel_watch" in strategies:
+                if getattr(q, "order_ratio", None) is None and getattr(q, "order_diff", None) is None:
+                    strategy_risks.append("策略:虚假挂撤需Level-2/逐笔数据，当前公开源缺失")
+                elif q.volume_ratio is not None and q.volume_ratio >= 5 and abs(float(q.change_pct or 0)) <= 1.5:
+                    total -= 1.2; strategy_risks.append("策略:放量不涨疑似盘口扰动")
+            if "northbound_flow_watch" in strategies:
+                strategy_risks.append("策略:北向资金公开源未接入，当前不参与买入加权")
+            if "margin_financing_watch" in strategies:
+                strategy_risks.append("策略:融资融券字段缺失，当前仅作风险提示")
             if "breakout_platform" in strategies and channel_position is not None and channel_position >= 78 and vol5_20 is not None and vol5_20 >= 1.1:
                 total += 2.5; strategy_tags.append("策略:箱体上沿突破观察")
+            if "boll_squeeze_break" in strategies and b_width is not None and b_width <= 8 and b_mid and last >= b_mid:
+                total += 1.8; strategy_tags.append("策略:BOLL收窄突破")
+            if "roc_momentum_turn" in strategies and roc12 is not None and momentum10 is not None and roc12 > 0 and momentum10 >= 0:
+                total += 1.4; strategy_tags.append("策略:ROC动量转正")
+            if "support_retest" in strategies and support_dist_pct is not None and 1 <= support_dist_pct <= 8 and ma20 and last >= ma20 * 0.95:
+                total += 1.3; strategy_tags.append("策略:支撑回踩确认")
+            if "resistance_break_confirm" in strategies and channel_position is not None and channel_position >= 85 and vol5_20 is not None and vol5_20 >= 1.1:
+                total += 1.3; strategy_tags.append("策略:阻力突破确认")
+            if "ma60_regime_filter" in strategies:
+                if ma60 and ma60_prev and last >= ma60 and ma60 >= ma60_prev:
+                    total += 1.6; strategy_tags.append("策略:MA60趋势过滤通过")
+                elif ma60 and last < ma60 * 0.95:
+                    total -= 1.6; strategy_risks.append("策略:跌破MA60趋势过滤")
             if "gap_open" in strategies and len(closes) >= 2 and abs((closes[-1] / closes[-2] - 1) * 100) >= 5:
                 strategy_tags.append("策略:跳空/波动观察")
             if "etf_liquidity" in strategies and q.asset_type == AssetType.ETF and q.amount and q.amount >= 50_000_000:
@@ -703,6 +743,20 @@ class ScreenerService:
                 total += 1.5; strategy_tags.append("策略:形态结构观察")
             if "psy_brar_sentiment" in strategies and psy12 is not None and 30 <= psy12 <= 70 and (br26 is None or br26 < 350):
                 total += 1.2; strategy_tags.append("策略:情绪温度正常")
+            if "sector_strength" in strategies:
+                strategy_tags.append("策略:板块强度需行业/主题快照联动")
+            if "market_breadth_filter" in strategies:
+                regime_score = float((market_regime or {}).get("score") or 50)
+                if regime_score >= 60:
+                    total += 1.0; strategy_tags.append("策略:市场宽度过滤通过")
+                elif regime_score <= 42:
+                    total -= 1.5; strategy_risks.append("策略:市场宽度偏弱")
+            if "report_blackout" in strategies:
+                strategy_tags.append("策略:财报窗口需事件日历确认")
+            if "trailing_take_profit" in strategies:
+                strategy_tags.append("策略:移动止盈用于持仓管理")
+            if "dca_core_plan" in strategies:
+                strategy_tags.append("策略:定投/核心仓用于资金计划")
 
         raw_strategy_delta = round(float(total) - score_before_strategy, 4)
         capped_strategy_delta = max(-8.0, min(6.0, raw_strategy_delta))

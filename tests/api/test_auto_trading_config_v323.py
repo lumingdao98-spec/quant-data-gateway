@@ -62,7 +62,9 @@ def test_auto_trading_config_exposes_catalog_and_beginner_presets():
     data = configured["data"]
     assert configured["ok"] is True
     assert "strategy_catalog" in data
-    assert len(data["strategy_catalog"]) >= 30
+    assert len(data["strategy_catalog"]) >= 55
+    catalog_keys = {item["key"] for item in data["strategy_catalog"]}
+    assert {"vwap_reclaim", "fake_order_cancel_watch", "market_breadth_filter", "dca_core_plan"} <= catalog_keys
     assert {"balanced", "defensive", "etf_rotation"}.issubset(set(data["beginner_presets"]))
     assert data["strategy_parameters"]["ma_repair"]["name"]
     assert data["strategy_parameters"]["ma_repair"]["category"]
@@ -76,7 +78,7 @@ def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
         "/api/auto-trading/config/one-click",
         json={
             "symbols": ["300750", "600438"],
-            "strategy_combo": ["score_driven", "ma_repair", "fund_flow_watch", "risk_control"],
+            "strategy_combo": ["score_driven", "ma_repair", "fund_flow_watch", "vwap_reclaim", "risk_control"],
             "score_weights": {
                 "technical": 0.34,
                 "fundamental": 0.22,
@@ -111,6 +113,16 @@ def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
                     "buy_threshold": 66,
                     "sell_threshold": 48,
                 },
+                "vwap_reclaim": {
+                    "enabled": True,
+                    "position_sizing": "atr_risk",
+                    "max_single_position_pct": 7,
+                    "stop_loss_pct": 6,
+                    "take_profit_pct": 13,
+                    "max_strategy_drawdown_pct": 8,
+                    "buy_threshold": 64,
+                    "sell_threshold": 47,
+                },
             },
         },
     ).json()
@@ -127,6 +139,8 @@ def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
     assert matrix["ma_repair"]["max_strategy_drawdown_pct"] == 9.0
     assert matrix["ma_repair"]["buy_threshold"] == 63.0
     assert data["strategy_parameters"]["fund_flow_watch"]["take_profit_pct"] == 12.0
+    assert matrix["vwap_reclaim"]["max_single_position_pct"] == 7.0
+    assert matrix["vwap_reclaim"]["position_sizing"] == "atr_risk"
 
 
 def test_realtime_paper_tick_hydrates_quote_when_price_missing(monkeypatch):
