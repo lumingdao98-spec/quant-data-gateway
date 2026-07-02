@@ -1081,7 +1081,7 @@ def _timeline_with_fallback(symbol: str, q: Quote | None, force: bool = False) -
 
 @app.get("/", include_in_schema=False)
 def root():
-    return RedirectResponse(url="/ui")
+    return RedirectResponse(url="/auto-trading")
 
 
 @app.get("/api/health")
@@ -5075,6 +5075,57 @@ def global_news(limit: int = 80, force: bool = False) -> dict:
     data, cache_status = _read_global_news_cached(limit=limit, force=force)
     data["cache_status"] = cache_status
     return {"ok": True, "cache_status": cache_status, "data": data}
+
+
+def _macro_event_watchlist(items: list[dict]) -> list[dict]:
+    """Build an evidence-only macro watchlist from real global-news items."""
+    patterns = [
+        ("nonfarm_payrolls", "美国非农就业", r"非农|nonfarm|payroll|就业报告|劳动力市场"),
+        ("us_cpi", "美国 CPI/PCE 通胀", r"CPI|PCE|通胀|物价|inflation"),
+        ("fomc_rate", "美联储/FOMC/利率", r"美联储|FOMC|降息|加息|利率|鲍威尔|Fed"),
+        ("usd_treasury", "美元/美债收益率", r"美元|美债|收益率|DXY|Treasury|汇率"),
+        ("crude_gold", "原油/黄金/大宗商品", r"原油|黄金|铜|煤炭|商品|OPEC|WTI|Brent|金价"),
+        ("geopolitics", "地缘风险", r"地缘|冲突|制裁|关税|出口管制|战争|袭击"),
+        ("china_policy", "国内政策/流动性", r"央行|降准|逆回购|LPR|社融|财政|政策|房地产"),
+    ]
+    watch: list[dict] = []
+    for key, label, pattern in patterns:
+        matched = []
+        regex = re.compile(pattern, re.I)
+        for item in items:
+            text = f"{item.get('title') or ''} {item.get('summary') or ''} {item.get('source') or ''}"
+            if regex.search(text):
+                matched.append(item)
+        watch.append(
+            {
+                "key": key,
+                "label": label,
+                "status": "有真实新闻命中" if matched else "等待真实来源",
+                "evidence_count": len(matched),
+                "latest_title": str((matched[0] or {}).get("title") or "") if matched else "",
+                "latest_source": str((matched[0] or {}).get("source") or "") if matched else "",
+                "reason": "来自全球信息面缓存/联网源，进入信息面与大盘情绪辅助判断。"
+                if matched
+                else "当前缓存未命中该事件；不填充假日期或假影响。",
+            }
+        )
+    return watch
+
+
+@app.get("/api/macro/global-events")
+def macro_global_events(limit: int = 80, force: bool = False) -> dict:
+    limit = max(10, min(int(limit or 80), 200))
+    data, cache_status = _read_global_news_cached(limit=limit, force=force)
+    items = [x for x in (data.get("items") or []) if isinstance(x, dict)]
+    return {
+        "ok": True,
+        "data": {**data, "items": items, "cache_status": cache_status},
+        "items": items,
+        "watchlist": _macro_event_watchlist(items),
+        "cache_status": cache_status,
+        "agent_status": "联网辅助：使用真实全球信息面/缓存做规则归因；未接入外部 LLM 下单。",
+        "disclaimer": "宏观事件只作为风险和解释变量，不单独构成买卖建议；无真实来源时显示等待真实来源。",
+    }
 
 
 @app.get("/api/company/profile/store/stats")
