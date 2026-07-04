@@ -31,6 +31,9 @@ def test_global_news_stream_returns_real_source_shape(monkeypatch):
     assert data["items"][0]["source"] == "金十期货快讯"
     assert data["items"][0]["is_jin10"] is True
     assert data["items"][0]["published_at"] == "2026-07-02 21:08:00"
+    assert data["items"][0]["source_ref"] == "https://qihuo.jin10.com/"
+    assert "impact_targets" in data["items"][0]
+    assert "impact_note" in data["items"][0]
     assert "不伪造新闻" in data["disclaimer"]
 
 
@@ -60,6 +63,9 @@ def test_jin10_realtime_endpoint_is_first_class_direct_stream(monkeypatch):
     assert data["ok"] is True
     assert data["items"][0]["source"] == "金十期货页面快讯"
     assert data["items"][0]["source_api"] == "https://flash-api.jin10.com/get_flash_list"
+    assert data["items"][0]["source_ref"] == "https://qihuo.jin10.com/"
+    assert "impact_targets" in data["items"][0]
+    assert "impact_note" in data["items"][0]
     assert data["data"]["stream_mode"] == "jin10_realtime_direct"
     assert data["refresh_seconds"] == 20
     assert "不抓搜索结果页" in data["source_policy"]

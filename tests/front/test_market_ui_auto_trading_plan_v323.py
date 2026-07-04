@@ -12,6 +12,16 @@ def test_ui_exposes_auto_trading_workbench_entry():
     assert "config/one-click" in client.get("/auto-trading").text
 
 
+def test_ui_embedded_mode_for_auto_trading_iframe():
+    html = TestClient(api.app).get("/ui?symbol=300750&frame=time&embedded=1").text
+
+    assert "const EMBEDDED_MODE=true" in html
+    assert ".app.embedded" in html
+    assert "grid-template-areas:\"top\" \"main\" \"log\"" in html
+    assert ".app.embedded .side{display:none}" in html
+    assert "if(EMBEDDED_MODE)$('app').classList.add('embedded')" in html
+
+
 def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time").text
 

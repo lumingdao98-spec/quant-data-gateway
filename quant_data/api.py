@@ -8,6 +8,7 @@ from datetime import datetime, time
 from pathlib import Path
 from statistics import mean
 from types import SimpleNamespace
+from typing import Any
 
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -5237,6 +5238,63 @@ def global_news(limit: int = 80, force: bool = False) -> dict:
     return {"ok": True, "cache_status": cache_status, "data": data}
 
 
+def _global_impact_fields(text: str, category: str = "", dimension: str = "", existing_tags: Any | None = None) -> dict:
+    """Map global flash/news text to transparent impact hints.
+
+    These hints are not trading signals. They only explain which assets/sectors a
+    macro or commodity event may touch, so the UI can show why the information
+    panel matters.
+    """
+    raw_tags = existing_tags if isinstance(existing_tags, list) else []
+    try:
+        inferred_tags = news_service._industry_tags(text)  # noqa: SLF001
+    except Exception:
+        inferred_tags = []
+    sectors: list[str] = []
+    assets: list[str] = []
+
+    def add_many(dst: list[str], values: list[str]) -> None:
+        for value in values:
+            v = str(value or "").strip()
+            if v and v not in dst:
+                dst.append(v)
+
+    t = f"{text} {category} {dimension}"
+    add_many(sectors, [str(x) for x in raw_tags] + [str(x) for x in inferred_tags])
+    if any(w in t for w in ["非农", "就业", "CPI", "PPI", "PMI", "FOMC", "美联储", "降息", "加息", "通胀"]):
+        add_many(sectors, ["银行", "券商", "成长股估值", "出口链"])
+        add_many(assets, ["A股指数", "美元指数", "美债收益率", "人民币汇率"])
+    if any(w in t for w in ["美元", "美债", "汇率", "外汇"]):
+        add_many(sectors, ["出口链", "航空运输", "贵金属"])
+        add_many(assets, ["美元指数", "人民币汇率", "黄金"])
+    if any(w in t for w in ["原油", "OPEC", "石油", "能源", "天然气"]):
+        add_many(sectors, ["石油石化", "煤化工", "航空运输", "新能源"])
+        add_many(assets, ["原油", "能源化工"])
+    if any(w in t for w in ["黄金", "白银", "贵金属"]):
+        add_many(sectors, ["贵金属", "有色金属"])
+        add_many(assets, ["黄金", "白银", "美元指数"])
+    if any(w in t for w in ["铜", "铝", "镍", "锂", "有色", "工业金属", "商品", "期货"]):
+        add_many(sectors, ["有色金属", "钢铁", "煤炭", "化工", "制造成本"])
+        add_many(assets, ["大宗商品", "工业品"])
+    if any(w in t for w in ["地缘", "冲突", "制裁", "战争", "乌克兰", "中东", "红海"]):
+        add_many(sectors, ["军工", "能源", "航运", "避险资产"])
+        add_many(assets, ["原油", "黄金", "航运"])
+    if any(w in t for w in ["AI", "芯片", "半导体", "算力", "光伏", "储能", "新能源汽车"]):
+        add_many(sectors, ["半导体/算力", "新能源", "光伏储能"])
+        add_many(assets, ["成长股", "科技主题"])
+
+    targets = (sectors + assets)[:10]
+    note = "影响提示：仅解释宏观/商品/信息面对板块和资产的可能传导，不直接等于买卖建议。"
+    if targets:
+        note = f"影响提示：可能影响 {', '.join(targets[:6])}；仅作信息面风险观察。"
+    return {
+        "affected_sectors": sectors[:8],
+        "affected_assets": assets[:8],
+        "impact_targets": targets,
+        "impact_note": note,
+    }
+
+
 def _global_stream_items(items: list[dict]) -> list[dict]:
     stream: list[dict] = []
     for idx, item in enumerate(items or []):
@@ -5256,6 +5314,15 @@ def _global_stream_items(items: list[dict]) -> list[dict]:
             or ""
         )
         url = str(item.get("url") or "")
+        category = item.get("category") or "全球要闻"
+        dimension = item.get("message_dimension") or item.get("dimension") or "全球快讯"
+        impact_scope = item.get("impact_scope") or ""
+        impact = _global_impact_fields(
+            f"{title} {item.get('summary') or ''} {impact_scope}",
+            str(category),
+            str(dimension),
+            item.get("industry_tags") or item.get("affected_sectors"),
+        )
         stream.append(
             {
                 "rank": idx + 1,
@@ -5264,9 +5331,10 @@ def _global_stream_items(items: list[dict]) -> list[dict]:
                 "source": source,
                 "source_ref": url,
                 "published_at": published_at,
-                "category": item.get("category") or "全球要闻",
-                "message_dimension": item.get("message_dimension") or item.get("dimension") or "全球快讯",
-                "impact_scope": item.get("impact_scope") or "",
+                "category": category,
+                "message_dimension": dimension,
+                "impact_scope": impact_scope,
+                **impact,
                 "sentiment_label": item.get("sentiment_label") or "",
                 "event_label": item.get("event_label") or "",
                 "is_jin10": ("金十" in source) or ("jin10" in url.lower()),
@@ -5305,6 +5373,7 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
             dimension = "全球快讯"
             category = category_hint or "全球要闻"
             impact_scope = ""
+        impact = _global_impact_fields(text, str(category), str(dimension), row.get("industry_tags") or row.get("_industry_tags"))
         out.append(
             {
                 "rank": idx + 1,
@@ -5318,6 +5387,7 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
                 "category": category,
                 "message_dimension": dimension,
                 "impact_scope": impact_scope,
+                **impact,
                 "sentiment_label": "",
                 "event_label": "",
                 "is_jin10": ("金十" in source) or ("jin10" in url.lower()),
@@ -6338,8 +6408,8 @@ def data_center_page() -> str:
 
 
 @app.get("/detail/{symbol}", response_class=HTMLResponse)
-def detail_page(symbol: str, frame: str = "time") -> str:
-    return _build_ui(initial_symbol=symbol, full=True, initial_frame=frame)
+def detail_page(symbol: str, frame: str = "time", embedded: bool = False) -> str:
+    return _build_ui(initial_symbol=symbol, full=True, initial_frame=frame, embedded=embedded)
 
 
 @app.get("/trading", response_class=HTMLResponse)
@@ -6352,15 +6422,15 @@ def trading_page() -> str:
 
 
 @app.get("/chart/{symbol}", response_class=HTMLResponse)
-def chart_page(symbol: str, frame: str = "time") -> str:
-    return _build_ui(initial_symbol=symbol, full=True, initial_frame=frame)
+def chart_page(symbol: str, frame: str = "time", embedded: bool = False) -> str:
+    return _build_ui(initial_symbol=symbol, full=True, initial_frame=frame, embedded=embedded)
 
 
 @app.get("/ui", response_class=HTMLResponse)
-def ui(symbol: str = "300750", frame: str | None = None, mode: str | None = None) -> str:
+def ui(symbol: str = "300750", frame: str | None = None, mode: str | None = None, embedded: bool = False) -> str:
     initial_frame = frame or mode or "time"
-    return _build_ui(initial_symbol=symbol or "300750", full=False, initial_frame=initial_frame)
+    return _build_ui(initial_symbol=symbol or "300750", full=False, initial_frame=initial_frame, embedded=embedded)
 
 
-def _build_ui(initial_symbol: str, full: bool = False, initial_frame: str = "time") -> str:
-    return build_ui_v22(initial_symbol=initial_symbol, full=full, initial_frame=initial_frame)
+def _build_ui(initial_symbol: str, full: bool = False, initial_frame: str = "time", embedded: bool = False) -> str:
+    return build_ui_v22(initial_symbol=initial_symbol, full=full, initial_frame=initial_frame, embedded=embedded)

@@ -35,6 +35,11 @@ def test_auto_trading_workbench_page_visible():
     assert "globalStream" in html
     assert "globalStreamSources" in html
     assert "mergeGlobalStreams" in html
+    assert "sourceUrlOf" in html
+    assert "impactTagsOf" in html
+    assert "impactNoteOf" in html
+    assert "source-link" in html
+    assert "impact-tag" in html
     assert "globalStreamRefreshMs" in html
     assert "loadGlobalStream" in html
     assert "agentDecision" in html
@@ -55,6 +60,8 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     assert "frame.src='about:blank'" in html
     assert "currentModule && currentModule!==key" in html
     assert "/ui?symbol=" in html
+    assert "frame=time&embedded=1" in html
+    assert "frame=1d&embedded=1" in html
     assert "/detail/" in html
     assert "/backtest?symbol=" in html
     assert "/realtime-paper" in html
