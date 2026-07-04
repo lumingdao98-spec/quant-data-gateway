@@ -229,6 +229,7 @@ def _render_chinese_api_docs() -> str:
                 ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
                 ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
+                ("GET", "/api/agent/market-brief", "联网证据代理：聚合金十快讯、全球宏观事件、评分溯源和实盘安全状态，只做辅助判断，不自动下单。"),
             ],
         ),
         (
@@ -5283,6 +5284,153 @@ def global_news_stream(limit: int = 80, force: bool = False, live: bool = True) 
         "cache_status": cache_status,
         "refresh_seconds": data.get("refresh_seconds", 35),
         "disclaimer": "全球快讯只展示真实可追溯来源；抓不到时显示缺失/错误，不伪造新闻，不构成投资建议。",
+    }
+
+
+def _agent_score_rows(symbols: list[str]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    latest_rows = score_history_service.latest(limit=1000)
+    for row in latest_rows or []:
+        sym = str(row.get("symbol") or "").strip()
+        if sym and sym in symbols and sym not in out:
+            out[sym] = row
+    for row in score_provenance_memory_v323.values():
+        sym = str(row.get("symbol") or "").strip()
+        if sym in symbols:
+            score = row.get("final_trade_score") or row.get("final_score") or row.get("total_score")
+            out[sym] = {
+                **out.get(sym, {}),
+                "symbol": sym,
+                "name": row.get("name") or out.get(sym, {}).get("name") or sym,
+                "total_score": score,
+                "grade": row.get("action") or out.get(sym, {}).get("grade") or "",
+                "reason": row.get("explanation") or row.get("summary") or out.get(sym, {}).get("reason") or "",
+                "updated_at": row.get("decision_time") or out.get(sym, {}).get("updated_at") or "",
+                "risk_flags": row.get("missing_data") or row.get("risk_flags") or out.get(sym, {}).get("risk_flags") or [],
+                "tags": row.get("gates") or out.get(sym, {}).get("tags") or [],
+            }
+    return out
+
+
+def _agent_symbol_decisions(symbols: list[str], scores: dict[str, dict], config: dict, safety: dict) -> list[dict]:
+    decisions: list[dict] = []
+    signal_map = dict(config.get("screener_signal_map") or {})
+    for sym in symbols[:30]:
+        row = scores.get(sym) or {}
+        profile = signal_map.get(sym) or {}
+        score = _as_float(row.get("total_score") or row.get("final_trade_score") or profile.get("final_score"), 0.0)
+        risk_flags = row.get("risk_flags") or profile.get("risk_flags") or []
+        if score >= 70:
+            action = "模拟验证/实盘预检查"
+            reason = "评分较高，但真实交易仍需券商连接、风控和人工确认。"
+        elif score >= 55:
+            action = "观察"
+            reason = "评分在观察区间，适合加入实时模拟或等待更明确触发。"
+        elif score > 0:
+            action = "回避/仅观察"
+            reason = "评分偏低，先查看风险标签和数据缺失。"
+        else:
+            action = "数据不足"
+            reason = "暂无评分溯源，请先运行筛选、回测或实时模拟。"
+        if safety.get("LIVE_KILL_SWITCH"):
+            action = "实盘阻断"
+            reason = "Kill switch 已开启，真实下单被阻断。"
+        elif not safety.get("LIVE_TRADING_ENABLED"):
+            reason += " 当前 LIVE_TRADING_ENABLED=false，只允许模拟或预检查。"
+        decisions.append(
+            {
+                "symbol": sym,
+                "name": row.get("name") or profile.get("name") or sym,
+                "score": round(score, 2) if score else None,
+                "action": action,
+                "reason": reason,
+                "risk_flags": risk_flags[:6] if isinstance(risk_flags, list) else risk_flags,
+                "tags": (row.get("tags") or profile.get("tags") or [])[:8] if isinstance(row.get("tags") or profile.get("tags") or [], list) else [],
+                "score_time": row.get("updated_at") or profile.get("updated_at") or "",
+                "source": "score_provenance_or_screener_history" if row or profile else "missing_score",
+            }
+        )
+    return decisions
+
+
+@app.get("/api/agent/market-brief")
+def agent_market_brief(symbols: str | None = None, force: bool = False, limit: int = 80) -> dict:
+    config = _build_auto_trading_config({"symbols": _parse_symbol_text(symbols)} if symbols else {})
+    symbol_list = _parse_symbol_text(symbols) if symbols else list(config.get("symbols") or [])[:20]
+    stream_data, stream_status = _read_global_news_stream(limit=limit, force=force, live=True)
+    stream_items = [x for x in (stream_data.get("items") or []) if isinstance(x, dict)]
+    macro_watch = _macro_event_watchlist(stream_items)
+    broker_status = live_trading_engine_v323.status()
+    safety = broker_status.get("safety") or {}
+    scores = _agent_score_rows(symbol_list)
+    decisions = _agent_symbol_decisions(symbol_list, scores, config, safety)
+    evidence = []
+    for item in stream_items[:8]:
+        evidence.append(
+            {
+                "type": "global_flash",
+                "title": item.get("title"),
+                "source": item.get("source"),
+                "published_at": item.get("published_at"),
+                "impact_scope": item.get("impact_scope") or item.get("message_dimension"),
+            }
+        )
+    for item in macro_watch:
+        if item.get("evidence_count"):
+            evidence.append({"type": "macro_watch", "title": item.get("label"), "source": item.get("latest_source"), "reason": item.get("reason")})
+    risk_flags = []
+    if not stream_items:
+        risk_flags.append("全球快讯暂未命中：信息面只能使用缓存或等待真实来源")
+    if safety.get("LIVE_KILL_SWITCH"):
+        risk_flags.append("LIVE_KILL_SWITCH 已开启，真实交易全部阻断")
+    if not safety.get("LIVE_TRADING_ENABLED"):
+        risk_flags.append("LIVE_TRADING_ENABLED=false，当前只能模拟/预检查")
+    if safety.get("ORDER_CONFIRM_REQUIRED"):
+        risk_flags.append("ORDER_CONFIRM_REQUIRED=true，真实订单必须人工确认")
+    if not (broker_status.get("broker") or {}).get("connected"):
+        risk_flags.append("券商未连接或未授权，QMT/PTrade 只显示 disabled/unsupported")
+    if not any(d.get("score") for d in decisions):
+        risk_flags.append("股票池暂无评分溯源，请先运行筛选/回测/实时模拟")
+    strong = [d for d in decisions if (d.get("score") or 0) >= 70]
+    watch = [d for d in decisions if 55 <= (d.get("score") or 0) < 70]
+    if strong:
+        headline = f"{len(strong)} 只标的评分较高：先进入实时模拟和实盘预检查。"
+        action = "paper_then_precheck"
+    elif watch:
+        headline = f"{len(watch)} 只标的处于观察区间：等待信号确认。"
+        action = "watch"
+    else:
+        headline = "当前更适合观察/补充数据，不建议自动新增真实仓位。"
+        action = "hold_or_collect_data"
+    if risk_flags:
+        headline += " 真实交易仍受安全门控约束。"
+    return {
+        "ok": True,
+        "data": {
+            "agent_id": "connected_market_agent_v323",
+            "mode": "evidence_only_online_agent",
+            "headline": headline,
+            "recommended_action": action,
+            "confidence": "medium" if stream_items or any(d.get("score") for d in decisions) else "low",
+            "symbols": symbol_list,
+            "symbol_decisions": decisions,
+            "global_flash_count": len(stream_items),
+            "global_stream_mode": stream_data.get("stream_mode"),
+            "macro_watchlist": macro_watch,
+            "evidence": evidence[:16],
+            "risk_flags": list(dict.fromkeys(risk_flags)),
+            "next_steps": [
+                "先运行筛选或读取总控台配置，确认股票池和策略组合。",
+                "用同一套策略先跑回测，再启动实时模拟。",
+                "只有券商连接、风控通过、确认队列批准后，才允许真实下单。",
+            ],
+            "broker_safety": safety,
+            "source_status": stream_data.get("sources_status") or [],
+            "cache_status": stream_status,
+            "llm_status": "未接入外部 LLM 下单；当前为联网数据 + 规则证据代理。",
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
+        },
     }
 
 

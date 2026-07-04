@@ -80,3 +80,34 @@ def test_generic_global_news_link_parser_keeps_href_available(monkeypatch):
     assert rows
     assert seen_urls == ["https://example.com/a/20260702.html"]
     assert rows[0]["链接"] == "https://example.com/a/20260702.html"
+
+
+def test_jin10_flash_parser_keeps_parent_time_and_dedupes():
+    payload = {
+        "status": 200,
+        "data": [
+            {
+                "id": "1",
+                "time": "2026-07-04 08:40:17",
+                "data": {
+                    "content": "【美国非农数据公布前，美元指数震荡】金十数据7月4日讯，交易员等待劳动力市场报告。",
+                    "source_link": "https://qihuo.jin10.com/",
+                    "source": "",
+                },
+            },
+            {
+                "id": "2",
+                "time": "2026-07-04 08:41:00",
+                "data": {
+                    "content": "【美国非农数据公布前，美元指数震荡】金十数据7月4日讯，交易员等待劳动力市场报告。",
+                },
+            },
+        ],
+    }
+
+    rows = api.news_service._extract_jin10_flash_rows(payload, "金十期货快讯", limit=10)
+
+    assert len(rows) == 1
+    assert rows[0]["标题"] == "美国非农数据公布前，美元指数震荡"
+    assert rows[0]["发布时间"] == "2026-07-04 08:40:17"
+    assert rows[0]["_source_name"] == "金十期货快讯"

@@ -610,10 +610,12 @@ class NewsAnalysisService:
             try:
                 resp = self.http.get(url, params=params, headers=headers)
                 data = self._decode_jsonish(resp.text)
-                extracted = self._extract_global_json_rows(data, src, limit=limit-len(rows)) if data is not None else []
+                extracted = self._extract_jin10_flash_rows(data, src, limit=limit-len(rows)) if data is not None else []
                 for r in extracted:
                     r["_source_name"] = src
-                    rows.append(r)
+                    key = re.sub(r"\W+", "", str(r.get("标题") or r.get("内容") or ""))[:120]
+                    if key and not any(re.sub(r"\W+", "", str(x.get("标题") or x.get("内容") or ""))[:120] == key for x in rows):
+                        rows.append(r)
             except Exception:
                 continue
         # HTML 摘要兜底：xnews/jin10 与 qihuo 首页常能返回最新标题片段。
@@ -627,6 +629,63 @@ class NewsAnalysisService:
                     rows.append(r)
             except Exception:
                 continue
+        return rows[:limit]
+
+    def _extract_jin10_flash_rows(self, data: Any, source_name: str, limit: int = 80) -> list[dict[str, Any]]:
+        """Extract Jin10 flash rows while preserving parent timestamp and de-duplicating content."""
+        container = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(container, list):
+            return self._extract_global_json_rows(data, source_name, limit=limit)
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in container:
+            if len(rows) >= limit:
+                break
+            if not isinstance(item, dict):
+                continue
+            payload = item.get("data") if isinstance(item.get("data"), dict) else {}
+            text = (
+                payload.get("content")
+                or payload.get("title")
+                or payload.get("summary")
+                or item.get("content")
+                or item.get("title")
+                or item.get("summary")
+                or ""
+            )
+            text = html_lib.unescape(str(text))
+            text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+            text = re.sub(r"<[^>]+>", "", text)
+            text = self._clean_text(text)
+            if not text or self._is_noise_title(text):
+                continue
+            title = text
+            bracket = re.match(r"^【([^】]{4,120})】\s*(.*)$", text)
+            if bracket:
+                title = bracket.group(1).strip()
+                summary = bracket.group(2).strip() or text
+            else:
+                summary = text
+            source_link = str(payload.get("source_link") or payload.get("url") or item.get("url") or "")
+            pub = str(item.get("time") or payload.get("time") or item.get("created_at") or "")
+            real_source = str(payload.get("source") or source_name or "金十快讯").strip() or source_name
+            ok, _reason = self.valid_news_item(title, summary, source=real_source, url=source_link, source_type="macro", allow_macro=True)
+            if not ok and ("金十" not in real_source or len(title) < 8):
+                continue
+            key = re.sub(r"\W+", "", title + summary)[:160]
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                {
+                    "标题": title[:180],
+                    "内容": summary[:600],
+                    "发布时间": pub,
+                    "链接": source_link,
+                    "_source_name": real_source,
+                    "_source_channel": source_name,
+                }
+            )
         return rows[:limit]
 
     def _extract_generic_news_links(self, html: str, source: str, base_url: str, limit: int = 80) -> list[dict[str, Any]]:

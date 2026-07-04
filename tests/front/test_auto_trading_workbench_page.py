@@ -24,13 +24,17 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/auto-trading/config" in html
     assert "/api/auto-trading/config/one-click" in html
     assert "/api/auto-trading/start-paper" in html
+    assert "/api/agent/market-brief" in html
     assert "/api/realtime-paper/sessions/" in html
     assert "/api/data-center/status" in html
     assert "/api/macro/global-events" in html
     assert "/api/news/global/stream" in html
+    assert "/api/agent/market-brief" in html
     assert "globalTicker" in html
     assert "globalStream" in html
     assert "loadGlobalStream" in html
+    assert "agentDecision" in html
+    assert "renderAgentDecision" in html
     assert "startGlobalStreamLoop" in html
     assert "暂停轮播" in html
 
@@ -69,3 +73,4 @@ def test_chinese_docs_include_auto_trading_v323_entrypoints():
     assert "/api/auto-trading/config" in html
     assert "/api/auto-trading/config/one-click" in html
     assert "/api/auto-trading/start-paper" in html
+    assert "/api/agent/market-brief" in html

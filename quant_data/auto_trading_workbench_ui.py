@@ -39,6 +39,7 @@ def build_auto_trading_workbench_ui() -> str:
 .iframe-shell{position:fixed;top:0;right:0;bottom:0;left:268px;background:#07111f;z-index:40;display:grid;grid-template-rows:56px 1fr;transform:translateX(104%);transition:transform .2s ease;border-left:1px solid var(--line);box-shadow:-20px 0 60px rgba(0,0,0,.45)}
 .iframe-shell.open{transform:translateX(0)}.iframe-head{display:flex;align-items:center;gap:10px;padding:0 14px;background:#0b1424;border-bottom:1px solid var(--line)}.iframe-head b{font-size:17px}.iframe-head .grow{flex:1}.workspace-frame{width:100%;height:100%;border:0;background:#07111f}.iframe-empty{display:grid;place-items:center;color:var(--muted)}
 .agent-box{border:1px solid #315077;background:linear-gradient(135deg,#0d1728,#10233a);border-radius:12px;padding:12px;line-height:1.6;font-size:13px}.agent-box b{display:block;color:#dbeafe;margin-bottom:5px}
+.agent-decision{margin-top:10px;border:1px solid #2f4364;background:#081626;border-radius:12px;padding:10px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;max-height:210px;overflow:auto}.agent-decision b{display:block;color:#dbeafe;margin-bottom:5px}.agent-decision ul{margin:7px 0 0 18px;padding:0}.agent-decision li{margin:3px 0;color:#c8d8ee}.agent-decision .risk{color:#fcd34d;margin-top:7px}
 @media(max-width:1360px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav button,.nav a{justify-content:center;padding:12px}.iframe-shell{left:84px}.hero,.grid-main{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:820px){.app{grid-template-columns:1fr}.side{display:none}.iframe-shell{left:0}.top{position:static}.hero,.grid-main,.flow,.kpis,.split,.check-grid,.module-grid{grid-template-columns:1fr}.main{padding:14px}.iframe-shell{grid-template-rows:58px 1fr}}
 </style>
@@ -90,6 +91,7 @@ def build_auto_trading_workbench_ui() -> str:
           <div class="panel-h"><span>联网智能辅助</span><button class="btn" onclick="loadAgentBrief(true)">联网刷新</button></div>
           <div class="panel-b">
             <div class="agent-box"><b>用途边界</b>只读取真实可追溯数据源和缓存；没有数据时显示缺失/过期，不生成假新闻。当前用于解释宏观、全球商品、非农/CPI/FOMC 等客观因素可能带来的风险，不直接等于买卖建议。</div>
+            <div class="agent-decision" id="agentDecision"><b>智能体结论加载中...</b><span>正在聚合金十快讯、全球宏观事件、评分溯源和实盘安全门控。</span></div>
             <div class="ticker-wrap" id="globalTicker"><div class="ticker-label">7x24 快讯</div><div class="ticker-rail"><div class="ticker-track" id="globalTickerTrack"><span class="ticker-item"><b>等待</b><span>正在读取金十/全球要闻缓存...</span></span></div></div></div>
             <div class="stream-head"><b>全球实时要闻流</b><span class="row"><span class="pill" id="globalStreamStatus">等待加载</span><button class="btn" onclick="loadGlobalStream(true)">联网刷新</button><button class="btn" id="tickerPauseBtn" onclick="toggleGlobalTicker()">暂停轮播</button></span></div>
             <div class="feed compact stream-list" id="globalStream"><div class="feed-item"><b>等待加载全球快讯...</b><span>优先使用金十/金十期货、东方财富、华尔街见闻、财联社等真实来源；不可用时显示缺失原因。</span></div></div>
@@ -419,9 +421,35 @@ function renderGlobalFeed(js){
     ...items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span>${esc(x.source||'全球信息源')} · ${esc(x.impact_scope||x.dimension||x.sentiment_label||'待映射')}</span></div>`)
   ].join('');
 }
+function renderAgentDecision(js){
+  const d=js.data||{};
+  const decisions=(d.symbol_decisions||[]).slice(0,5);
+  const risks=(d.risk_flags||[]).slice(0,4);
+  const evidence=(d.evidence||[]).slice(0,3);
+  const items=[
+    `<b>${esc(d.headline||'暂无智能体结论')}</b>`,
+    `<span>建议动作：${esc(d.recommended_action||'--')} · 置信度：${esc(d.confidence||'--')} · 快讯 ${esc(d.global_flash_count??0)} 条 · ${esc(d.llm_status||'联网证据代理')}</span>`
+  ];
+  if(decisions.length){
+    items.push('<ul>'+decisions.map(x=>`<li>${esc(x.symbol)} ${esc(x.name||'')}：${esc(x.action||'观察')}${x.score!=null?' · 评分 '+esc(x.score):''}；${esc(x.reason||'')}</li>`).join('')+'</ul>');
+  }
+  if(evidence.length){
+    items.push('<span>证据：'+evidence.map(x=>`${esc(x.source||'来源')}「${esc(x.title||x.reason||'事件')}」`).join('；')+'</span>');
+  }
+  if(risks.length){
+    items.push('<div class="risk">'+risks.map(esc).join('；')+'</div>');
+  }
+  $('agentDecision').innerHTML=items.join('');
+}
+async function loadAgentDecision(force=false){
+  const js=await api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80&force='+(force?'true':'false'));
+  renderAgentDecision(js);
+  return js;
+}
 async function loadAgentBrief(force=false){
   if(force)await loadGlobalStream(true);
-  const js=await api('/api/macro/global-events?limit=80&force='+(force?'true':'false'));
+  const [agent,js]=await Promise.all([loadAgentDecision(force),api('/api/macro/global-events?limit=80&force='+(force?'true':'false'))]);
+  renderAgentDecision(agent);
   renderGlobalFeed(js);
 }
 function renderGlobalStream(js){
@@ -458,11 +486,12 @@ function startGlobalStreamLoop(){
 async function refreshAll(){
   try{
     renderModuleCards();
-    const [broker,sessions,records,data,queue,autoConfig,readiness,score,macro,stream]=await Promise.all([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),api('/api/news/global/stream?limit=80&live=true')]);
+    const [broker,sessions,records,data,queue,autoConfig,readiness,score,macro,stream,agent]=await Promise.all([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),api('/api/news/global/stream?limit=80&live=true'),api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80')]);
     applyAutoConfig(autoConfig.data);
     renderConfigSummary(autoConfig.data,readiness);
     renderGlobalFeed(macro);
     renderGlobalStream(stream);
+    renderAgentDecision(agent);
     const brokerName=broker.broker?.broker||broker.config?.broker_type||'disabled';
     const brokerStatus=broker.broker?.status||broker.status||'disabled';
     $('brokerBadge').textContent=brokerName+' / '+brokerStatus;
