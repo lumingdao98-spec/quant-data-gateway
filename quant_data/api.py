@@ -5178,7 +5178,9 @@ def _fetch_global_stream_fast(limit: int = 80, *, force: bool = False) -> tuple[
     status: list[dict] = []
     executor = ThreadPoolExecutor(max_workers=len(jobs))
     futures = [(name, executor.submit(fn)) for name, fn in jobs]
-    deadline = time_module.monotonic() + (7.5 if force else 4.5)
+    # 金十公开接口通常需要连续尝试 JSON + 页面兜底，4 秒左右容易刚好卡在边界。
+    # 这里仍是快路径，但给首次加载留足时间，避免把“短暂超时”写成空快照。
+    deadline = time_module.monotonic() + (8.0 if force else 6.5)
     try:
         for name, future in futures:
             timeout = max(0.05, deadline - time_module.monotonic())
@@ -5187,7 +5189,8 @@ def _fetch_global_stream_fast(limit: int = 80, *, force: bool = False) -> tuple[
                 rows.extend(got)
                 status.append({"source": name, "count": len(got), "status": "ok" if got else "无公开数据或页面结构变化"})
             except Exception as exc:
-                status.append({"source": name, "count": 0, "status": str(exc)[:160], "skipped_reason": "fast_stream_timeout_or_error"})
+                status_text = str(exc)[:160] or exc.__class__.__name__
+                status.append({"source": name, "count": 0, "status": status_text, "skipped_reason": "fast_stream_timeout_or_error"})
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
     return _global_stream_items_from_rows(rows, "全球快讯")[:limit], status
@@ -5224,6 +5227,26 @@ def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool
         }, cache_state_service.status("miss", key=key, ttl_seconds=45, source="global_news_stream", error="cache miss and live=false")
     try:
         items, source_status = _fetch_global_stream_fast(limit=limit, force=force)
+        if not items:
+            latest = cache_state_service.latest("global_news_cache", allow_stale=True)
+            if latest.data and latest.data.get("items"):
+                fallback_items = _global_stream_items(list(latest.data.get("items") or [])[:limit])
+                if not fallback_items:
+                    fallback_items = [x for x in latest.data.get("items", []) if isinstance(x, dict)][:limit]
+                if fallback_items:
+                    payload = {
+                        "items": fallback_items,
+                        "raw_count": len(fallback_items),
+                        "sources_status": source_status + [{"source": "global_news_cache", "count": len(fallback_items), "status": "stale_fallback"}],
+                        "sources_used": sorted({str(x.get("source") or "") for x in fallback_items if x.get("source")}),
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                        "stream_mode": "stale_cache_fallback",
+                        "cache_info": {"hit": True, "fast_stream": True, "fallback": True, "reason": "live_fast_stream_empty"},
+                        "refresh_seconds": 35,
+                        "missing_reason": "本轮实时快讯源暂未返回，已保留上一轮真实快讯缓存。",
+                        "source_candidates": ["金十/金十期货快讯", "东方财富快讯", "华尔街见闻快讯", "财联社电报", "新浪财经7x24"],
+                    }
+                    return payload, latest.cache_status
         payload = {
             "items": items,
             "raw_count": len(items),

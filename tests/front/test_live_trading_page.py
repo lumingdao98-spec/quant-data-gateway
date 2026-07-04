@@ -10,7 +10,16 @@ def test_live_trading_page_visible():
     assert "默认禁用" in html
     assert "多股票实盘观察池" in html
     assert "实盘策略目录" in html
+    assert "载入实盘分时策略" in html
+    assert "使用全部可用策略" in html
+    assert "LIVE_INTRADAY_STRATEGIES" in html
+    assert "fake_order_cancel_watch" in html
+    assert "orderbook_imbalance_watch" in html
+    assert "global_commodity_map" in html
+    assert "watchRows" in html
     assert "账户与持仓" in html
+    assert "浮盈亏" in html
+    assert "盈亏%" in html
     assert "今日委托 / 成交 / 统一记录" in html
     assert "确认队列" in html
     assert "batchPreview" in html

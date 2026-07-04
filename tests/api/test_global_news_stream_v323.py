@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 import quant_data.api as api
 
@@ -42,6 +43,26 @@ def test_global_news_stream_cache_only_reports_missing_without_fake_data():
     assert "disclaimer" in data
     if not data["items"]:
         assert data["data"]["missing_reason"]
+
+
+def test_global_news_stream_keeps_last_real_items_when_live_round_empty(monkeypatch):
+    monkeypatch.setattr(api, "_fetch_global_stream_fast", lambda limit=80, force=False: ([], [{"source": "金十/金十期货快讯", "count": 0, "status": "TimeoutError"}]))
+    monkeypatch.setattr(api.cache_state_service, "get", lambda *args, **kwargs: SimpleNamespace(data=None, cache_status={"status": "miss"}))
+    monkeypatch.setattr(
+        api.cache_state_service,
+        "latest",
+        lambda *args, **kwargs: SimpleNamespace(
+            data={"items": [{"title": "上一轮真实金十快讯", "source": "金十期货快讯", "published_at": "2026-07-04 08:00:00"}]},
+            cache_status={"status": "stale", "source": "global_news_cache"},
+        ),
+    )
+
+    data = TestClient(api.app).get("/api/news/global/stream?limit=20&live=true&force=false").json()
+
+    assert data["ok"] is True
+    assert data["items"][0]["title"] == "上一轮真实金十快讯"
+    assert data["data"]["stream_mode"] == "stale_cache_fallback"
+    assert "上一轮真实快讯缓存" in data["data"]["missing_reason"]
 
 
 def test_generic_global_news_link_parser_keeps_href_available(monkeypatch):
