@@ -34,6 +34,37 @@ def test_global_news_stream_returns_real_source_shape(monkeypatch):
     assert "不伪造新闻" in data["disclaimer"]
 
 
+def test_jin10_realtime_endpoint_is_first_class_direct_stream(monkeypatch):
+    def fake_jin10_flash(limit=80):
+        return [
+            {
+                "标题": "金十期货：美国非农公布在即，贵金属波动加大",
+                "内容": "用于验证金十直连接口结构。",
+                "发布时间": "2026-07-04 09:37:40",
+                "链接": "https://qihuo.jin10.com/",
+                "_source_name": "金十期货页面快讯",
+                "_source_api": "https://flash-api.jin10.com/get_flash_list",
+                "_source_page": "https://qihuo.jin10.com/",
+            }
+        ]
+
+    monkeypatch.setattr(api.news_service, "_search_jin10_flash", fake_jin10_flash)
+    monkeypatch.setattr(
+        api.cache_state_service,
+        "put",
+        lambda kind, key, payload, **kwargs: {"status": "test_no_write", "snapshot_id": key, "stale": False},
+    )
+
+    data = TestClient(api.app).get("/api/news/jin10/realtime?limit=20&force=true").json()
+
+    assert data["ok"] is True
+    assert data["items"][0]["source"] == "金十期货页面快讯"
+    assert data["items"][0]["source_api"] == "https://flash-api.jin10.com/get_flash_list"
+    assert data["data"]["stream_mode"] == "jin10_realtime_direct"
+    assert data["refresh_seconds"] == 20
+    assert "不抓搜索结果页" in data["source_policy"]
+
+
 def test_global_news_stream_cache_only_reports_missing_without_fake_data():
     data = TestClient(api.app).get("/api/news/global/stream?limit=20&live=false&force=false").json()
 

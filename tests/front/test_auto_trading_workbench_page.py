@@ -29,9 +29,13 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/data-center/status" in html
     assert "/api/macro/global-events" in html
     assert "/api/news/global/stream" in html
+    assert "/api/news/jin10/realtime" in html
     assert "/api/agent/market-brief" in html
     assert "globalTicker" in html
     assert "globalStream" in html
+    assert "globalStreamSources" in html
+    assert "mergeGlobalStreams" in html
+    assert "globalStreamRefreshMs" in html
     assert "loadGlobalStream" in html
     assert "agentDecision" in html
     assert "renderAgentDecision" in html

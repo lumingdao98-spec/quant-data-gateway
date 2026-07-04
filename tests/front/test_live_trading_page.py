@@ -26,5 +26,7 @@ def test_live_trading_page_visible():
     assert "selected_strategies" in html
     assert "/api/auto-trading/config" in html
     assert "/api/live/orders/preview" in html
+    assert "/api/live/orders/preview-batch" in html
+    assert "/api/strategy/library" in html
     assert "/api/live/positions" in html
     assert "/api/live/trades" in html

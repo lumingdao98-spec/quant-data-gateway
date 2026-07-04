@@ -603,6 +603,7 @@ class NewsAnalysisService:
             ("金十数据7x24", "https://flash-api.jin10.com/get_flash_list", {"channel": "-8200", "vip": "1"}),
             ("金十数据市场快讯", "https://flash-api.jin10.com/get_flash_list", {"channel": "-8200"}),
             ("金十期货快讯", "https://flash-api.jin10.com/get_flash_list", {"channel": "-1", "vip": "1"}),
+            ("金十期货页面快讯", "https://flash-api.jin10.com/get_flash_list", {"channel": "-1"}),
         ]
         for src, url, params in api_candidates:
             if len(rows) >= limit:
@@ -613,6 +614,8 @@ class NewsAnalysisService:
                 extracted = self._extract_jin10_flash_rows(data, src, limit=limit-len(rows)) if data is not None else []
                 for r in extracted:
                     r["_source_name"] = src
+                    r["_source_api"] = url
+                    r["_source_page"] = "https://qihuo.jin10.com/" if "期货" in src else "https://www.jin10.com/"
                     key = re.sub(r"\W+", "", str(r.get("标题") or r.get("内容") or ""))[:120]
                     if key and not any(re.sub(r"\W+", "", str(x.get("标题") or x.get("内容") or ""))[:120] == key for x in rows):
                         rows.append(r)
@@ -684,6 +687,7 @@ class NewsAnalysisService:
                     "链接": source_link,
                     "_source_name": real_source,
                     "_source_channel": source_name,
+                    "_source_page": "https://qihuo.jin10.com/" if "期货" in source_name else "https://www.jin10.com/",
                 }
             )
         return rows[:limit]

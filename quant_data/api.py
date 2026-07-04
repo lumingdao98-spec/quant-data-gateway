@@ -229,7 +229,10 @@ def _render_chinese_api_docs() -> str:
                 ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
                 ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
+                ("GET", "/api/news/jin10/realtime", "金十/金十期货直连快讯流；优先公开 JSON 接口，页面摘要兜底，不抓搜索结果页。"),
                 ("GET", "/api/agent/market-brief", "联网证据代理：聚合金十快讯、全球宏观事件、评分溯源和实盘安全状态，只做辅助判断，不自动下单。"),
+                ("POST", "/api/live/orders/preview-batch", "真实交易多股票批量预检查；逐只经过风控、白名单、kill switch 和确认要求，不会直接下单。"),
+                ("POST", "/api/live/orders/place-batch", "真实交易多股票批量提交入口；默认配置下会被禁用或进入确认队列，不能绕过安全门控。"),
             ],
         ),
         (
@@ -3954,6 +3957,94 @@ def realtime_paper_session_audit(session_id: str, limit: int = 300) -> dict:
     return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
+def _normalize_live_position(row: dict) -> dict:
+    row = dict(row or {})
+    qty = _as_float(row.get("quantity") or row.get("volume") or row.get("qty"), 0.0)
+    available = _as_float(row.get("available_quantity") or row.get("available") or row.get("enable_amount"), 0.0)
+    cost = _as_float(row.get("cost_price") or row.get("avg_price") or row.get("avg_cost"), 0.0)
+    last = _as_float(row.get("last_price") or row.get("price") or row.get("market_price"), 0.0)
+    market_value = _as_float(row.get("market_value") or row.get("amount"), qty * last if qty and last else 0.0)
+    unrealized = _as_float(row.get("unrealized_pnl") or row.get("pnl"), (last - cost) * qty if qty and cost and last else 0.0)
+    pnl_pct = _as_float(row.get("unrealized_pnl_pct") or row.get("pnl_pct"), ((last - cost) / cost * 100) if cost and last else 0.0)
+    out = {
+        **row,
+        "symbol": str(row.get("symbol") or row.get("code") or "").strip(),
+        "name": row.get("name") or row.get("stock_name") or "",
+        "quantity": int(qty) if float(qty).is_integer() else qty,
+        "available_quantity": int(available) if float(available).is_integer() else available,
+        "cost_price": round(cost, 6) if cost else None,
+        "avg_price": round(cost, 6) if cost else None,
+        "avg_cost": round(cost, 6) if cost else None,
+        "last_price": round(last, 6) if last else None,
+        "market_price": round(last, 6) if last else None,
+        "market_value": round(market_value, 4),
+        "unrealized_pnl": round(unrealized, 4),
+        "pnl": round(unrealized, 4),
+        "unrealized_pnl_pct": round(pnl_pct, 4),
+        "pnl_pct": round(pnl_pct, 4),
+        "source": row.get("source") or "broker_position",
+    }
+    out["display_summary"] = f"{out['symbol']} 持仓 {out['quantity']} 股，成本 {out.get('cost_price') or '--'}，市价 {out.get('last_price') or '--'}，浮盈亏 {out['unrealized_pnl']}"
+    return out
+
+
+def _live_positions_summary(rows: list[dict]) -> dict:
+    market_value = sum(_as_float(x.get("market_value"), 0.0) for x in rows)
+    pnl = sum(_as_float(x.get("unrealized_pnl"), 0.0) for x in rows)
+    cost_value = sum(_as_float(x.get("cost_price"), 0.0) * _as_float(x.get("quantity"), 0.0) for x in rows)
+    return {
+        "positions_count": len(rows),
+        "market_value": round(market_value, 4),
+        "unrealized_pnl": round(pnl, 4),
+        "unrealized_pnl_pct": round(pnl / cost_value * 100, 4) if cost_value else None,
+        "symbols": [x.get("symbol") for x in rows if x.get("symbol")],
+    }
+
+
+def _enrich_trading_record_row(table: str, item: dict) -> dict:
+    row = {"table": table, **dict(item or {})}
+    price = _as_float(row.get("price") or row.get("limit_price") or row.get("avg_fill_price"), 0.0)
+    qty = _as_float(row.get("quantity") or row.get("filled_quantity") or row.get("qty"), 0.0)
+    amount = _as_float(row.get("amount"), price * qty if price and qty else 0.0)
+    fee = _as_float(row.get("fee") or row.get("tax") or row.get("commission"), 0.0)
+    pnl = _as_float(row.get("realized_pnl") or row.get("unrealized_pnl") or row.get("pnl"), 0.0)
+    if table == "fills":
+        record_type = "成交"
+    elif table == "orders":
+        record_type = "委托"
+    elif table == "positions":
+        record_type = "持仓"
+    elif table == "manual_confirmations":
+        record_type = "确认"
+    elif table == "risk_checks":
+        record_type = "风控"
+    elif table == "audit_events":
+        record_type = "审计"
+    else:
+        record_type = "记录"
+    row["record_type_cn"] = record_type
+    row["display_price"] = round(price, 6) if price else None
+    row["display_quantity"] = int(qty) if qty and float(qty).is_integer() else (qty if qty else None)
+    row["display_amount"] = round(amount, 4) if amount else None
+    row["display_fee"] = round(fee, 4) if fee else None
+    row["display_pnl"] = round(pnl, 4) if pnl else None
+    row["display_side"] = row.get("side") or row.get("action") or row.get("status") or row.get("event_type") or ""
+    row["display_status"] = row.get("status") or row.get("status_reason") or row.get("event_type") or ""
+    row["display_summary"] = "；".join(
+        x
+        for x in [
+            f"{record_type}",
+            f"方向/状态 {row['display_side']}" if row.get("display_side") else "",
+            f"价格 {row['display_price']}" if row.get("display_price") is not None else "",
+            f"数量 {row['display_quantity']}" if row.get("display_quantity") is not None else "",
+            f"金额 {row['display_amount']}" if row.get("display_amount") is not None else "",
+            f"盈亏 {row['display_pnl']}" if row.get("display_pnl") is not None else "",
+        ]
+        if x
+    )
+    return row
+
+
 @app.get("/api/live-broker/status")
 def live_broker_status() -> dict:
     return live_trading_engine_v323.status()
@@ -3971,12 +4062,43 @@ def live_broker_disconnect() -> dict:
 
 @app.get("/api/live/account")
 def live_account() -> dict:
-    return {"ok": True, "data": live_trading_engine_v323.position_sync.snapshot()}
+    snapshot = live_trading_engine_v323.position_sync.snapshot()
+    positions = [_normalize_live_position(x) for x in snapshot.get("positions") or []]
+    cash = snapshot.get("cash") or {}
+    available_cash = _as_float(cash.get("available_cash") or snapshot.get("available_cash") or 0, 0.0)
+    frozen_cash = _as_float(cash.get("frozen_cash") or snapshot.get("frozen_cash") or 0, 0.0)
+    position_value = sum(_as_float(p.get("market_value"), 0.0) for p in positions)
+    unrealized_pnl = sum(_as_float(p.get("unrealized_pnl"), 0.0) for p in positions)
+    enriched = {
+        **snapshot,
+        "positions": positions,
+        "available_cash": available_cash,
+        "frozen_cash": frozen_cash,
+        "position_market_value": round(position_value, 4),
+        "unrealized_pnl": round(unrealized_pnl, 4),
+        "total_value": round(available_cash + frozen_cash + position_value, 4),
+        "equity": round(available_cash + frozen_cash + position_value, 4),
+        "positions_count": len(positions),
+        "quality_status": "ok" if positions or available_cash or snapshot.get("authorized") else "券商未连接/未授权或无持仓",
+    }
+    trading_store_v323.put("account_snapshots", enriched, mode="live", session_id=str(enriched.get("session_id") or live_trading_engine_v323.session.session_id))
+    return {"ok": True, "data": enriched, "source": live_trading_engine_v323.broker.health_check().to_dict()}
 
 
 @app.get("/api/live/positions")
 def live_positions() -> dict:
-    return {"ok": True, "data": [x.to_dict() for x in live_trading_engine_v323.broker.get_positions()], "source": live_trading_engine_v323.broker.health_check().to_dict()}
+    rows = [_normalize_live_position(x.to_dict()) for x in live_trading_engine_v323.broker.get_positions()]
+    for row in rows:
+        trading_store_v323.put("positions", row, mode="live", symbol=str(row.get("symbol") or ""), session_id=live_trading_engine_v323.session.session_id)
+    source = live_trading_engine_v323.broker.health_check().to_dict()
+    return {
+        "ok": True,
+        "data": rows,
+        "count": len(rows),
+        "summary": _live_positions_summary(rows),
+        "source": source,
+        "missing_reason": "" if rows else "当前券商未返回持仓；可能是 disabled/unsupported、未授权或账户暂无持仓。",
+    }
 
 
 @app.get("/api/live/orders")
@@ -3994,6 +4116,41 @@ def live_trades() -> dict:
 @app.post("/api/live/orders/preview")
 def live_order_preview(payload: dict = Body(default_factory=dict)) -> dict:
     return live_trading_engine_v323.preview_order(payload)
+
+
+@app.post("/api/live/orders/preview-batch")
+def live_order_preview_batch(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _symbols_from_payload(payload)
+    if not symbols:
+        return {"ok": False, "message": "symbols required", "data": []}
+    rows = []
+    for sym in symbols[:50]:
+        order_payload = {**payload, "symbol": sym}
+        rows.append({"symbol": sym, "preview": live_trading_engine_v323.preview_order(order_payload)})
+    return {
+        "ok": True,
+        "data": rows,
+        "count": len(rows),
+        "note": "批量预检查只进入风控/确认流程，不会绕过 LIVE_TRADING_ENABLED、kill switch 或人工确认。",
+    }
+
+
+@app.post("/api/live/orders/place-batch")
+def live_order_place_batch(payload: dict = Body(default_factory=dict)) -> dict:
+    symbols = _symbols_from_payload(payload)
+    if not symbols:
+        return {"ok": False, "message": "symbols required", "data": []}
+    confirmed = bool(payload.get("confirmed"))
+    rows = []
+    for sym in symbols[:50]:
+        order_payload = {**payload, "symbol": sym}
+        rows.append({"symbol": sym, "result": live_trading_engine_v323.place_order(order_payload, confirmed=confirmed)})
+    return {
+        "ok": all(bool((row.get("result") or {}).get("ok")) for row in rows),
+        "data": rows,
+        "count": len(rows),
+        "note": "真实批量下单仍逐笔经过风控、白名单、确认队列和券商适配器；默认配置下不会真实下单。",
+    }
 
 
 @app.post("/api/live/orders/confirm")
@@ -4129,7 +4286,7 @@ def trading_records_v323(mode: str = "", symbol: str = "", status: str = "", lim
         for item in trading_store_v323.list(table, mode=mode, symbol=symbol, limit=max(1, min(int(limit or 200), 1000))):
             if status and str(item.get("status") or item.get("event_type") or "") != status:
                 continue
-            rows.append({"table": table, **item})
+            rows.append(_enrich_trading_record_row(table, item))
     rows.sort(key=lambda x: str(x.get("created_at") or x.get("timestamp") or ""), reverse=True)
     return {"ok": True, "data": rows[: max(1, min(int(limit or 200), 1000))], "count": len(rows)}
 
@@ -5137,7 +5294,7 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
             continue
         seen.add(key)
         published_at = str(row.get("发布时间") or row.get("发布日期") or row.get("时间") or row.get("datetime") or row.get("pub_time") or row.get("发布于") or "")
-        url = str(row.get("链接") or row.get("新闻链接") or row.get("url") or "")
+        url = str(row.get("链接") or row.get("新闻链接") or row.get("url") or row.get("_source_page") or "")
         category_hint = str(row.get("_category") or "")
         text = f"{title} {summary} {category_hint}"
         try:
@@ -5155,6 +5312,8 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
                 "summary": summary[:360],
                 "source": source,
                 "source_ref": url,
+                "source_api": row.get("_source_api") or row.get("source_api") or "",
+                "source_page": row.get("_source_page") or row.get("source_page") or "",
                 "published_at": published_at,
                 "category": category,
                 "message_dimension": dimension,
@@ -5166,6 +5325,89 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
             }
         )
     return out
+
+
+def _dedupe_stream_items(items: list[dict], limit: int) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("summary") or "").strip()
+        if not title:
+            continue
+        source = str(item.get("source") or "")
+        key = re.sub(r"\W+", "", f"{source}:{title}")[:140]
+        if key in seen:
+            continue
+        seen.add(key)
+        next_item = dict(item)
+        next_item["rank"] = len(out) + 1
+        out.append(next_item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _read_jin10_realtime_stream(limit: int = 80, *, force: bool = False) -> tuple[dict, dict]:
+    """Read Jin10/Jin10 Futures flash as a first-class realtime stream.
+
+    The Jin10 futures page is a dynamic front-end. We avoid embedding or scraping
+    search pages; the primary source is Jin10's public flash JSON endpoint, with
+    qihuo/xnews HTML title extraction as a transparent fallback.
+    """
+    limit = max(20, min(int(limit or 80), 160))
+    key = f"jin10:{limit}"
+    ttl_seconds = 20
+    if not force:
+        cached = cache_state_service.get("global_news_cache", key, allow_stale=False, ttl_seconds=ttl_seconds)
+        if cached.data and cached.data.get("items"):
+            payload = dict(cached.data)
+            payload["stream_mode"] = payload.get("stream_mode") or "jin10_cache"
+            return payload, cached.cache_status
+    try:
+        rows = news_service._search_jin10_flash(limit=limit)  # noqa: SLF001
+        items = _global_stream_items_from_rows(rows, "金十/金十期货快讯")[:limit]
+        payload = {
+            "items": items,
+            "raw_count": len(items),
+            "sources_status": [
+                {
+                    "source": "金十/金十期货直连",
+                    "count": len(items),
+                    "status": "ok" if items else "无公开数据或页面结构变化",
+                    "source_api": "https://flash-api.jin10.com/get_flash_list",
+                    "source_page": "https://qihuo.jin10.com/",
+                }
+            ],
+            "sources_used": sorted({str(x.get("source") or "") for x in items if x.get("source")}),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "jin10_realtime_direct" if items else "jin10_empty",
+            "cache_info": {"hit": False, "ttl_seconds": ttl_seconds, "source": "jin10_realtime"},
+            "refresh_seconds": ttl_seconds,
+            "missing_reason": "" if items else "金十公开快讯接口和页面摘要暂未返回有效条目；不会伪造新闻。",
+            "source_candidates": ["https://flash-api.jin10.com/get_flash_list", "https://qihuo.jin10.com/", "https://xnews.jin10.com/"],
+        }
+        status = cache_state_service.put("global_news_cache", key, payload, ttl_seconds=ttl_seconds, source="jin10_realtime")
+        return payload, status
+    except Exception as exc:
+        latest = cache_state_service.get("global_news_cache", key, allow_stale=True)
+        if latest.data and latest.data.get("items"):
+            payload = dict(latest.data)
+            payload["stream_mode"] = "jin10_stale_cache_fallback"
+            payload["missing_reason"] = f"本轮金十直连失败，保留上一轮真实缓存：{str(exc)[:160]}"
+            payload["refresh_seconds"] = ttl_seconds
+            return payload, latest.cache_status
+        return {
+            "items": [],
+            "raw_count": 0,
+            "sources_status": [{"source": "金十/金十期货直连", "status": "error", "count": 0, "skipped_reason": str(exc)[:180]}],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "jin10_error",
+            "refresh_seconds": ttl_seconds,
+            "missing_reason": f"金十直连刷新失败：{str(exc)[:180]}",
+            "source_candidates": ["https://flash-api.jin10.com/get_flash_list", "https://qihuo.jin10.com/", "https://xnews.jin10.com/"],
+        }, cache_state_service.status("error", key=key, ttl_seconds=ttl_seconds, source="jin10_realtime", error=str(exc)[:180])
 
 
 def _fetch_global_stream_fast(limit: int = 80, *, force: bool = False) -> tuple[list[dict], list[dict]]:
@@ -5272,6 +5514,20 @@ def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool
             "refresh_seconds": 35,
             "missing_reason": f"全球快讯联网刷新失败：{str(exc)[:180]}",
         }, cache_state_service.status("error", key=key, ttl_seconds=45, source="global_news_stream", error=str(exc)[:180])
+
+
+@app.get("/api/news/jin10/realtime")
+def jin10_realtime_news(limit: int = 80, force: bool = False) -> dict:
+    data, cache_status = _read_jin10_realtime_stream(limit=limit, force=force)
+    return {
+        "ok": True,
+        "data": data,
+        "items": data.get("items", []),
+        "cache_status": cache_status,
+        "refresh_seconds": data.get("refresh_seconds", 20),
+        "source_policy": "金十期货/金十数据直连优先；公开接口不可用时仅使用页面摘要兜底，不抓搜索结果页，不伪造新闻。",
+        "disclaimer": "金十快讯只展示真实可追溯来源；抓不到时显示缺失/错误，不构成投资建议。",
+    }
 
 
 @app.get("/api/news/global/stream")

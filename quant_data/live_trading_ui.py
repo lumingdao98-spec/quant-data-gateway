@@ -129,11 +129,20 @@ function applyAutoConfig(cfg){
   if(r.max_drawdown_pct!=null)$('maxDrawdownPct').value=r.max_drawdown_pct;
   renderStrategies();
 }
-async function loadAutoConfig(apply=false){const js=await api('/api/auto-trading/config');autoConfig=js.data||{};if(apply)applyAutoConfig(autoConfig);else renderStrategies()}
+async function loadAutoConfig(apply=false){
+  const js=await api('/api/auto-trading/config');
+  autoConfig=js.data||{};
+  if(!(autoConfig.strategy_catalog||[]).length){
+    const lib=await api('/api/strategy/library');
+    autoConfig.strategy_catalog=lib.data||[];
+    autoConfig.strategy_combo=autoConfig.strategy_combo||lib.default_keys||[];
+  }
+  if(apply)applyAutoConfig(autoConfig);else renderStrategies()
+}
 function orderPayload(symbol){return {symbol,side:$('side').value,quantity:num('quantity',100),limit_price:num('limitPrice',0)||null,order_type:$('orderType').value,selected_strategies:strategyCombo(),strategy_combo:strategyCombo(),strategy_parameters:autoConfig?.strategy_parameters||{},risk_controls:{stop_loss_pct:num('stopLossPct',8),take_profit_pct:num('takeProfitPct',18),max_single_position_pct:num('maxSinglePositionPct',20),max_drawdown_pct:num('maxDrawdownPct',18)},event_watch:autoConfig?.event_watch||{},source_page:'live-trading'}}
 async function previewSymbol(symbol){return await api('/api/live/orders/preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(orderPayload(symbol))})}
 async function previewFirst(){const sym=symbols()[0]||'300750';const js=await previewSymbol(sym);$('log').textContent=JSON.stringify(js,null,2);renderPreviewRows([{symbol:sym,response:js}])}
-async function batchPreview(){const syms=symbols();const rows=[];for(const sym of syms){rows.push({symbol:sym,response:await previewSymbol(sym)})}$('log').textContent=JSON.stringify(rows,null,2);renderPreviewRows(rows)}
+async function batchPreview(){const js=await api('/api/live/orders/preview-batch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...orderPayload(symbols()[0]||'300750'),symbols:symbols()})});const rows=(js.data||[]).map(x=>({symbol:x.symbol,response:x.preview||x.result||x}));$('log').textContent=JSON.stringify(js,null,2);renderPreviewRows(rows)}
 function renderPreviewRows(rows){$('previewRows').innerHTML=rows.map(x=>{const r=x.response||{};const ok=r.ok||r.approved||r.status==='needs_confirmation';const risk=r.risk||r.data?.risk||{};return `<tr><td>${esc(x.symbol)}</td><td>${esc($('side').value)}</td><td>${esc($('quantity').value)}</td><td class="${ok?'ok':'bad'}">${esc(r.status||r.message||(ok?'通过/待确认':'未通过'))}</td><td>${esc(r.status_reason||risk.reason||r.reason||JSON.stringify(r).slice(0,180))}</td></tr>`}).join('')||'<tr><td colspan="5">暂无预检查结果</td></tr>';renderWatchRows(rows)}
 function renderWatchRows(preview=[]){
   const previewMap={};(preview||[]).forEach(x=>previewMap[x.symbol]=x.response||{});
