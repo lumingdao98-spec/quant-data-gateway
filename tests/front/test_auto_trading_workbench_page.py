@@ -40,8 +40,16 @@ def test_auto_trading_workbench_page_visible():
     assert "impactNoteOf" in html
     assert "source-link" in html
     assert "impact-tag" in html
+    assert "查看来源 / 原文" in html
+    assert "来源：${esc(sourceLabelOf(x))}" in html
+    assert "impactTagsOf(x)" in html
     assert "globalStreamRefreshMs" in html
     assert "loadGlobalStream" in html
+    assert "portfolioOverview" in html
+    assert "recordOverviewRows" in html
+    assert "renderPortfolioOverview" in html
+    assert "/api/live/account" in html
+    assert "/api/live/positions" in html
     assert "agentDecision" in html
     assert "renderAgentDecision" in html
     assert "startGlobalStreamLoop" in html

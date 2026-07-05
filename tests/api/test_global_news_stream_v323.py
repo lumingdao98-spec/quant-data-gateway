@@ -82,6 +82,45 @@ def test_global_news_stream_cache_only_reports_missing_without_fake_data():
         assert data["data"]["missing_reason"]
 
 
+def test_macro_global_events_uses_fast_stream_with_source_and_impact(monkeypatch):
+    def fake_stream(limit=80, force=False, live=True):
+        assert live is True
+        return (
+            {
+                "items": [
+                    {
+                        "title": "美国非农公布前美元和美债收益率波动",
+                        "summary": "宏观事件测试项",
+                        "source": "金十数据7x24",
+                        "source_ref": "https://qihuo.jin10.com/",
+                        "source_api": "https://flash-api.jin10.com/get_flash_list",
+                        "published_at": "2026-07-04 21:50:00",
+                        "impact_targets": ["宏观/利率", "美元指数", "美债收益率", "银行"],
+                        "affected_sectors": ["银行"],
+                        "affected_assets": ["美元指数", "美债收益率"],
+                        "impact_note": "宏观数据会影响大盘风险偏好和利率敏感板块。",
+                    }
+                ],
+                "stream_mode": "fast_test",
+                "sources_status": [{"source": "金十数据7x24", "count": 1, "status": "ok"}],
+                "updated_at": "2026-07-04T21:50:01",
+            },
+            {"status": "test_fast_stream", "stale": False},
+        )
+
+    monkeypatch.setattr(api, "_read_global_news_stream", fake_stream)
+
+    data = TestClient(api.app).get("/api/macro/global-events?limit=20&force=true").json()
+
+    assert data["ok"] is True
+    assert data["data"]["stream_mode"] == "fast_test"
+    assert data["cache_status"]["status"] == "test_fast_stream"
+    assert data["items"][0]["source_ref"] == "https://qihuo.jin10.com/"
+    assert data["items"][0]["source_api"] == "https://flash-api.jin10.com/get_flash_list"
+    assert "美元指数" in data["items"][0]["impact_targets"]
+    assert data["watchlist"]
+
+
 def test_global_news_stream_keeps_last_real_items_when_live_round_empty(monkeypatch):
     monkeypatch.setattr(api, "_fetch_global_stream_fast", lambda limit=80, force=False: ([], [{"source": "金十/金十期货快讯", "count": 0, "status": "TimeoutError"}]))
     monkeypatch.setattr(api.cache_state_service, "get", lambda *args, **kwargs: SimpleNamespace(data=None, cache_status={"status": "miss"}))
@@ -148,3 +187,24 @@ def test_jin10_flash_parser_keeps_parent_time_and_dedupes():
     assert rows[0]["标题"] == "美国非农数据公布前，美元指数震荡"
     assert rows[0]["发布时间"] == "2026-07-04 08:40:17"
     assert rows[0]["_source_name"] == "金十期货快讯"
+
+
+def test_global_impact_mapping_keeps_geopolitical_events_out_of_a_share_theme_noise(monkeypatch):
+    monkeypatch.setattr(api.news_service, "_industry_tags", lambda text: ["机器人/低空"])
+
+    fields = api._global_impact_fields("以色列无人机袭击加沙北部，巴勒斯坦多人伤亡", "全球/国内要闻", "行业消息/政策消息")
+
+    assert "地缘风险" in fields["impact_evidence"]
+    assert "军工" in fields["affected_sectors"]
+    assert "能源" in fields["affected_sectors"]
+    assert "黄金" in fields["affected_assets"]
+    assert "机器人/低空" not in fields["impact_targets"]
+
+
+def test_global_impact_mapping_explains_us_nonfarm_macro_chain():
+    fields = api._global_impact_fields("美国非农就业数据公布前，美元指数和美债收益率震荡", "全球宏观", "经济数据")
+
+    assert "宏观/利率" in fields["impact_evidence"]
+    assert "银行" in fields["affected_sectors"]
+    assert "美元指数" in fields["affected_assets"]
+    assert "美债收益率" in fields["impact_targets"]

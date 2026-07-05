@@ -17,6 +17,9 @@ def test_ui_embedded_mode_for_auto_trading_iframe():
 
     assert "const EMBEDDED_MODE=true" in html
     assert ".app.embedded" in html
+    assert "qd-auto-iframe-fit-guard" in html
+    assert ".app.embedded .main{grid-template-columns:minmax(300px,.44fr) minmax(0,1.56fr)" in html
+    assert ".app.embedded .chart-grid.time{grid-template-columns:minmax(0,1fr) minmax(188px,210px)" in html
     assert "grid-template-areas:\"top\" \"main\" \"log\"" in html
     assert ".app.embedded .side{display:none}" in html
     assert "if(EMBEDDED_MODE)$('app').classList.add('embedded')" in html

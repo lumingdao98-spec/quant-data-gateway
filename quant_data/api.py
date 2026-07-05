@@ -5246,12 +5246,9 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
     panel matters.
     """
     raw_tags = existing_tags if isinstance(existing_tags, list) else []
-    try:
-        inferred_tags = news_service._industry_tags(text)  # noqa: SLF001
-    except Exception:
-        inferred_tags = []
     sectors: list[str] = []
     assets: list[str] = []
+    evidence: list[str] = []
 
     def add_many(dst: list[str], values: list[str]) -> None:
         for value in values:
@@ -5259,29 +5256,52 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
             if v and v not in dst:
                 dst.append(v)
 
+    def matched(words: list[str], label: str) -> bool:
+        ok = any(w in t for w in words)
+        if ok and label not in evidence:
+            evidence.append(label)
+        return ok
+
     t = f"{text} {category} {dimension}"
-    add_many(sectors, [str(x) for x in raw_tags] + [str(x) for x in inferred_tags])
-    if any(w in t for w in ["非农", "就业", "CPI", "PPI", "PMI", "FOMC", "美联储", "降息", "加息", "通胀"]):
+    macro_hit = False
+    if matched(["非农", "就业", "失业率", "初请", "ADP", "CPI", "PPI", "PMI", "ISM", "FOMC", "美联储", "降息", "加息", "通胀", "利率决议"], "宏观/利率"):
+        macro_hit = True
         add_many(sectors, ["银行", "券商", "成长股估值", "出口链"])
         add_many(assets, ["A股指数", "美元指数", "美债收益率", "人民币汇率"])
-    if any(w in t for w in ["美元", "美债", "汇率", "外汇"]):
+    if matched(["美元", "美债", "汇率", "外汇", "人民币", "日元", "欧元"], "汇率/美债"):
+        macro_hit = True
         add_many(sectors, ["出口链", "航空运输", "贵金属"])
         add_many(assets, ["美元指数", "人民币汇率", "黄金"])
-    if any(w in t for w in ["原油", "OPEC", "石油", "能源", "天然气"]):
+    if matched(["原油", "OPEC", "石油", "布伦特", "WTI", "能源", "天然气", "燃油"], "能源商品"):
+        macro_hit = True
         add_many(sectors, ["石油石化", "煤化工", "航空运输", "新能源"])
         add_many(assets, ["原油", "能源化工"])
-    if any(w in t for w in ["黄金", "白银", "贵金属"]):
+    if matched(["黄金", "白银", "贵金属", "避险"], "贵金属/避险"):
+        macro_hit = True
         add_many(sectors, ["贵金属", "有色金属"])
         add_many(assets, ["黄金", "白银", "美元指数"])
-    if any(w in t for w in ["铜", "铝", "镍", "锂", "有色", "工业金属", "商品", "期货"]):
+    if matched(["铜", "铝", "镍", "锂", "有色", "工业金属", "商品", "期货", "黑色系", "焦煤", "焦炭", "铁矿"], "工业品/期货"):
+        macro_hit = True
         add_many(sectors, ["有色金属", "钢铁", "煤炭", "化工", "制造成本"])
         add_many(assets, ["大宗商品", "工业品"])
-    if any(w in t for w in ["地缘", "冲突", "制裁", "战争", "乌克兰", "中东", "红海"]):
+    if matched(["地缘", "冲突", "制裁", "战争", "袭击", "空袭", "无人机袭击", "导弹", "以色列", "加沙", "巴勒斯坦", "伊朗", "黎巴嫩", "叙利亚", "乌克兰", "俄罗斯", "北约", "中东", "红海"], "地缘风险"):
+        macro_hit = True
         add_many(sectors, ["军工", "能源", "航运", "避险资产"])
         add_many(assets, ["原油", "黄金", "航运"])
-    if any(w in t for w in ["AI", "芯片", "半导体", "算力", "光伏", "储能", "新能源汽车"]):
+    if matched(["USDA", "农业部", "大豆", "玉米", "小麦", "棉花", "农作物", "干旱", "洪水", "厄尔尼诺", "拉尼娜"], "农业/天气"):
+        macro_hit = True
+        add_many(sectors, ["农业种植", "饲料养殖", "农产品加工", "化肥农药"])
+        add_many(assets, ["农产品期货", "大豆", "玉米", "棉花"])
+    if matched(["AI", "芯片", "半导体", "算力", "光伏", "储能", "新能源汽车"], "科技/新能源"):
         add_many(sectors, ["半导体/算力", "新能源", "光伏储能"])
         add_many(assets, ["成长股", "科技主题"])
+    if not macro_hit:
+        add_many(sectors, [str(x) for x in raw_tags])
+        try:
+            inferred_tags = news_service._industry_tags(text)  # noqa: SLF001
+        except Exception:
+            inferred_tags = []
+        add_many(sectors, [str(x) for x in inferred_tags])
 
     targets = (sectors + assets)[:10]
     note = "影响提示：仅解释宏观/商品/信息面对板块和资产的可能传导，不直接等于买卖建议。"
@@ -5292,6 +5312,7 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
         "affected_assets": assets[:8],
         "impact_targets": targets,
         "impact_note": note,
+        "impact_evidence": evidence[:6],
     }
 
 
@@ -5797,8 +5818,8 @@ def _macro_event_watchlist(items: list[dict]) -> list[dict]:
 
 @app.get("/api/macro/global-events")
 def macro_global_events(limit: int = 80, force: bool = False) -> dict:
-    limit = max(10, min(int(limit or 80), 200))
-    data, cache_status = _read_global_news_cached(limit=limit, force=force)
+    limit = max(10, min(int(limit or 80), 120))
+    data, cache_status = _read_global_news_stream(limit=limit, force=force, live=True)
     items = [x for x in (data.get("items") or []) if isinstance(x, dict)]
     return {
         "ok": True,
