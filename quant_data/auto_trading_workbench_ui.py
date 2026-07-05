@@ -438,8 +438,11 @@ function renderPortfolioOverview(liveAccount,livePositions,records){
     const qty=x.display_quantity??x.quantity??x.qty??'--';
     const amount=x.display_amount??x.amount;
     const pnl=x.display_pnl??x.realized_pnl??x.unrealized_pnl??x.pnl;
-    const amountText=pnl!=null&&Number(pnl)!==0?`盈亏 ${money(pnl)}`:`金额 ${money(amount)}`;
-    return `<tr><td>${esc(x.record_type_cn||x.table||'记录')}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.display_side||x.side||x.display_status||x.status||'--')}</td><td>${esc(price)}</td><td>${esc(qty)}</td><td class="${pnlClass(pnl)}">${esc(amountText)}</td></tr>`;
+    const pnlPct=x.display_pnl_pct??x.unrealized_pnl_pct??x.pnl_pct;
+    const cost=x.display_cost_price??x.cost_price??x.avg_cost??x.avg_price;
+    const amountText=pnl!=null?`盈亏 ${money(pnl)}${pnlPct!=null?' / '+pct(pnlPct):''}`:`金额 ${money(amount)}`;
+    const detail=[amountText,cost!=null?`成本 ${esc(cost)}`:''].filter(Boolean).join('；');
+    return `<tr><td>${esc(x.record_type_cn||x.table||'记录')}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.display_side||x.side||x.display_status||x.status||'--')}</td><td>${esc(price)}</td><td>${esc(qty)}</td><td class="${pnlClass(pnl)}">${detail}</td></tr>`;
   }).join('')||'<tr><td colspan="6">暂无交易流水；预检查、确认、成交后会自动出现在这里。</td></tr>';
 }
 async function loadSessionDetails(session){

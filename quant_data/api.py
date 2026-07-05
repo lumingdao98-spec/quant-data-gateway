@@ -1584,6 +1584,13 @@ def _as_float(value, default: float) -> float:
         return float(default)
 
 
+def _first_present(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _as_bool(value, default: bool = False) -> bool:
     if value is None:
         return default
@@ -3973,11 +3980,11 @@ def _normalize_live_position(row: dict) -> dict:
         "name": row.get("name") or row.get("stock_name") or "",
         "quantity": int(qty) if float(qty).is_integer() else qty,
         "available_quantity": int(available) if float(available).is_integer() else available,
-        "cost_price": round(cost, 6) if cost else None,
-        "avg_price": round(cost, 6) if cost else None,
-        "avg_cost": round(cost, 6) if cost else None,
-        "last_price": round(last, 6) if last else None,
-        "market_price": round(last, 6) if last else None,
+        "cost_price": round(cost, 6) if cost or "cost_price" in row or "avg_price" in row or "avg_cost" in row else None,
+        "avg_price": round(cost, 6) if cost or "cost_price" in row or "avg_price" in row or "avg_cost" in row else None,
+        "avg_cost": round(cost, 6) if cost or "cost_price" in row or "avg_price" in row or "avg_cost" in row else None,
+        "last_price": round(last, 6) if last or "last_price" in row or "price" in row or "market_price" in row else None,
+        "market_price": round(last, 6) if last or "last_price" in row or "price" in row or "market_price" in row else None,
         "market_value": round(market_value, 4),
         "unrealized_pnl": round(unrealized, 4),
         "pnl": round(unrealized, 4),
@@ -3985,7 +3992,7 @@ def _normalize_live_position(row: dict) -> dict:
         "pnl_pct": round(pnl_pct, 4),
         "source": row.get("source") or "broker_position",
     }
-    out["display_summary"] = f"{out['symbol']} 持仓 {out['quantity']} 股，成本 {out.get('cost_price') or '--'}，市价 {out.get('last_price') or '--'}，浮盈亏 {out['unrealized_pnl']}"
+    out["display_summary"] = f"{out['symbol']} 持仓 {out['quantity']} 股，成本 {out.get('cost_price') if out.get('cost_price') is not None else '--'}，市价 {out.get('last_price') if out.get('last_price') is not None else '--'}，浮盈亏 {out['unrealized_pnl']}"
     return out
 
 
@@ -4004,17 +4011,28 @@ def _live_positions_summary(rows: list[dict]) -> dict:
 
 def _enrich_trading_record_row(table: str, item: dict) -> dict:
     row = {"table": table, **dict(item or {})}
-    price = _as_float(row.get("price") or row.get("limit_price") or row.get("avg_fill_price"), 0.0)
-    qty = _as_float(row.get("quantity") or row.get("filled_quantity") or row.get("qty"), 0.0)
-    amount = _as_float(row.get("amount"), price * qty if price and qty else 0.0)
-    fee = _as_float(row.get("fee") or row.get("tax") or row.get("commission"), 0.0)
-    pnl = _as_float(row.get("realized_pnl") or row.get("unrealized_pnl") or row.get("pnl"), 0.0)
+    price = _as_float(_first_present(row.get("price"), row.get("limit_price"), row.get("avg_fill_price")), 0.0)
+    qty = _as_float(_first_present(row.get("quantity"), row.get("filled_quantity"), row.get("qty")), 0.0)
+    amount_default = price * qty if price and qty else 0.0
+    if table == "positions":
+        price = _as_float(_first_present(row.get("last_price"), row.get("market_price"), row.get("price")), price)
+        amount_default = _as_float(row.get("market_value"), price * qty if price and qty else 0.0)
+    elif table == "account_snapshots":
+        amount_default = _as_float(_first_present(row.get("total_value"), row.get("equity"), row.get("total_assets")), 0.0)
+    else:
+        amount_default = _as_float(_first_present(row.get("target_value"), row.get("filled_amount")), amount_default)
+    amount = _as_float(row.get("amount"), amount_default)
+    fee = _as_float(_first_present(row.get("fee"), row.get("tax"), row.get("commission")), 0.0)
+    pnl = _as_float(_first_present(row.get("realized_pnl"), row.get("unrealized_pnl"), row.get("pnl")), 0.0)
+    pnl_pct = _as_float(_first_present(row.get("realized_pnl_pct"), row.get("unrealized_pnl_pct"), row.get("pnl_pct")), 0.0)
     if table == "fills":
         record_type = "成交"
     elif table == "orders":
         record_type = "委托"
     elif table == "positions":
         record_type = "持仓"
+    elif table == "account_snapshots":
+        record_type = "账户"
     elif table == "manual_confirmations":
         record_type = "确认"
     elif table == "risk_checks":
@@ -4024,11 +4042,14 @@ def _enrich_trading_record_row(table: str, item: dict) -> dict:
     else:
         record_type = "记录"
     row["record_type_cn"] = record_type
-    row["display_price"] = round(price, 6) if price else None
-    row["display_quantity"] = int(qty) if qty and float(qty).is_integer() else (qty if qty else None)
-    row["display_amount"] = round(amount, 4) if amount else None
-    row["display_fee"] = round(fee, 4) if fee else None
-    row["display_pnl"] = round(pnl, 4) if pnl else None
+    row["display_price"] = round(price, 6) if price or row.get("price") is not None or row.get("last_price") is not None or row.get("market_price") is not None else None
+    row["display_quantity"] = int(qty) if qty and float(qty).is_integer() else (qty if qty or any(k in row for k in ("quantity", "qty", "filled_quantity")) else None)
+    row["display_amount"] = round(amount, 4) if amount or any(k in row for k in ("amount", "market_value", "target_value", "filled_amount", "total_value", "equity", "total_assets")) else None
+    row["display_fee"] = round(fee, 4) if fee or any(k in row for k in ("fee", "tax", "commission")) else None
+    row["display_pnl"] = round(pnl, 4) if pnl or any(k in row for k in ("realized_pnl", "unrealized_pnl", "pnl")) else None
+    row["display_pnl_pct"] = round(pnl_pct, 4) if pnl_pct or any(k in row for k in ("realized_pnl_pct", "unrealized_pnl_pct", "pnl_pct")) else None
+    row["display_cost_price"] = _first_present(row.get("cost_price"), row.get("avg_cost"), row.get("avg_price"))
+    row["display_market_value"] = row.get("market_value")
     row["display_side"] = row.get("side") or row.get("action") or row.get("status") or row.get("event_type") or ""
     row["display_status"] = row.get("status") or row.get("status_reason") or row.get("event_type") or ""
     row["display_summary"] = "；".join(
@@ -4038,8 +4059,11 @@ def _enrich_trading_record_row(table: str, item: dict) -> dict:
             f"方向/状态 {row['display_side']}" if row.get("display_side") else "",
             f"价格 {row['display_price']}" if row.get("display_price") is not None else "",
             f"数量 {row['display_quantity']}" if row.get("display_quantity") is not None else "",
+            f"成本 {row['display_cost_price']}" if row.get("display_cost_price") is not None else "",
+            f"市值 {row['display_market_value']}" if row.get("display_market_value") is not None else "",
             f"金额 {row['display_amount']}" if row.get("display_amount") is not None else "",
             f"盈亏 {row['display_pnl']}" if row.get("display_pnl") is not None else "",
+            f"收益率 {row['display_pnl_pct']}%" if row.get("display_pnl_pct") is not None else "",
         ]
         if x
     )

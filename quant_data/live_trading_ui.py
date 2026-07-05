@@ -68,7 +68,7 @@ table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}th,t
     </div>
     <div class="panel">
       <div class="h"><span>今日委托 / 成交 / 统一记录</span><button onclick="load()">刷新</button></div>
-      <div class="b"><div class="table-wrap"><table><thead><tr><th>来源</th><th>代码</th><th>方向/状态</th><th>价格</th><th>数量</th><th>金额/盈亏</th><th>说明</th></tr></thead><tbody id="recordRows"><tr><td colspan="7">读取中...</td></tr></tbody></table></div></div>
+      <div class="b"><div class="table-wrap"><table><thead><tr><th>来源</th><th>代码</th><th>方向/状态</th><th>价格</th><th>数量</th><th>金额/盈亏</th><th>收益率</th><th>成本</th><th>说明</th></tr></thead><tbody id="recordRows"><tr><td colspan="9">读取中...</td></tr></tbody></table></div></div>
     </div>
   </section>
   <section class="stack">
@@ -165,12 +165,12 @@ function renderPositions(js){
 function normalizeRecordRows(orders,trades,records){
   const rows=[];
   const amt=x=>Number(x.amount??x.pnl??x.realized_pnl??((Number(x.price??x.limit_price)*Number(x.quantity))||NaN));
-  (orders.data||[]).forEach(x=>rows.push({source:'委托',symbol:x.symbol,side:x.side||x.status,price:x.limit_price||x.price,qty:x.quantity,amount:amt(x),status:x.status||x.status_reason}));
-  (trades.data||[]).forEach(x=>rows.push({source:'成交',symbol:x.symbol,side:x.side,price:x.price,qty:x.quantity,amount:amt(x)||x.fee,status:x.filled_at||x.source}));
-  (records.data||[]).slice(0,30).forEach(x=>rows.push({source:x.table||'记录',symbol:x.symbol,side:x.side||x.status||x.event_type,price:x.price||x.limit_price,qty:x.quantity,amount:amt(x),status:x.status_reason||x.reason||x.event_type}));
+  (orders.data||[]).forEach(x=>rows.push({source:'委托',symbol:x.symbol,side:x.side||x.status,price:x.limit_price||x.price,qty:x.quantity,amount:amt(x),pnl_pct:x.display_pnl_pct||x.pnl_pct,cost:x.display_cost_price||x.cost_price||x.avg_price,status:x.status||x.status_reason}));
+  (trades.data||[]).forEach(x=>rows.push({source:'成交',symbol:x.symbol,side:x.side,price:x.price,qty:x.quantity,amount:amt(x)||x.fee,pnl_pct:x.display_pnl_pct||x.pnl_pct,cost:x.display_cost_price||x.cost_price||x.avg_price,status:x.filled_at||x.source}));
+  (records.data||[]).slice(0,30).forEach(x=>rows.push({source:x.record_type_cn||x.table||'记录',symbol:x.symbol,side:x.display_side||x.side||x.status||x.event_type,price:x.display_price||x.price||x.limit_price,qty:x.display_quantity||x.quantity,amount:x.display_pnl??x.display_amount??amt(x),pnl_pct:x.display_pnl_pct,cost:x.display_cost_price,status:x.display_summary||x.status_reason||x.reason||x.event_type}));
   return rows.slice(0,80);
 }
-function renderRecords(rows){$('recordRows').innerHTML=rows.map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.side||'--')}</td><td>${esc(x.price??'--')}</td><td>${esc(x.qty??'--')}</td><td>${money(x.amount)}</td><td>${esc(x.status||'--')}</td></tr>`).join('')||'<tr><td colspan="7">暂无真实交易流水；默认关闭时只显示预检查和审计。</td></tr>'}
+function renderRecords(rows){$('recordRows').innerHTML=rows.map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.side||'--')}</td><td>${esc(x.price??'--')}</td><td>${esc(x.qty??'--')}</td><td>${money(x.amount)}</td><td class="${cls(x.pnl_pct)}">${pct(x.pnl_pct)}</td><td>${esc(x.cost??'--')}</td><td>${esc(x.status||'--')}</td></tr>`).join('')||'<tr><td colspan="9">暂无真实交易流水；默认关闭时只显示预检查和审计。</td></tr>'}
 async function loadQueue(){const q=await api('/api/live/confirm-queue');$('queueRows').innerHTML=(q.data||[]).map(x=>`<tr><td>${esc(x.confirm_id||x.id)}</td><td>${esc(x.symbol||x.request?.symbol||'--')}</td><td>${esc(x.side||x.request?.side||'--')}</td><td>${esc(x.status||'--')}</td><td>${esc(x.reason||x.status_reason||'--')}</td></tr>`).join('')||'<tr><td colspan="5">暂无待确认订单</td></tr>';return q}
 async function load(){
   const [status,account,positions,orders,trades,records,queue]=await Promise.all([api('/api/live-broker/status'),api('/api/live/account'),api('/api/live/positions'),api('/api/live/orders'),api('/api/live/trades'),api('/api/trading-records?mode=live&limit=80'),loadQueue()]);

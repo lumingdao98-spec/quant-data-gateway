@@ -30,3 +30,5 @@ def test_live_trading_page_visible():
     assert "/api/strategy/library" in html
     assert "/api/live/positions" in html
     assert "/api/live/trades" in html
+    assert "display_pnl_pct" in html
+    assert "display_cost_price" in html
