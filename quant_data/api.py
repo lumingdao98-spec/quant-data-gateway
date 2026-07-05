@@ -5719,12 +5719,33 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
                 "title": item.get("title"),
                 "source": item.get("source"),
                 "published_at": item.get("published_at"),
+                "source_ref": item.get("source_ref") or item.get("source_url") or item.get("url") or item.get("source_page"),
+                "source_api": item.get("source_api"),
+                "source_page": item.get("source_page"),
                 "impact_scope": item.get("impact_scope") or item.get("message_dimension"),
+                "impact_targets": item.get("impact_targets") or [],
+                "affected_sectors": item.get("affected_sectors") or [],
+                "affected_assets": item.get("affected_assets") or [],
+                "impact_note": item.get("impact_note") or "全球信息面证据，只进入风险解释与信息面辅助判断。",
             }
         )
     for item in macro_watch:
         if item.get("evidence_count"):
-            evidence.append({"type": "macro_watch", "title": item.get("label"), "source": item.get("latest_source"), "reason": item.get("reason")})
+            evidence.append(
+                {
+                    "type": "macro_watch",
+                    "title": item.get("label"),
+                    "source": item.get("latest_source"),
+                    "source_ref": item.get("latest_source_ref"),
+                    "source_api": item.get("latest_source_api"),
+                    "source_page": item.get("latest_source_page"),
+                    "reason": item.get("reason"),
+                    "impact_targets": item.get("impact_targets") or [],
+                    "affected_sectors": item.get("affected_sectors") or [],
+                    "affected_assets": item.get("affected_assets") or [],
+                    "impact_note": item.get("impact_note") or item.get("reason"),
+                }
+            )
     risk_flags = []
     if not stream_items:
         risk_flags.append("全球快讯暂未命中：信息面只能使用缓存或等待真实来源")
@@ -5800,14 +5821,22 @@ def _macro_event_watchlist(items: list[dict]) -> list[dict]:
             text = f"{item.get('title') or ''} {item.get('summary') or ''} {item.get('source') or ''}"
             if regex.search(text):
                 matched.append(item)
+        latest = matched[0] if matched else {}
         watch.append(
             {
                 "key": key,
                 "label": label,
                 "status": "有真实新闻命中" if matched else "等待真实来源",
                 "evidence_count": len(matched),
-                "latest_title": str((matched[0] or {}).get("title") or "") if matched else "",
-                "latest_source": str((matched[0] or {}).get("source") or "") if matched else "",
+                "latest_title": str(latest.get("title") or "") if matched else "",
+                "latest_source": str(latest.get("source") or "") if matched else "",
+                "latest_source_ref": str(latest.get("source_ref") or latest.get("source_url") or latest.get("url") or latest.get("source_page") or "") if matched else "",
+                "latest_source_api": str(latest.get("source_api") or "") if matched else "",
+                "latest_source_page": str(latest.get("source_page") or "") if matched else "",
+                "impact_targets": list(latest.get("impact_targets") or []) if isinstance(latest.get("impact_targets"), list) else [],
+                "affected_sectors": list(latest.get("affected_sectors") or []) if isinstance(latest.get("affected_sectors"), list) else [],
+                "affected_assets": list(latest.get("affected_assets") or []) if isinstance(latest.get("affected_assets"), list) else [],
+                "impact_note": str(latest.get("impact_note") or "") if matched else "",
                 "reason": "来自全球信息面缓存/联网源，进入信息面与大盘情绪辅助判断。"
                 if matched
                 else "当前缓存未命中该事件；不填充假日期或假影响。",

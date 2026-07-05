@@ -40,7 +40,8 @@ def build_auto_trading_workbench_ui() -> str:
 .iframe-shell{position:fixed;top:0;right:0;bottom:0;left:268px;max-width:calc(100vw - 268px);background:#07111f;z-index:40;display:grid;grid-template-rows:56px minmax(0,1fr);transform:translateX(104%);transition:transform .2s ease;border-left:1px solid var(--line);box-shadow:-20px 0 60px rgba(0,0,0,.45);overflow:hidden}
 .iframe-shell.open{transform:translateX(0)}.iframe-head{display:flex;align-items:center;gap:10px;padding:0 14px;background:#0b1424;border-bottom:1px solid var(--line);min-width:0}.iframe-head b{font-size:17px;white-space:nowrap}.iframe-head .grow{flex:1;min-width:0}.iframe-head .pill{max-width:min(52vw,720px)}.workspace-frame{width:100%;height:100%;min-width:0;border:0;background:#07111f;display:block}.iframe-empty{display:grid;place-items:center;color:var(--muted)}
 .agent-box{border:1px solid #315077;background:linear-gradient(135deg,#0d1728,#10233a);border-radius:12px;padding:12px;line-height:1.6;font-size:13px}.agent-box b{display:block;color:#dbeafe;margin-bottom:5px}
-.agent-decision{margin-top:10px;border:1px solid #2f4364;background:#081626;border-radius:12px;padding:10px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;max-height:210px;overflow:auto}.agent-decision b{display:block;color:#dbeafe;margin-bottom:5px}.agent-decision ul{margin:7px 0 0 18px;padding:0}.agent-decision li{margin:3px 0;color:#c8d8ee}.agent-decision .risk{color:#fcd34d;margin-top:7px}
+.agent-decision{margin-top:10px;border:1px solid #2f4364;background:#081626;border-radius:12px;padding:10px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;max-height:270px;overflow:auto}.agent-decision b{display:block;color:#dbeafe;margin-bottom:5px}.agent-decision ul{margin:7px 0 0 18px;padding:0}.agent-decision li{margin:3px 0;color:#c8d8ee}.agent-decision .risk{color:#fcd34d;margin-top:7px}
+.agent-evidence-list{display:grid;gap:7px;margin-top:9px}.agent-evidence{border:1px solid #2f4364;background:#0b1728;border-radius:10px;padding:8px}.agent-evidence time{display:block;color:#93c5fd;font-size:11px}.agent-evidence strong{display:block;margin:3px 0;color:#dbeafe}.agent-evidence small{display:block;color:#b7c9e6;line-height:1.45}.agent-evidence a{display:inline-flex;margin-top:6px;color:#93c5fd;font-size:12px}.agent-evidence .impact-row{margin-top:6px}
 @media(max-width:1360px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav button,.nav a{justify-content:center;padding:12px}.iframe-shell{left:84px;max-width:calc(100vw - 84px)}.hero,.grid-main{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:820px){.app{grid-template-columns:1fr}.side{display:none}.iframe-shell{left:0;max-width:100vw}.top{position:static}.hero,.grid-main,.flow,.kpis,.split,.check-grid,.module-grid{grid-template-columns:1fr}.main{padding:14px}.iframe-shell{grid-template-rows:58px 1fr}}
 </style>
@@ -475,7 +476,13 @@ function renderAgentDecision(js){
     items.push('<ul>'+decisions.map(x=>`<li>${esc(x.symbol)} ${esc(x.name||'')}：${esc(x.action||'观察')}${x.score!=null?' · 评分 '+esc(x.score):''}；${esc(x.reason||'')}</li>`).join('')+'</ul>');
   }
   if(evidence.length){
-    items.push('<span>证据：'+evidence.map(x=>`${esc(x.source||'来源')}「${esc(x.title||x.reason||'事件')}」`).join('；')+'</span>');
+    items.push('<div class="agent-evidence-list">'+evidence.map(x=>{
+      const url=sourceUrlOf(x);
+      const tags=impactTagsOf(x);
+      const impacts=tags.length?`<div class="impact-row">${tags.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
+      const link=url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开来源 / 原文</a>`:'<small class="warn">该证据未提供公开跳转链接</small>';
+      return `<div class="agent-evidence"><time>${esc(x.published_at||x.type||'证据')}</time><strong>${esc(x.title||x.reason||'事件')}</strong><small>来源：${esc(sourceLabelOf(x))}</small><small>${esc(impactNoteOf(x))}</small>${impacts}${link}</div>`;
+    }).join('')+'</div>');
   }
   if(risks.length){
     items.push('<div class="risk">'+risks.map(esc).join('；')+'</div>');

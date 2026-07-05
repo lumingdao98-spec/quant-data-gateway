@@ -52,6 +52,10 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/live/positions" in html
     assert "agentDecision" in html
     assert "renderAgentDecision" in html
+    assert "agent-evidence-list" in html
+    assert "agent-evidence" in html
+    assert "打开来源 / 原文" in html
+    assert "impactNoteOf(x)" in html
     assert "startGlobalStreamLoop" in html
     assert "暂停轮播" in html
 
