@@ -52,6 +52,11 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/live/positions" in html
     assert "agentDecision" in html
     assert "renderAgentDecision" in html
+    assert "symbol_global_impacts" in html
+    assert "source_link_count" in html
+    assert "个股影响映射" in html
+    assert "暂无全球快讯直接命中" in html
+    assert "查看影响来源 / 原文" in html
     assert "agent-evidence-list" in html
     assert "agent-evidence" in html
     assert "打开来源 / 原文" in html
@@ -64,6 +69,7 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     html = TestClient(api.app).get("/auto-trading").text
 
     assert "iframe-shell" in html
+    assert "width:calc(100vw - 268px)" in html
     assert 'id="workspaceFrame"' in html
     assert html.count('class="workspace-frame"') == 1
     assert 'src="about:blank"' in html

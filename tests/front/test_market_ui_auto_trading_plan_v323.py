@@ -18,8 +18,12 @@ def test_ui_embedded_mode_for_auto_trading_iframe():
     assert "const EMBEDDED_MODE=true" in html
     assert ".app.embedded" in html
     assert "qd-auto-iframe-fit-guard" in html
+    assert "qd-v323-embedded-clipping-final-guard" in html
     assert ".app.embedded .main{grid-template-columns:minmax(300px,.44fr) minmax(0,1.56fr)" in html
+    assert ".app.embedded .main{grid-template-columns:minmax(280px,520px) minmax(0,1fr)" in html
+    assert ".app.embedded th:nth-child(n+8),.app.embedded td:nth-child(n+8){display:none}" in html
     assert ".app.embedded .chart-grid.time{grid-template-columns:minmax(0,1fr) minmax(188px,210px)" in html
+    assert ".app.embedded .chart-grid.time{grid-template-columns:minmax(0,1fr) minmax(168px,188px)" in html
     assert "grid-template-areas:\"top\" \"main\" \"log\"" in html
     assert ".app.embedded .side{display:none}" in html
     assert "if(EMBEDDED_MODE)$('app').classList.add('embedded')" in html
@@ -33,12 +37,12 @@ def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     assert "function timeTradeFrac" in html
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
-    assert "lunchStart=11*60+30,lunchEnd=13*60" in html
-    assert "afternoonOffset=1" in html
-    assert "total=(lunchStart-start)+afternoonOffset+(end-lunchEnd)" in html
-    assert "traded=m<=lunchStart?m-start:(lunchStart-start)+afternoonOffset+(m-lunchEnd)" in html
-    assert "11:30/13:00" in html
-    assert "breakLunch=false" in html
+    assert "qd-v323-time-axis-final-guard" in html
+    assert "function qdV323ClockMinuteFrac" in html
+    assert "timeTradeFrac=qdV323ClockMinuteFrac" in html
+    assert "午休断线" in html
+    assert "breakLunch=true" in html
+    assert "mode==='time'?true:breakLunch" in html
     assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,breakLunch)" in html
     assert "drawSegmentedTimeLine(ctx,data,d=>d.avg_price||d.price,(d)=>timeTradeX(d,w),y,'#f59e0b',2,breakLunch)" in html
     assert "function clampChartTooltip" in html

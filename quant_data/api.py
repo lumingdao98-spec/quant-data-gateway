@@ -5724,6 +5724,159 @@ def _agent_symbol_decisions(symbols: list[str], scores: dict[str, dict], config:
     return decisions
 
 
+def _unique_text(values: list[Any], limit: int = 12) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _has_explicit_ai_tech_exposure(symbol: str, name: str, profile: dict) -> bool:
+    """Guard against strategy tags such as ma_repair being read as an AI industry signal."""
+    tokens: list[str] = []
+    for key in ("industry", "industries", "concept", "concepts", "tags", "strategy_tags", "summary", "business", "sector"):
+        value = profile.get(key)
+        if isinstance(value, (list, tuple, set)):
+            tokens.extend(str(x) for x in value)
+        elif value is not None:
+            tokens.append(str(value))
+    tokens.append(str(name or ""))
+    tokens.append(str(symbol or ""))
+    text = " ".join(tokens)
+    tech_words = ("半导体", "芯片", "算力", "人工智能", "云计算", "服务器", "电子", "软件", "机器人")
+    if any(word in text for word in tech_words):
+        return True
+    return any(token.strip().upper() == "AI" for token in tokens)
+
+
+def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], scores: dict[str, dict], config: dict) -> list[dict]:
+    """Map real global events to the current symbol pool with explainable rules."""
+    signal_map = dict(config.get("screener_signal_map") or {})
+    out: list[dict] = []
+    for sym in symbols[:30]:
+        row = scores.get(sym) or {}
+        profile = dict(signal_map.get(sym) or {})
+        name = str(profile.get("name") or row.get("name") or sym)
+        try:
+            exposure = global_industry_mapper.company_exposure(sym, profile=profile, name=name)
+            mapped = global_industry_mapper.map_items(stream_items[:30], sym, name=name, profile=profile).get("industry_mapped_items", [])
+        except Exception as exc:
+            out.append(
+                {
+                    "symbol": sym,
+                    "name": name,
+                    "status": "mapping_error",
+                    "missing_reason": f"全球事件映射失败：{str(exc)[:120]}",
+                    "related_events": [],
+                }
+            )
+            continue
+        exposure_terms = _unique_text(
+            list(exposure.get("industries") or [])
+            + list(exposure.get("concepts") or [])
+            + list(exposure.get("chain_position") or [])
+            + list(exposure.get("upstream") or [])
+            + list(exposure.get("downstream") or [])
+            + list(exposure.get("policy_sensitivity") or [])
+            + list(exposure.get("commodity_sensitivity") or []),
+            limit=24,
+        )
+        matching_terms = _unique_text(
+            list(exposure.get("industries") or [])
+            + list(exposure.get("concepts") or [])
+            + list(exposure.get("chain_position") or [])
+            + list(exposure.get("upstream") or [])
+            + list(exposure.get("downstream") or [])
+            + list(exposure.get("policy_sensitivity") or []),
+            limit=28,
+        )
+        if not _has_explicit_ai_tech_exposure(sym, name, profile):
+            ai_noise_terms = {"AI", "半导体", "芯片", "电子", "国产替代", "算力基础设施", "半导体/算力", "科技主题"}
+            exposure_terms = [term for term in exposure_terms if term not in ai_noise_terms]
+            matching_terms = [term for term in matching_terms if term not in ai_noise_terms]
+        related: list[dict] = []
+        exposure_set = set(matching_terms)
+        for item in mapped:
+            targets = _unique_text(
+                list(item.get("impact_targets") or [])
+                + list(item.get("affected_sectors") or [])
+                + list(item.get("affected_assets") or [])
+                + list(item.get("mapped_industries") or [])
+                + list(item.get("mapped_concepts") or []),
+                limit=24,
+            )
+            overlap = sorted(exposure_set.intersection(set(targets + list(item.get("mapped_chain") or []))))
+            broad_hits: list[str] = []
+            raw_text = f"{item.get('title') or ''} {item.get('summary') or ''}"
+            direct_symbol_hit = sym in {str(x) for x in (item.get("mapped_symbols") or [])} or sym in raw_text or (name and name in raw_text)
+            overlap = [x for x in overlap if direct_symbol_hit or (x and x in raw_text)]
+            rate_text_hit = any(x in raw_text for x in ["利率", "降息", "加息", "美联储", "逆回购", "流动性", "美元", "美债", "非农", "CPI", "FOMC"])
+            trade_text_hit = any(x in raw_text for x in ["出口管制", "关税", "反倾销", "贸易制裁", "人民币", "汇率", "美元指数", "外需", "海外订单", "欧盟", "美国市场", "国际贸易"])
+            if "成长股估值" in targets and rate_text_hit and any(x in exposure_set for x in ["新能源", "储能", "电池", "光伏", "利率政策"]):
+                broad_hits.append("成长股估值/利率敏感")
+            if "出口链" in targets and trade_text_hit and any(x in exposure_set for x in ["光伏", "新能源", "电池", "硅料", "组件"]):
+                broad_hits.append("出口链/汇率敏感")
+            silicon_text_hit = any(x in raw_text for x in ["硅料", "工业硅", "多晶硅"])
+            power_text_hit = any(x in raw_text for x in ["电价", "电力价格", "煤炭", "动力煤", "天然气", "LNG"])
+            oil_text_hit = any(x in raw_text for x in ["原油", "石油", "油价", "布伦特", "WTI", "OPEC"])
+            commodity_exposure_hit = any(x in exposure_set for x in ["硅料", "化工", "原油", "天然气", "煤炭", "电力", "电价"])
+            direct_cost_exposure_hit = (silicon_text_hit and "硅料" in exposure_set) or (
+                power_text_hit and any(x in exposure_set for x in ["电力", "电价", "煤炭", "天然气", "化工"])
+            )
+            oil_exposure_hit = any(x in exposure_set for x in ["原油", "石油石化", "化工", "航空运输"])
+            commodity_event = silicon_text_hit or power_text_hit or oil_text_hit
+            if commodity_event and not (direct_cost_exposure_hit or oil_exposure_hit):
+                overlap = [x for x in overlap if x not in {"新能源", "能源", "大宗商品", "能源化工"}]
+            overlap = [x for x in overlap if not (x in {"能源", "大宗商品"} and not (commodity_exposure_hit and commodity_event))]
+            if any(x in targets for x in ["原油", "能源化工", "大宗商品"]) and (
+                (direct_cost_exposure_hit and (silicon_text_hit or power_text_hit)) or (oil_text_hit and oil_exposure_hit)
+            ):
+                broad_hits.append("能源成本/商品价格")
+            supply_chain_text_hit = any(x in raw_text for x in ["出口管制", "关税", "反倾销"]) or (
+                "制裁" in raw_text and any(x in raw_text for x in ["出口", "技术", "芯片", "半导体", "光伏", "电池", "新能源", "供应链"])
+            )
+            if supply_chain_text_hit and any(x in exposure_set for x in ["光伏", "新能源", "芯片", "半导体", "出口链"]):
+                broad_hits.append("贸易政策/供应链风险")
+            is_related = bool(direct_symbol_hit or overlap or broad_hits)
+            if not is_related:
+                continue
+            related.append(
+                {
+                    "title": item.get("title"),
+                    "published_at": item.get("published_at"),
+                    "source": item.get("source"),
+                    "source_ref": item.get("source_ref") or item.get("source_url") or item.get("url") or item.get("source_page"),
+                    "source_api": item.get("source_api"),
+                    "source_page": item.get("source_page"),
+                    "impact_note": item.get("impact_note") or item.get("impact_reason") or "全球事件规则映射，仅用于信息面和风控解释。",
+                    "impact_targets": targets[:10],
+                    "matched_terms": _unique_text(overlap + broad_hits, limit=8),
+                    "relevance_score": round(_as_float(item.get("relevance_score"), 0.0), 2),
+                    "mapping_policy": "global_event_to_symbol_exposure_v323",
+                }
+            )
+            if len(related) >= 5:
+                break
+        out.append(
+            {
+                "symbol": sym,
+                "name": name,
+                "status": "related" if related else "no_direct_mapping",
+                "exposure_terms": exposure_terms[:14],
+                "related_count": len(related),
+                "related_events": related,
+                "explain": "命中时仅表示宏观/商品/政策事件可能影响该标的产业链或估值环境，不直接构成买卖建议。"
+                if related
+                else "当前真实全球快讯未直接命中该标的产业链；仍作为大盘环境观察。",
+            }
+        )
+    return out
+
+
 @app.get("/api/agent/market-brief")
 def agent_market_brief(symbols: str | None = None, force: bool = False, limit: int = 80) -> dict:
     config = _build_auto_trading_config({"symbols": _parse_symbol_text(symbols)} if symbols else {})
@@ -5735,6 +5888,7 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
     safety = broker_status.get("safety") or {}
     scores = _agent_score_rows(symbol_list)
     decisions = _agent_symbol_decisions(symbol_list, scores, config, safety)
+    symbol_global_impacts = _agent_symbol_global_impacts(symbol_list, stream_items, scores, config)
     evidence = []
     for item in stream_items[:8]:
         evidence.append(
@@ -5809,7 +5963,11 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
             "global_flash_count": len(stream_items),
             "global_stream_mode": stream_data.get("stream_mode"),
             "macro_watchlist": macro_watch,
+            "symbol_global_impacts": symbol_global_impacts,
             "evidence": evidence[:16],
+            "items": stream_items[:16],
+            "source_link_count": len([x for x in evidence if x.get("source_ref")]),
+            "unlinked_evidence_count": len([x for x in evidence if not x.get("source_ref")]),
             "risk_flags": list(dict.fromkeys(risk_flags)),
             "next_steps": [
                 "先运行筛选或读取总控台配置，确认股票池和策略组合。",
