@@ -44,6 +44,54 @@ def test_trading_records_api_enriches_amount_and_pnl_fields():
     assert "\u91d1\u989d" in row["display_summary"]
 
 
+def test_trading_records_api_returns_summary_for_cost_and_pnl():
+    api.trading_store_v323.put(
+        "positions",
+        {
+            "position_id": "unit-summary-position",
+            "symbol": "990001",
+            "quantity": 100,
+            "cost_price": 10,
+            "last_price": 12,
+            "market_value": 1200,
+            "unrealized_pnl": 200,
+            "unrealized_pnl_pct": 20,
+            "mode": "unit_summary",
+        },
+        mode="unit_summary",
+        symbol="990001",
+        record_id="unit-summary-position",
+    )
+    api.trading_store_v323.put(
+        "fills",
+        {
+            "fill_id": "unit-summary-fill",
+            "symbol": "990001",
+            "side": "sell",
+            "quantity": 100,
+            "price": 11,
+            "realized_pnl": 100,
+            "mode": "unit_summary",
+        },
+        mode="unit_summary",
+        symbol="990001",
+        record_id="unit-summary-fill",
+    )
+
+    data = TestClient(api.app).get("/api/trading-records?mode=unit_summary&symbol=990001").json()
+
+    summary = data["summary"]
+    assert data["ok"] is True
+    assert summary["rows_count"] >= 2
+    assert summary["fills_count"] >= 1
+    assert summary["positions_count"] >= 1
+    assert summary["position_market_value"] >= 1200
+    assert summary["position_cost_value"] >= 1000
+    assert summary["realized_pnl"] >= 100
+    assert summary["unrealized_pnl"] >= 200
+    assert summary["symbol_counts"]["990001"] >= 2
+
+
 def test_trading_records_enriches_position_cost_and_zero_pnl():
     row = api._enrich_trading_record_row(
         "positions",

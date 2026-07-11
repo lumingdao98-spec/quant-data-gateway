@@ -1464,6 +1464,27 @@ DEFAULT_AUTO_STRATEGY_COMBO = [
     "main_money_est",
     "market_regime",
 ]
+DEFAULT_AUTO_LIVE_STRATEGY_COMBO = list(
+    dict.fromkeys(
+        DEFAULT_AUTO_STRATEGY_COMBO
+        + [
+            "fund_flow_watch",
+            "vwap_reclaim",
+            "orderbook_imbalance_watch",
+            "fake_order_cancel_watch",
+            "main_money_est",
+            "northbound_flow_watch",
+            "margin_financing_watch",
+            "global_commodity_map",
+            "market_breadth_filter",
+            "sector_strength",
+            "trailing_take_profit",
+            "dca_core_plan",
+            "backtest_required",
+        ]
+    )
+)
+MIN_AUTO_UPGRADED_STRATEGY_COUNT = 12
 
 AUTO_TRADING_VIRTUAL_STRATEGIES = {
     "score_driven": {
@@ -1857,7 +1878,11 @@ def _apply_auto_config_to_backtest_payload(payload: dict) -> dict:
     payload = dict(payload or {})
     if not (payload.get("use_auto_config") or payload.get("auto_trading_config")):
         return payload
-    config = payload.get("auto_trading_config") if isinstance(payload.get("auto_trading_config"), dict) else auto_trading_config_get()["data"]
+    if isinstance(payload.get("auto_trading_config"), dict):
+        config = payload.get("auto_trading_config")
+    else:
+        latest = cache_state_service.get("auto_trading_config", "default")
+        config = _build_auto_trading_config(latest.data if isinstance(latest.data, dict) else {})
     risk = dict(config.get("risk_controls") or {})
     out = {**config, **payload}
     out.setdefault("symbols", config.get("symbols") or [])
@@ -2027,7 +2052,12 @@ def _attach_auto_config_to_backtest_data(data: dict, payload: dict, cfg: V319Bac
     return data
 
 
-def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_screener: bool = False) -> dict:
+def _build_auto_trading_config(
+    payload: dict | None = None,
+    *,
+    prefer_latest_screener: bool = False,
+    upgrade_minimal_combo: bool = False,
+) -> dict:
     payload = dict(payload or {})
     existing = cache_state_service.get("auto_trading_config", "default").data or {}
     merged = {**existing, **payload}
@@ -2073,6 +2103,10 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         or merged.get("strategies")
         or DEFAULT_AUTO_STRATEGY_COMBO
     ) or list(DEFAULT_AUTO_STRATEGY_COMBO)
+    combo_upgraded = False
+    if upgrade_minimal_combo and len(combo) < MIN_AUTO_UPGRADED_STRATEGY_COUNT:
+        combo = list(dict.fromkeys(combo + DEFAULT_AUTO_LIVE_STRATEGY_COMBO))
+        combo_upgraded = True
     risk_controls = {
         "stop_loss_pct": _as_float(risk_in.get("stop_loss_pct"), 8.0),
         "take_profit_pct": _as_float(risk_in.get("take_profit_pct"), 18.0),
@@ -2121,6 +2155,9 @@ def _build_auto_trading_config(payload: dict | None = None, *, prefer_latest_scr
         "screener_snapshot_available": has_screener,
         "strategy_family": str(merged.get("strategy_family") or merged.get("strategy") or "hybrid"),
         "strategy_combo": combo,
+        "strategy_combo_upgraded": combo_upgraded,
+        "default_strategy_combo": list(DEFAULT_AUTO_STRATEGY_COMBO),
+        "live_intraday_strategy_combo": list(DEFAULT_AUTO_LIVE_STRATEGY_COMBO),
         "strategy_catalog": _auto_strategy_catalog(),
         "beginner_presets": _auto_beginner_presets(),
         "workflow_steps": [
@@ -3820,7 +3857,10 @@ def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
 def auto_trading_config_get() -> dict:
     latest = cache_state_service.get("auto_trading_config", "default")
     if latest.data:
-        upgraded = _build_auto_trading_config(latest.data if isinstance(latest.data, dict) else {})
+        upgraded = _build_auto_trading_config(
+            latest.data if isinstance(latest.data, dict) else {},
+            upgrade_minimal_combo=True,
+        )
         return {"ok": True, "data": upgraded, "cache_status": latest.cache_status, "defaulted": False, "upgraded": True}
     config = _build_auto_trading_config()
     return {"ok": True, "data": config, "cache_status": latest.cache_status, "defaulted": True}
@@ -4070,6 +4110,70 @@ def _enrich_trading_record_row(table: str, item: dict) -> dict:
     return row
 
 
+def _trading_records_summary(rows: list[dict]) -> dict:
+    record_type_counts: dict[str, int] = {}
+    mode_counts: dict[str, int] = {}
+    symbol_counts: dict[str, int] = {}
+    by_mode: dict[str, dict] = {}
+    orders_count = fills_count = positions_count = 0
+    total_amount = total_fee = realized_pnl = unrealized_pnl = 0.0
+    position_market_value = position_cost_value = 0.0
+    latest_account_value = None
+    for row in rows:
+        table = str(row.get("table") or "")
+        record_type = str(row.get("record_type_cn") or table or "record")
+        mode = str(row.get("mode") or row.get("source") or "unknown")
+        symbol = str(row.get("symbol") or "")
+        record_type_counts[record_type] = record_type_counts.get(record_type, 0) + 1
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+        if symbol:
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+        bucket = by_mode.setdefault(mode, {"count": 0, "amount": 0.0, "fee": 0.0, "pnl": 0.0})
+        bucket["count"] += 1
+        amount = _as_float(row.get("display_amount"), 0.0)
+        fee = _as_float(row.get("display_fee"), 0.0)
+        pnl = _as_float(row.get("display_pnl"), 0.0)
+        bucket["amount"] = round(bucket["amount"] + amount, 4)
+        bucket["fee"] = round(bucket["fee"] + fee, 4)
+        bucket["pnl"] = round(bucket["pnl"] + pnl, 4)
+        total_amount += amount
+        total_fee += fee
+        if table == "orders":
+            orders_count += 1
+        elif table == "fills":
+            fills_count += 1
+            realized_pnl += pnl
+        elif table == "positions":
+            positions_count += 1
+            unrealized_pnl += pnl
+            position_market_value += _as_float(row.get("display_market_value") or row.get("display_amount"), 0.0)
+            position_cost_value += _as_float(row.get("display_cost_price"), 0.0) * _as_float(row.get("display_quantity"), 0.0)
+        elif table == "account_snapshots" and latest_account_value is None and row.get("display_amount") is not None:
+            latest_account_value = _as_float(row.get("display_amount"), 0.0)
+    total_pnl = realized_pnl + unrealized_pnl
+    return {
+        "rows_count": len(rows),
+        "orders_count": orders_count,
+        "fills_count": fills_count,
+        "positions_count": positions_count,
+        "total_amount": round(total_amount, 4),
+        "total_fee": round(total_fee, 4),
+        "realized_pnl": round(realized_pnl, 4),
+        "unrealized_pnl": round(unrealized_pnl, 4),
+        "total_pnl": round(total_pnl, 4),
+        "position_market_value": round(position_market_value, 4),
+        "position_cost_value": round(position_cost_value, 4),
+        "position_unrealized_pnl_pct": round(unrealized_pnl / position_cost_value * 100, 4) if position_cost_value else None,
+        "latest_account_value": latest_account_value,
+        "record_type_counts": record_type_counts,
+        "mode_counts": mode_counts,
+        "symbol_counts": symbol_counts,
+        "by_mode": by_mode,
+        "top_symbols": sorted(symbol_counts, key=symbol_counts.get, reverse=True)[:10],
+        "missing_reason": "" if rows else "no matching trading records",
+    }
+
+
 @app.get("/api/live-broker/status")
 def live_broker_status() -> dict:
     return live_trading_engine_v323.status()
@@ -4313,7 +4417,11 @@ def trading_records_v323(mode: str = "", symbol: str = "", status: str = "", lim
                 continue
             rows.append(_enrich_trading_record_row(table, item))
     rows.sort(key=lambda x: str(x.get("created_at") or x.get("timestamp") or ""), reverse=True)
-    return {"ok": True, "data": rows[: max(1, min(int(limit or 200), 1000))], "count": len(rows)}
+    max_limit = max(1, min(int(limit or 200), 1000))
+    visible = rows[:max_limit]
+    summary = _trading_records_summary(rows)
+    summary["returned_count"] = len(visible)
+    return {"ok": True, "data": visible, "count": len(rows), "summary": summary}
 
 
 @app.get("/api/trading-records/{record_id}")

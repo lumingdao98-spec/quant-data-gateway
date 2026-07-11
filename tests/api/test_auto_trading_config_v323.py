@@ -72,6 +72,27 @@ def test_auto_trading_config_exposes_catalog_and_beginner_presets():
     assert len(data["workflow_steps"]) == 5
 
 
+def test_auto_trading_config_get_upgrades_minimal_cached_strategy_combo():
+    client = TestClient(api.app)
+    saved = client.post(
+        "/api/auto-trading/config",
+        json={"symbols": ["300750", "600438"], "strategy_combo": ["score_driven", "ma_repair"]},
+    ).json()
+    assert saved["ok"] is True
+    assert saved["data"]["strategy_combo"] == ["score_driven", "ma_repair"]
+
+    loaded = client.get("/api/auto-trading/config").json()
+
+    data = loaded["data"]
+    combo = set(data["strategy_combo"])
+    assert loaded["ok"] is True
+    assert data["strategy_combo_upgraded"] is True
+    assert len(data["strategy_combo"]) >= 12
+    assert {"fund_flow_watch", "vwap_reclaim", "global_commodity_map", "market_breadth_filter", "risk_control"} <= combo
+    assert len(data["live_intraday_strategy_combo"]) >= len(data["default_strategy_combo"])
+    assert data["strategy_parameters"]["vwap_reclaim"]["name"]
+
+
 def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
     client = TestClient(api.app)
     configured = client.post(

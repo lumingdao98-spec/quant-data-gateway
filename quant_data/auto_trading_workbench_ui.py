@@ -423,6 +423,7 @@ function renderPortfolioOverview(liveAccount,livePositions,records){
   const account=liveAccount?.data||{};
   const liveRows=Array.isArray(livePositions?.data)?livePositions.data:[];
   const summary=livePositions?.summary||{};
+  const recordSummary=records?.summary||{};
   const recRows=(records?.data||[]).slice(0,10);
   const cash=account.available_cash??account.cash?.available_cash??account.cash;
   const total=account.total_value??account.equity??account.total_assets;
@@ -433,7 +434,17 @@ function renderPortfolioOverview(liveAccount,livePositions,records){
   const positionsText=liveRows.length
     ? liveRows.slice(0,4).map(p=>`${esc(p.symbol)} ${esc(p.quantity??0)}股 成本${esc(p.cost_price??p.avg_cost??'--')} 市值${money(p.market_value)}`).join('；')
     : '暂无真实持仓或券商未授权';
-  $('portfolioOverview').innerHTML=`<b>真实账户</b> 可用资金 ${money(cash)}；总资产 ${money(total)}；持仓 ${esc(liveRows.length)} 只；浮盈亏 <span class="${pnlClass(livePnl)}">${money(livePnl)}</span>${livePnlPct!=null?' / '+pct(livePnlPct):''}<br><b>持仓明细</b> ${positionsText}<br><b>来源状态</b> ${esc(liveStatus)}${missing?'；'+esc(missing):''}`;
+  const recordText=[
+    `流水 ${esc(recordSummary.rows_count??recRows.length)} 条`,
+    `委托 ${esc(recordSummary.orders_count??0)}`,
+    `成交 ${esc(recordSummary.fills_count??0)}`,
+    `持仓 ${esc(recordSummary.positions_count??0)}`,
+    `持仓市值 ${money(recordSummary.position_market_value)}`,
+    `持仓成本 ${money(recordSummary.position_cost_value)}`,
+    `已实现 ${money(recordSummary.realized_pnl)}`,
+    `浮动 ${money(recordSummary.unrealized_pnl)}${recordSummary.position_unrealized_pnl_pct!=null?' / '+pct(recordSummary.position_unrealized_pnl_pct):''}`
+  ].join('；');
+  $('portfolioOverview').innerHTML=`<b>真实账户</b> 可用资金 ${money(cash)}；总资产 ${money(total)}；持仓 ${esc(liveRows.length)} 只；浮盈亏 <span class="${pnlClass(livePnl)}">${money(livePnl)}</span>${livePnlPct!=null?' / '+pct(livePnlPct):''}<br><b>统一流水</b> ${recordText}<br><b>持仓明细</b> ${positionsText}<br><b>来源状态</b> ${esc(liveStatus)}${missing?'；'+esc(missing):''}`;
   $('recordOverviewRows').innerHTML=recRows.map(x=>{
     const price=x.display_price??x.price??x.limit_price??'--';
     const qty=x.display_quantity??x.quantity??x.qty??'--';
@@ -815,7 +826,7 @@ async function refreshAll(){
     const sessList=sessions.data||[];
     const active=sessList.find(x=>['running','paused'].includes(x.status))||sessList[0]||null;
     $('paperSessions').textContent=sessList.length;
-    $('recordCount').textContent=(records.data||[]).length;
+    $('recordCount').textContent=records.summary?.rows_count??(records.data||[]).length;
     $('confirmCount').textContent=queue.count??(queue.data||[]).length??0;
     const tableCount=Object.keys(data.trading_store?.tables||{}).length;
     $('dataHealth').textContent=tableCount?tableCount+' 表':'待检查';
