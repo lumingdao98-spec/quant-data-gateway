@@ -42,6 +42,7 @@ def build_auto_trading_workbench_ui() -> str:
 .agent-box{border:1px solid #315077;background:linear-gradient(135deg,#0d1728,#10233a);border-radius:12px;padding:12px;line-height:1.6;font-size:13px}.agent-box b{display:block;color:#dbeafe;margin-bottom:5px}
 .agent-decision{margin-top:10px;border:1px solid #2f4364;background:#081626;border-radius:12px;padding:10px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;max-height:270px;overflow:auto}.agent-decision b{display:block;color:#dbeafe;margin-bottom:5px}.agent-decision ul{margin:7px 0 0 18px;padding:0}.agent-decision li{margin:3px 0;color:#c8d8ee}.agent-decision .risk{color:#fcd34d;margin-top:7px}
 .agent-evidence-list{display:grid;gap:7px;margin-top:9px}.agent-evidence{border:1px solid #2f4364;background:#0b1728;border-radius:10px;padding:8px}.agent-evidence time{display:block;color:#93c5fd;font-size:11px}.agent-evidence strong{display:block;margin:3px 0;color:#dbeafe}.agent-evidence small{display:block;color:#b7c9e6;line-height:1.45}.agent-evidence a{display:inline-flex;margin-top:6px;color:#93c5fd;font-size:12px}.agent-evidence .impact-row{margin-top:6px}
+.source-meta{display:grid;gap:3px;margin-top:6px;color:#b7c9e6;font-size:12px;line-height:1.45}.source-meta a{color:#93c5fd}.source-policy{border:1px solid #315077;background:#081626;border-radius:10px;padding:8px;margin:8px 0;color:#c8d8ee;font-size:12px;line-height:1.55}.impact-summary{border:1px solid #315077;background:#0b1d30;border-radius:10px;padding:7px;margin-top:7px;color:#dbeafe;font-size:12px;line-height:1.5}.impact-summary b{display:inline;color:#bfdbfe;margin:0}.symbol-impact-card{border-left:3px solid #60a5fa}.symbol-impact-card.none{border-left-color:#64748b}.source-link-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px}.source-link-row a,.source-link-row span{display:inline-flex!important;border:1px solid #2f4364;background:#0d1728;border-radius:999px;padding:4px 8px;font-size:11px!important;color:#93c5fd!important}.feed-item a.source-link{border:1px solid #2f4364;background:#0d1728;border-radius:999px;padding:4px 8px}.feed-item .impact-summary{margin-top:8px}
 @media(max-width:1360px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav button,.nav a{justify-content:center;padding:12px}.iframe-shell{left:84px;width:calc(100vw - 84px);max-width:none}.hero,.grid-main{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:820px){.app{grid-template-columns:1fr}.side{display:none}.iframe-shell{left:0;max-width:100vw}.top{position:static}.hero,.grid-main,.flow,.kpis,.split,.check-grid,.module-grid{grid-template-columns:1fr}.main{padding:14px}.iframe-shell{grid-template-rows:58px 1fr}}
 </style>
@@ -659,6 +660,141 @@ function scheduleGlobalStreamLoop(){
 }
 function startGlobalStreamLoop(){
   scheduleGlobalStreamLoop();
+}
+// V3.23 readable global-info renderer override. The older renderer stayed compact;
+// this one makes source, link, affected target and symbol mapping explicit.
+function textList(v){
+  if(Array.isArray(v))return v.map(x=>String(x||'').trim()).filter(Boolean);
+  return String(v||'').split(/[\s,，、;；|/]+/).map(x=>x.trim()).filter(Boolean);
+}
+function uniqueList(arr,limit=10){
+  const out=[];
+  (arr||[]).forEach(x=>{const s=String(x||'').trim();if(s&&!out.includes(s))out.push(s)});
+  return out.slice(0,limit);
+}
+function sourceUrlOf(x){
+  return String(x?.source_ref||x?.source_url||x?.url||x?.source_page||x?.source_api||'').trim();
+}
+function sourceLabelOf(x){
+  return String(x?.source||x?.source_name||x?.media||x?.latest_source||'全球信息源').trim();
+}
+function sourceMetaHtml(x){
+  const label=sourceLabelOf(x);
+  const api=String(x?.source_api||x?.latest_source_api||'').trim();
+  const page=String(x?.source_page||x?.latest_source_page||'').trim();
+  const ref=sourceUrlOf(x);
+  const parts=[`<span>数据来源：${esc(label)}</span>`];
+  if(api)parts.push(`<span>接口：<a href="${esc(api)}" target="_blank" rel="noopener noreferrer">${esc(api)}</a></span>`);
+  if(page&&page!==api)parts.push(`<span>页面：<a href="${esc(page)}" target="_blank" rel="noopener noreferrer">${esc(page)}</a></span>`);
+  if(ref&&ref!==api&&ref!==page)parts.push(`<span>原始链接：<a href="${esc(ref)}" target="_blank" rel="noopener noreferrer">${esc(ref)}</a></span>`);
+  if(!ref&&!api&&!page)parts.push('<span class="warn">该来源未提供可跳转链接，只保留标题、时间和来源名。</span>');
+  return `<div class="source-meta">${parts.join('')}</div>`;
+}
+function impactTagsOf(x){
+  return uniqueList([
+    ...textList(x?.impact_targets),
+    ...textList(x?.affected_sectors),
+    ...textList(x?.affected_assets),
+    ...textList(x?.industry_tags),
+    ...textList(x?.related_symbols),
+    ...textList(x?.matched_terms),
+    String(x?.impact_scope||x?.message_dimension||x?.category||'').trim(),
+  ],10);
+}
+function impactNoteOf(x){
+  return x?.impact_note||x?.reason||x?.impact_scope||x?.sentiment_label||'仅作宏观、商品、政策或信息面风险观察，不直接等于买卖信号。';
+}
+function impactTagsHtml(x,prefix='影响对象'){
+  const tags=impactTagsOf(x);
+  if(!tags.length)return `<div class="impact-summary"><b>${esc(prefix)}：</b>暂无明确映射，需结合个股行业、资金面和技术面继续确认。</div>`;
+  return `<div class="impact-row"><span class="impact-tag">${esc(prefix)}</span>${tags.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`;
+}
+function sourceLinksHtml(x,primaryLabel='打开来源 / 原文'){
+  const api=String(x?.source_api||x?.latest_source_api||'').trim();
+  const page=String(x?.source_page||x?.latest_source_page||'').trim();
+  const ref=sourceUrlOf(x);
+  const links=[];
+  if(ref)links.push(`<a href="${esc(ref)}" target="_blank" rel="noopener noreferrer">${esc(primaryLabel)}</a>`);
+  if(api&&api!==ref)links.push(`<a href="${esc(api)}" target="_blank" rel="noopener noreferrer">查看数据接口</a>`);
+  if(page&&page!==ref&&page!==api)links.push(`<a href="${esc(page)}" target="_blank" rel="noopener noreferrer">查看来源页面</a>`);
+  if(!links.length)links.push('<span>无公开跳转链接：仅展示可追溯来源名称和缓存记录</span>');
+  return `<div class="source-link-row">${links.join('')}</div>`;
+}
+function renderGlobalFeed(js){
+  const items=(js.data?.items||js.items||[]).slice(0,10);
+  const watch=(js.watchlist||js.data?.watchlist||[]).slice(0,7);
+  if(!items.length&&!watch.length){
+    $('macroFeed').innerHTML='<div class="feed-item"><b>暂无全球信息缓存</b><span>可以点击“联网刷新”。如果真实来源不可用，只显示缺失原因，不生成假新闻。</span></div>';
+    return;
+  }
+  const watchRows=watch.map(x=>{
+    const latest=x.latest_title?`<div class="impact-summary"><b>最近命中：</b>${esc(x.latest_title)}${x.latest_source?` · ${esc(x.latest_source)}`:''}</div>`:'';
+    return `<div class="feed-item"><time>${esc(x.status||'观察')}</time><b>${esc(x.label||x.key)}</b><span>${esc(x.reason||x.missing_reason||'等待真实数据源命中')}</span>${impactTagsHtml(x,'影响维度')}${latest}${sourceMetaHtml(x)}${sourceLinksHtml(x,'打开命中来源')}</div>`;
+  });
+  const itemRows=items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`);
+  $('macroFeed').innerHTML=[...watchRows,...itemRows].join('');
+}
+function renderAgentDecision(js){
+  const d=js.data||{};
+  const decisions=(d.symbol_decisions||[]).slice(0,6);
+  const risks=(d.risk_flags||[]).slice(0,5);
+  const evidence=(d.evidence||[]).slice(0,5);
+  const symbolImpacts=(d.symbol_global_impacts||[]).slice(0,8);
+  const chunks=[
+    `<b>${esc(d.headline||'暂无智能辅助结论')}</b>`,
+    `<span>建议动作：${esc(d.recommended_action||'--')} · 置信度：${esc(d.confidence||'--')} · 全球快讯 ${esc(d.global_flash_count??0)} 条 · 可跳转来源 ${esc(d.source_link_count??0)} 个 · ${esc(d.llm_status||'联网证据代理')}</span>`,
+    '<div class="source-policy">来源说明：只读取金十/全球快讯、东方财富等真实来源与本地缓存；没有来源链接时会明确显示“无公开跳转链接”。宏观事件只进入信息面和风控解释，不会单独触发自动买入。</div>'
+  ];
+  if(decisions.length){
+    chunks.push('<ul>'+decisions.map(x=>`<li>${esc(x.symbol)} ${esc(x.name||'')}：${esc(x.action||'观察')}${x.score!=null?' · 评分 '+esc(x.score):''}；${esc(x.reason||'')}</li>`).join('')+'</ul>');
+  }
+  if(symbolImpacts.length){
+    chunks.push('<div class="agent-evidence-list"><div class="source-note">个股影响映射：下面逐只说明全球要闻是否命中当前股票池，以及命中的依据。</div>'+symbolImpacts.map(s=>{
+      const ev=(s.related_events||[])[0]||{};
+      const exposure=uniqueList([...(s.exposure_terms||[]),...(ev.matched_terms||[])],8);
+      const exposureHtml=exposure.length?`<div class="impact-row"><span class="impact-tag">映射依据</span>${exposure.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
+      if(!ev.title){
+        return `<div class="agent-evidence symbol-impact-card none"><time>${esc(s.status||'no_direct_mapping')}</time><strong>${esc(s.symbol)} ${esc(s.name||'')} · 暂无全球快讯直接命中</strong><small>${esc(s.explain||'当前真实全球快讯未直接命中该标的产业链；仍可作为大盘环境观察。')}</small>${exposureHtml}</div>`;
+      }
+      return `<div class="agent-evidence symbol-impact-card"><time>${esc(ev.published_at||'影响映射')}</time><strong>${esc(s.symbol)} ${esc(s.name||'')} · ${esc(ev.title||'全球事件映射')}</strong><small>${esc(ev.impact_note||s.explain||'仅作信息面风险观察。')}</small>${impactTagsHtml(ev,'命中影响')}${exposureHtml}${sourceMetaHtml(ev)}${sourceLinksHtml(ev,'查看影响来源 / 原文')}</div>`;
+    }).join('')+'</div>');
+  }
+  if(evidence.length){
+    chunks.push('<div class="agent-evidence-list"><div class="source-note">证据列表：用于解释信息面和风控，不直接等同于交易指令。</div>'+evidence.map(x=>`<div class="agent-evidence"><time>${esc(x.published_at||x.type||'证据')}</time><strong>${esc(x.title||x.reason||'事件')}</strong><small>${esc(impactNoteOf(x))}</small>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`).join('')+'</div>');
+  }
+  if(risks.length)chunks.push('<div class="risk">'+risks.map(esc).join('；')+'</div>');
+  $('agentDecision').innerHTML=chunks.join('');
+}
+function renderGlobalStreamSources(data){
+  const rows=(data.sources_status||[]).slice(0,8);
+  if(!rows.length){$('globalStreamSources').innerHTML='<span>来源状态：等待金十直连和全球源返回</span>';return}
+  $('globalStreamSources').innerHTML=rows.map(x=>{
+    const label=`${x.source||'来源'} · ${x.count??0}条 · ${x.status||'--'}`;
+    const url=x.source_api||x.source_page||'';
+    return url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`:`<span>${esc(label)}</span>`;
+  }).join('');
+}
+function renderGlobalStream(js){
+  const data=js.data||{};
+  const items=(js.items||data.items||[]).slice(0,60);
+  const status=$('globalStreamStatus');
+  const mode=data.stream_mode||js.cache_status?.status||'stream';
+  const refresh=Math.max(12,Math.min(60,Number(js.refresh_seconds||data.refresh_seconds||20)));
+  globalStreamRefreshMs=refresh*1000;
+  status.textContent=(items.length?items.length+' 条':'暂无快讯')+' · '+mode;
+  status.className='pill '+(items.length?'good':'warn');
+  renderGlobalStreamSources(data);
+  if(!items.length){
+    const reason=data.missing_reason||js.cache_status?.error||'当前真实来源暂未返回快讯；不会伪造新闻。';
+    $('globalTickerTrack').innerHTML=`<span class="ticker-item"><b>缺失</b><span>${esc(reason)}</span></span>`;
+    $('globalStream').innerHTML=`<div class="feed-item"><time>${esc(data.updated_at||'')}</time><b>暂无可展示全球快讯</b><span>${esc(reason)}</span></div>`;
+    return;
+  }
+  const tickerItems=items.slice(0,24).map(x=>`<span class="ticker-item"><b>${esc(sourceLabelOf(x))}</b><span>${esc(x.title||'未命名快讯')}</span></span>`).join('');
+  $('globalTickerTrack').innerHTML=tickerItems+tickerItems;
+  $('globalStream').innerHTML=items.slice(0,18).map(x=>{
+    return `<div class="feed-item ${x.is_jin10?'jin10':''}"><div class="stream-meta"><time>${esc(x.published_at||'时间缺失')}</time><i>${esc(sourceLabelOf(x))}</i><span>${esc(x.category||x.message_dimension||'全球快讯')}</span></div><b>${esc(x.title||'未命名快讯')}</b><span>${esc(x.summary||'')}</span><span>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`;
+  }).join('');
 }
 async function refreshAll(){
   try{

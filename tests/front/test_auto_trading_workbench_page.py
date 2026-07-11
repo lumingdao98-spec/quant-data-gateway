@@ -36,10 +36,20 @@ def test_auto_trading_workbench_page_visible():
     assert "globalStreamSources" in html
     assert "mergeGlobalStreams" in html
     assert "sourceUrlOf" in html
+    assert "sourceLabelOf" in html
+    assert "sourceMetaHtml" in html
+    assert "sourceLinksHtml" in html
     assert "impactTagsOf" in html
     assert "impactNoteOf" in html
+    assert "renderGlobalFeed" in html
+    assert "renderGlobalStreamSources" in html
     assert "source-link" in html
+    assert "source-link-row" in html
+    assert "source-meta" in html
+    assert "source-policy" in html
     assert "impact-tag" in html
+    assert "impact-summary" in html
+    assert "symbol-impact-card" in html
     assert "查看来源 / 原文" in html
     assert "来源：${esc(sourceLabelOf(x))}" in html
     assert "impactTagsOf(x)" in html
@@ -86,6 +96,24 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     assert "/live-trading" in html
     assert "/trading-records" in html
     assert "/data-center" in html
+
+
+def test_embedded_quote_page_has_workbench_layout_guards():
+    html = TestClient(api.app).get("/ui?symbol=300750&frame=time&embedded=1").text
+
+    assert "qd-v323-workbench-iframe-layout" in html
+    assert ".app.embedded .main" in html
+    assert "display:flex!important" in html
+    assert "flex-direction:column!important" in html
+    assert "max-height:260px!important" in html
+    assert ".app.embedded .detail" in html
+    assert "min-height:780px!important" in html
+    assert ".app.embedded .chart-grid.time" in html
+    assert "grid-template-columns:minmax(0,1fr) minmax(176px,212px)!important" in html
+    assert ".app.embedded .book" in html
+    assert "max-width:212px!important" in html
+    assert ".app.embedded .tooltip" in html
+    assert "calc(100vw - 28px)" in html
 
 
 def test_root_redirects_to_auto_trading():
