@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from .time_utils import cn_market_now, cn_market_time
+
 
 @dataclass(slots=True)
 class DataFreshnessConfig:
@@ -34,7 +36,7 @@ class DataFreshnessGuard:
 
     def check(self, timestamps: dict[str, Any] | None = None, *, now: datetime | None = None, missing_fields: list[str] | None = None) -> DataFreshnessResult:
         timestamps = timestamps or {}
-        now = now or datetime.now()
+        now = cn_market_time(now) or cn_market_now()
         stale: list[str] = []
         missing = list(missing_fields or [])
         rules = {
@@ -45,18 +47,18 @@ class DataFreshnessGuard:
             "company_profile": timedelta(days=self.config.company_profile_ttl_days),
         }
         details: dict[str, Any] = {}
-        for field, ttl in rules.items():
-            raw = timestamps.get(field)
+        for field_name, ttl in rules.items():
+            raw = timestamps.get(field_name)
             ts = self._parse_time(raw)
             if ts is None:
-                missing.append(field)
-                details[field] = {"status": "missing", "ttl_seconds": ttl.total_seconds()}
+                missing.append(field_name)
+                details[field_name] = {"status": "missing", "ttl_seconds": ttl.total_seconds()}
                 continue
             age = now - ts
             is_stale = age > ttl
             if is_stale:
-                stale.append(field)
-            details[field] = {
+                stale.append(field_name)
+            details[field_name] = {
                 "status": "stale" if is_stale else "fresh",
                 "age_seconds": round(age.total_seconds(), 3),
                 "ttl_seconds": ttl.total_seconds(),
@@ -83,12 +85,4 @@ class DataFreshnessGuard:
         )
 
     def _parse_time(self, value: Any) -> datetime | None:
-        if isinstance(value, datetime):
-            return value.replace(tzinfo=None)
-        if value is None or value == "":
-            return None
-        text = str(value).replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(text).replace(tzinfo=None)
-        except ValueError:
-            return None
+        return cn_market_time(value)

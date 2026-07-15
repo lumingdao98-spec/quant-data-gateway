@@ -31,7 +31,7 @@ def test_ui_embedded_mode_for_auto_trading_iframe():
     assert "if(EMBEDDED_MODE)$('app').classList.add('embedded')" in html
 
 
-def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
+def test_intraday_chart_compresses_lunch_into_a_continuous_trading_axis():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time").text
 
     assert "function isCnLunchGap" in html
@@ -40,11 +40,12 @@ def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     assert "function timeTradeX" in html
     assert "function drawSegmentedTimeLine" in html
     assert "qd-v323-time-axis-final-guard" in html
-    assert "function qdV323ClockMinuteFrac" in html
-    assert "timeTradeFrac=qdV323ClockMinuteFrac" in html
-    assert "午休断线" in html
-    assert "breakLunch=true" in html
-    assert "mode==='time'?true:breakLunch" in html
+    assert "function qdV323TradingMinuteFrac" in html
+    assert "timeTradeFrac=qdV323TradingMinuteFrac" in html
+    assert "午休压缩" in html
+    assert "breakLunch=false" in html
+    assert "mode==='time'?false:breakLunch" in html
+    assert "11:30/13:00" in html
     assert "drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,breakLunch)" in html
     assert "drawSegmentedTimeLine(ctx,data,d=>d.avg_price||d.price,(d)=>timeTradeX(d,w),y,'#f59e0b',2,breakLunch)" in html
     assert "function clampChartTooltip" in html

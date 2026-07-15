@@ -5,6 +5,7 @@ from datetime import datetime, time
 from typing import Any
 
 from .models import PaperPosition, TradingSignal
+from .time_utils import cn_market_now, cn_market_time
 
 
 @dataclass(slots=True)
@@ -166,7 +167,7 @@ class RiskGateway:
             current_symbol_value = self._num(pos.get("market_value"), self._num(pos.get("quantity"), 0) * self._num(pos.get("market_price") or pos.get("avg_cost"), 0))
         reasons: list[str] = []
         warnings: list[str] = []
-        now = now or datetime.now()
+        now = cn_market_time(now) or cn_market_now()
 
         if side not in {"buy", "sell", "reduce", "add"}:
             reasons.append("订单方向无效")
@@ -256,5 +257,6 @@ class RiskGateway:
             return default
 
     def _is_trading_time(self, value: datetime) -> bool:
-        t = value.time()
+        market_time = cn_market_time(value) or cn_market_now()
+        t = market_time.time()
         return time(9, 30) <= t <= time(11, 30) or time(13, 0) <= t <= time(15, 0)

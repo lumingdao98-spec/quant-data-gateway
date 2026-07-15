@@ -12,6 +12,7 @@ from .paper_account import PaperAccount
 from .realtime_state import RealtimePaperConfig, RealtimePaperState
 from .risk_gateway import RiskGateway
 from .signal_fusion import SignalFusionEngine, UnifiedSignal
+from .time_utils import cn_market_now, cn_market_time
 
 
 class RealtimePaperEngine:
@@ -94,7 +95,7 @@ class RealtimePaperEngine:
 
     def tick(self, payload: dict[str, Any] | None = None, *, manual_replay: bool = False) -> dict[str, Any]:
         payload = payload or {}
-        now = self._parse_time(payload.get("now") or payload.get("ts")) or datetime.now()
+        now = self._parse_time(payload.get("now") or payload.get("ts")) or cn_market_now()
         symbol = str(payload.get("symbol") or (self.state.config.symbols[0] if self.state.config.symbols else "300750")).strip()
         quote = dict(payload.get("quote") or {})
         if not quote:
@@ -409,14 +410,7 @@ class RealtimePaperEngine:
             return default
 
     def _parse_time(self, value: Any) -> datetime | None:
-        if isinstance(value, datetime):
-            return value.replace(tzinfo=None)
-        if not value:
-            return None
-        try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            return None
+        return cn_market_time(value)
 
     def _is_trading_time(self, now: datetime) -> bool:
         t = now.time()

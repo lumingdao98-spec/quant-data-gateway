@@ -3875,6 +3875,12 @@ def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
     # replay is deliberately isolated behind /api/realtime-paper/replay.
     payload.pop("manual_replay", None)
     payload.pop("paper_replay", None)
+    client_now = payload.get("now") or payload.get("ts")
+    if client_now:
+        payload["client_now"] = client_now
+    # Trading-session checks must use the exchange clock verified by the server.
+    # Browser Date.toISOString() is UTC and must never be interpreted as CN local time.
+    payload["now"] = market_session.get("now") or _market_session("CN").get("now")
     payload["is_trading_session"] = True
     payload["market_session_verified"] = True
     payload = _hydrate_realtime_tick_payload(payload)

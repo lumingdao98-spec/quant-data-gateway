@@ -95,3 +95,49 @@ def test_live_tick_ignores_client_replay_override(monkeypatch):
     assert result.get("skipped") is not True
     assert result["market_session"]["can_refresh"] is True
     assert result["signal"]["session_mode"] == "盘中实时"
+
+
+def test_afternoon_tick_uses_server_market_time_instead_of_browser_utc(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_market_session",
+        lambda market="CN": {
+            "market": market,
+            "status": "afternoon",
+            "label": "下午连续竞价",
+            "can_refresh": True,
+            "is_trading": True,
+            "now": "2026-07-15T13:39:00+08:00",
+        },
+    )
+    client = TestClient(api.app)
+    started = client.post(
+        "/api/realtime-paper/sessions/start",
+        json={"symbols": ["399987"], "initial_cash": 100000, "reset_account": True},
+    ).json()
+
+    result = client.post(
+        "/api/realtime-paper/tick",
+        json={
+            "session_id": started["session"]["session_id"],
+            "symbol": "399987",
+            "price": 10,
+            "now": "2026-07-15T05:39:00.000Z",
+            "quote_ts": "2026-07-15T13:39:00+08:00",
+            "news_ts": "2026-07-15T13:39:00+08:00",
+            "technical_ts": "2026-07-15T13:39:00+08:00",
+            "company_profile_ts": "2026-07-15T13:39:00+08:00",
+            "technical_score": 55,
+            "fundamental_score": 55,
+            "information_score": 55,
+            "market_score": 55,
+        },
+    ).json()
+
+    assert result["ok"] is True
+    assert result.get("skipped") is not True
+    assert result["state"]["is_trading_session"] is True
+    assert result["state"]["last_tick_at"] == "2026-07-15T13:39:00"
+    assert result["signal"]["session_mode"] == "盘中实时"
+    for order in result.get("orders") or []:
+        assert "非交易时段禁止自动下单" not in order.get("risk", {}).get("risk_reasons", [])
