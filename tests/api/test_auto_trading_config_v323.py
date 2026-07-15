@@ -1,8 +1,24 @@
 from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
+import pytest
 
 import quant_data.api as api
+
+
+@pytest.fixture(autouse=True)
+def _verified_open_market(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "_market_session",
+        lambda market="CN": {
+            "market": market,
+            "status": "continuous_auction",
+            "label": "交易中",
+            "can_refresh": True,
+            "now": "2026-06-01T10:00:00",
+        },
+    )
 
 
 def test_auto_trading_one_click_config_and_start_paper():

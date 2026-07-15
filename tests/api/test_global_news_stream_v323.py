@@ -184,6 +184,25 @@ def test_global_news_stream_keeps_last_real_items_when_live_round_empty(monkeypa
     assert "上一轮真实快讯缓存" in data["data"]["missing_reason"]
 
 
+def test_global_stream_normalizer_preserves_traceable_source_fields():
+    rows = api._global_stream_items(
+        [
+            {
+                "title": "金十快讯：美国非农数据公布",
+                "source": "金十数据7x24",
+                "source_ref": "https://www.jin10.com/flash/123",
+                "source_api": "https://flash-api.jin10.com/get_flash_list",
+                "source_page": "https://www.jin10.com/",
+                "published_at": "2026-07-15 10:30:00",
+            }
+        ]
+    )
+
+    assert rows[0]["source_ref"] == "https://www.jin10.com/flash/123"
+    assert rows[0]["source_api"] == "https://flash-api.jin10.com/get_flash_list"
+    assert rows[0]["source_page"] == "https://www.jin10.com/"
+
+
 def test_generic_global_news_link_parser_keeps_href_available(monkeypatch):
     seen_urls = []
 

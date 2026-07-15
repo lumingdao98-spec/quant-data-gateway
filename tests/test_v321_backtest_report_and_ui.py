@@ -114,7 +114,8 @@ def test_v323_realtime_paper_ui_explains_and_runs_auto_loop():
     assert "启动自动模拟" in html
     assert "执行一轮模拟" in html
     assert "下次循环" in html
-    assert "休市纸面回放" in html
+    assert "休市待机（不下单）" in html
+    assert "自动循环已停止" in html
     assert "成本" in html
     assert "setInterval(()=>runOneCycle('auto')" in html
     assert "/api/quotes?symbols=" in html

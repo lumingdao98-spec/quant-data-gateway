@@ -31,6 +31,7 @@ from quant_data.services.source_registry import SourceRegistryService
 from quant_data.services.technical_factor_registry import TechnicalFactorRegistryService
 from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
+from quant_data.services.sector_mainline_service import SectorMainlineService
 from quant_data.services.orderbook_behavior_service import OrderBookBehaviorService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot
 from quant_data.services.market_behavior_engine import MarketBehaviorEngine
@@ -112,6 +113,7 @@ source_registry_service = SourceRegistryService()
 technical_factor_registry_service = TechnicalFactorRegistryService()
 candidate_pool_service = CandidatePoolService()
 market_regime_service = MarketRegimeService()
+sector_mainline_service = SectorMainlineService()
 market_behavior_engine = MarketBehaviorEngine()
 orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
@@ -241,6 +243,7 @@ def _render_chinese_api_docs() -> str:
             [
                 ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
                 ("GET", "/api/market/regime", "大盘环境分析，可用于评分里的市场情绪权重。"),
+                ("GET", "/api/market/sectors/mainline", "主线板块、公开资金净流、板块强度和持续性。"),
                 ("GET", "/api/screener/historical-snapshot?symbols=300750,600438", "按决策时点重建筛选快照，保证回测不偷看未来。"),
             ],
         ),
@@ -2391,6 +2394,24 @@ def market_regime(max_pages: int = 2, page_size: int = 100) -> dict:
     return {"ok": True, "data": regime, "market_regime": regime, "count": len(quotes)}
 
 
+@app.get("/api/market/sectors/mainline")
+def market_sector_mainline(limit: int = 20, include_concept: bool = True, force: bool = False) -> dict:
+    session = _market_session("CN")
+    return sector_mainline_service.snapshot(
+        limit=limit,
+        include_concept=include_concept,
+        force=force,
+        can_refresh=bool(session.get("can_refresh")),
+        session_label=str(session.get("label") or "未知交易时段"),
+        session_date=str(session.get("date") or ""),
+    )
+
+
+@app.get("/api/market/sectors/history")
+def market_sector_history(days: int = 10, limit: int = 20) -> dict:
+    return sector_mainline_service.history(days=days, limit=limit)
+
+
 @app.get("/api/market-rules/profiles")
 def market_rule_profiles(symbol: str = "", asof: str = "") -> dict:
     profiles = {key: value.to_dict() for key, value in market_rule_engine_v322.profiles.items()}
@@ -3841,11 +3862,25 @@ def _hydrate_realtime_tick_payload(payload: dict | None) -> dict:
 
 @app.post("/api/realtime-paper/tick")
 def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
+    payload = dict(payload or {})
+    symbol = str(payload.get("symbol") or "").strip()
+    market_session = _market_session(_detect_market(symbol))
+    if not market_session.get("can_refresh"):
+        return realtime_paper_engine_v323.observe_market_closed(
+            payload,
+            session_id=str(payload.get("session_id") or ""),
+            market_session=market_session,
+        )
+    # The live tick endpoint never accepts a client-side replay override. Historical
+    # replay is deliberately isolated behind /api/realtime-paper/replay.
+    payload.pop("manual_replay", None)
+    payload.pop("paper_replay", None)
+    payload["is_trading_session"] = True
+    payload["market_session_verified"] = True
     payload = _hydrate_realtime_tick_payload(payload)
-    return realtime_paper_engine_v323.tick(
-        payload,
-        manual_replay=bool(payload.get("manual_replay") or payload.get("paper_replay")),
-    )
+    result = realtime_paper_engine_v323.tick(payload, manual_replay=False)
+    result["market_session"] = market_session
+    return result
 
 
 @app.post("/api/realtime-paper/replay")
@@ -5466,7 +5501,19 @@ def _global_stream_items(items: list[dict]) -> list[dict]:
             or item.get("crawl_time")
             or ""
         )
-        url = str(item.get("url") or "")
+        source_api = str(item.get("source_api") or item.get("_source_api") or "")
+        source_page = str(item.get("source_page") or item.get("_source_page") or "")
+        url = str(
+            item.get("source_ref")
+            or item.get("source_url")
+            or item.get("url")
+            or source_page
+            or source_api
+            or ""
+        )
+        if not url and (("金十" in source) or ("jin10" in source.lower())):
+            url = "https://www.jin10.com/"
+            source_page = source_page or url
         category = item.get("category") or "全球要闻"
         dimension = item.get("message_dimension") or item.get("dimension") or "全球快讯"
         impact_scope = item.get("impact_scope") or ""
@@ -5483,6 +5530,8 @@ def _global_stream_items(items: list[dict]) -> list[dict]:
                 "summary": str(item.get("summary") or title)[:360],
                 "source": source,
                 "source_ref": url,
+                "source_api": source_api,
+                "source_page": source_page,
                 "published_at": published_at,
                 "category": category,
                 "message_dimension": dimension,
@@ -5997,6 +6046,17 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
     scores = _agent_score_rows(symbol_list)
     decisions = _agent_symbol_decisions(symbol_list, scores, config, safety)
     symbol_global_impacts = _agent_symbol_global_impacts(symbol_list, stream_items, scores, config)
+    cn_session = _market_session("CN")
+    sector_snapshot = sector_mainline_service.snapshot(
+        limit=12,
+        include_concept=True,
+        force=force,
+        allow_network=False,
+        can_refresh=bool(cn_session.get("can_refresh")),
+        session_label=str(cn_session.get("label") or "未知交易时段"),
+        session_date=str(cn_session.get("date") or ""),
+    )
+    sector_items = [x for x in (sector_snapshot.get("items") or []) if isinstance(x, dict)]
     evidence = []
     for item in stream_items[:8]:
         evidence.append(
@@ -6032,9 +6092,26 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
                     "impact_note": item.get("impact_note") or item.get("reason"),
                 }
             )
+    for item in sector_items[:6]:
+        evidence.append(
+            {
+                "type": "sector_mainline",
+                "title": f"{item.get('board_name')} · {item.get('stage')}",
+                "source": item.get("source_name"),
+                "source_ref": item.get("source_ref"),
+                "source_page": item.get("source_url"),
+                "published_at": item.get("published_at"),
+                "impact_scope": item.get("board_type_name"),
+                "impact_targets": [item.get("board_name")],
+                "affected_sectors": [item.get("board_name")],
+                "impact_note": item.get("explanation"),
+            }
+        )
     risk_flags = []
     if not stream_items:
         risk_flags.append("全球快讯暂未命中：信息面只能使用缓存或等待真实来源")
+    if not sector_items:
+        risk_flags.append("板块资金/强度暂未命中：不生成主线板块结论")
     if safety.get("LIVE_KILL_SWITCH"):
         risk_flags.append("LIVE_KILL_SWITCH 已开启，真实交易全部阻断")
     if not safety.get("LIVE_TRADING_ENABLED"):
@@ -6070,6 +6147,15 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
             "symbol_decisions": decisions,
             "global_flash_count": len(stream_items),
             "global_stream_mode": stream_data.get("stream_mode"),
+            "sector_mainline": sector_snapshot,
+            "agent_roles": {
+                "market_analyst": "读取大盘环境、板块强度、公开资金净流与涨跌家数宽度。",
+                "news_analyst": "读取可追溯全球/国内信息面并映射影响对象。",
+                "technical_analyst": "读取评分溯源和量价技术因子，不使用未来数据。",
+                "bull_bear_research": "分别保留支持与反对证据，不把单一利好直接转成下单。",
+                "risk_manager": "检查数据新鲜度、仓位、止损、重大负面和 kill switch。",
+                "portfolio_manager": "只在统一风控通过后给出模拟/预检查动作；真实订单仍需确认。",
+            },
             "macro_watchlist": macro_watch,
             "symbol_global_impacts": symbol_global_impacts,
             "evidence": evidence[:16],

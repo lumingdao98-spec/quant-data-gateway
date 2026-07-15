@@ -108,6 +108,38 @@ class RealtimePaperEngineV323:
             result["session_id"] = sid
         return result
 
+    def observe_market_closed(
+        self,
+        payload: dict[str, Any] | None = None,
+        *,
+        session_id: str = "",
+        market_session: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a read-only closed-market snapshot without creating trading records."""
+        payload = payload or {}
+        sid = session_id or str(payload.get("session_id") or self.active_session_id)
+        session = self.sessions.get(sid)
+        self.engine.state.is_trading_session = False
+        self.engine.state.message = "休市待机：不生成信号、委托或成交"
+        result: dict[str, Any] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "market_closed",
+            "message": "当前为非交易时段，实时模拟已待机；未生成信号、委托或成交。历史回放请使用 /api/realtime-paper/replay。",
+            "state": self.engine.state.to_dict(),
+            "signal": None,
+            "orders": [],
+            "fills": [],
+            "portfolio": self.engine.account.snapshot(),
+            "market_session": dict(market_session or {}),
+            "paper_only": True,
+            "records_written": False,
+        }
+        if session:
+            result["v323_session"] = session.to_dict()
+            result["session_id"] = sid
+        return result
+
     def replay(self, payload: dict[str, Any] | None = None, *, session_id: str = "") -> dict[str, Any]:
         sid = session_id or str((payload or {}).get("session_id") or self.active_session_id)
         result = self.engine.replay(payload)

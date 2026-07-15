@@ -46,7 +46,7 @@ def default_source_registry() -> SourceRegistry:
 
 def _default_sources() -> list[SourceDefinition]:
     return [
-        SourceDefinition("eastmoney", "东方财富公开行情/F10", "quote", supports=["quote", "kline", "fundamentals", "orderbook"]),
+        SourceDefinition("eastmoney", "东方财富公开行情/F10", "quote", supports=["quote", "kline", "fundamentals", "orderbook", "sector_flow"]),
         SourceDefinition("sina", "新浪财经公开行情", "quote", supports=["quote", "intraday"]),
         SourceDefinition("cninfo", "巨潮资讯公告", "news", supports=["official_announcement"]),
         SourceDefinition("exchange", "交易所公告", "news", supports=["official_announcement"]),

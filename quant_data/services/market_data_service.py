@@ -124,7 +124,10 @@ class MarketDataService:
                 ]:
                     value = getattr(fresh, field, None)
                     current = getattr(q, field, None)
-                    if value not in (None, "", 0) or current in (None, "", 0):
+                    # This pass supplements an already selected quote snapshot.
+                    # Replacing non-empty price fields with a second provider can
+                    # mix timestamps and make watchlist/detail prices disagree.
+                    if current in (None, "", 0) and value not in (None, "", 0):
                         merged[field] = value
                 q = replace(q, **merged)
             except Exception:

@@ -9,6 +9,8 @@ def test_ui_exposes_auto_trading_workbench_entry():
 
     assert "/auto-trading" in html
     assert "auto-trading" in html
+    assert "主线板块" in html
+    assert "/api/market/sectors/mainline" in html
     assert "config/one-click" in client.get("/auto-trading").text
 
 
@@ -49,6 +51,12 @@ def test_intraday_chart_uses_fixed_lunch_gap_and_clamps_tooltip():
     assert "Math.min(x,r.right-tw-8)" in html
     assert "markerBox.style.display=isTimeMode()?'none':'block'" in html
     assert "if(isTimeMode())return;e.preventDefault()" in html
+    assert "qd-v323-draw-reentry-guard" in html
+    assert "__v323DrawingCharts" in html
+    assert "__v323ResizeFrame" in html
+    assert "refreshTimeline=async function(force=false)" in html
+    assert "loadQuotes=async function(force=false,opts={})" in html
+    assert "syncCurrentQuoteFromWatchRows" in html
 
 
 def test_kline_marker_panel_is_collapsible_and_separate():

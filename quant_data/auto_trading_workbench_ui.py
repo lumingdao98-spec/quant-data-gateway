@@ -15,7 +15,7 @@ def build_auto_trading_workbench_ui() -> str:
   --shadow:0 22px 60px rgba(0,0,0,.32)
 }
 *{box-sizing:border-box}html,body{min-height:100%;margin:0}body{background:var(--bg);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",Arial,sans-serif;letter-spacing:0}button,input,select,textarea{font:inherit}a{color:inherit;text-decoration:none}
-.app{display:grid;grid-template-columns:268px minmax(0,1fr);min-height:100vh}
+.app{display:grid;grid-template-columns:268px minmax(0,1fr);min-height:100vh;max-width:100vw;overflow-x:hidden}.app>section{min-width:0;max-width:100%;overflow:hidden}
 .side{background:#0b1424;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
 .brand{height:74px;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid var(--line);font-weight:900;color:#bfdbfe}
 .logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--cyan),var(--blue));display:grid;place-items:center;color:#00121f;font-weight:1000}
@@ -27,7 +27,7 @@ def build_auto_trading_workbench_ui() -> str:
 .top h1{font-size:20px;margin:0;color:#dbeafe}.top .grow{flex:1}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #315077;background:#13233b;color:#cfe1ff;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:900;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pill.good{border-color:#14532d;background:#0d2b1c;color:#86efac}.pill.warn{border-color:#854d0e;background:#2a1c08;color:#fcd34d}.pill.bad{border-color:#7f1d1d;background:#2a1116;color:#fecaca}.ok{color:#86efac}.bad{color:#fecaca}.warn{color:#fcd34d}
 .btn{border:0;border-radius:10px;padding:9px 12px;background:#253755;color:#e5efff;font-weight:900;cursor:pointer;white-space:nowrap}.btn:hover{filter:brightness(1.1)}.btn.primary{background:var(--blue);color:#fff}.btn.green{background:#16a34a;color:#fff}.btn.red{background:#991b1b;color:#fff}.btn.ghost{background:#111c31;border:1px solid var(--line)}
-.main{padding:18px 22px 30px}.hero{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.9fr);gap:14px;margin-bottom:14px}.panel,.card,.module{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);min-width:0}.panel{overflow:hidden}.panel-h{min-height:46px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px;background:#121e33;border-bottom:1px solid var(--line);font-weight:1000}.panel-b{padding:14px}.muted{color:var(--muted)}.notice{border:1px solid #315077;background:#0d1728;border-radius:12px;padding:11px 12px;color:#c9d8ee;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.main{padding:18px 22px 30px;min-width:0;max-width:100%;overflow-x:hidden}.hero{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(340px,.9fr);gap:14px;margin-bottom:14px;min-width:0;max-width:100%}.panel,.card,.module{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);min-width:0;max-width:100%}.panel{overflow:hidden}.panel-h{min-height:46px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px;background:#121e33;border-bottom:1px solid var(--line);font-weight:1000;min-width:0}.panel-h>.row{min-width:0}.panel-b{padding:14px;min-width:0;max-width:100%}.muted{color:var(--muted)}.notice{border:1px solid #315077;background:#0d1728;border-radius:12px;padding:11px 12px;color:#c9d8ee;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
 .kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:14px}.card{padding:13px}.card span{display:block;color:var(--muted);font-size:12px}.card b{display:block;font-size:22px;margin-top:8px;overflow-wrap:anywhere}.card small{display:block;color:var(--muted);margin-top:5px;line-height:1.35}
 .flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.flow .step{background:#0f1b2e;border:1px solid var(--line);border-radius:14px;padding:12px;min-width:0}.step strong{display:flex;align-items:center;gap:8px;margin-bottom:6px}.step i{font-style:normal;width:24px;height:24px;border-radius:99px;background:#123a4a;color:#67e8f9;display:grid;place-items:center}.step p{margin:0;color:var(--muted);font-size:12px;line-height:1.55;overflow-wrap:anywhere}.step .row{margin-top:9px}
 .grid-main{display:grid;grid-template-columns:360px minmax(0,1fr) 390px;gap:14px;align-items:start}.stack{display:grid;gap:14px}.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{display:grid;gap:6px;margin-bottom:10px}.field label{font-size:12px;font-weight:900;color:#9db4d4}.field input,.field select,.field textarea{width:100%;background:#0d1728;border:1px solid #2f4364;border-radius:10px;color:#e5efff;padding:9px 10px;outline:none;min-width:0}.field textarea{min-height:74px;resize:vertical;line-height:1.45}.field textarea.compact{min-height:48px}.check-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.check{display:flex;gap:8px;align-items:flex-start;background:#0d1728;border:1px solid #2f4364;border-radius:10px;padding:8px;color:#c8d8ee;font-size:12px;line-height:1.45}.check input{width:auto;margin-top:2px}
@@ -37,6 +37,7 @@ def build_auto_trading_workbench_ui() -> str:
 .bars{display:grid;gap:10px}.barline{height:8px;border-radius:99px;background:#1d2d49;overflow:hidden}.barline i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--blue));width:0%}.feed{display:grid;gap:8px;max-height:360px;overflow:auto}.feed.compact{max-height:220px}.feed-item{border:1px solid #2f4364;background:#0d1728;border-radius:10px;padding:9px}.feed-item time{color:#93c5fd;font-size:12px}.feed-item b{display:block;margin:4px 0;line-height:1.35}.feed-item span{display:block;color:var(--muted);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.ticker-wrap{margin-top:10px;border:1px solid #315077;background:#071426;border-radius:12px;overflow:hidden;min-height:42px;display:flex;align-items:center}.ticker-label{flex:0 0 auto;color:#67e8f9;font-weight:1000;font-size:12px;padding:0 10px}.ticker-rail{min-width:0;flex:1;overflow:hidden}.ticker-track{display:flex;gap:22px;white-space:nowrap;animation:globalTicker 46s linear infinite;will-change:transform}.ticker-wrap.paused .ticker-track{animation-play-state:paused}.ticker-item{display:inline-flex;align-items:center;gap:8px;color:#dbeafe;font-size:13px;max-width:560px}.ticker-item b{color:#fcd34d}.ticker-item span{overflow:hidden;text-overflow:ellipsis}.stream-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:10px 0 8px}.stream-list .feed-item{border-left:3px solid #22d3ee}.stream-list .feed-item.jin10{border-left-color:#f97316}.stream-meta{display:flex;gap:8px;flex-wrap:wrap;color:#93c5fd;font-size:12px}.stream-meta i{font-style:normal;color:#fcd34d}.source-strip{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.source-strip span{border:1px solid #2f4364;background:#0b1728;border-radius:999px;padding:5px 8px;color:#b7c9e6;font-size:11px;max-width:100%;overflow-wrap:anywhere}@keyframes globalTicker{from{transform:translateX(0)}to{transform:translateX(-55%)}}.log{background:#0b1220;border:1px solid #2f4364;border-radius:12px;padding:10px;font-family:Consolas,monospace;font-size:12px;color:#b7c9e6;white-space:pre-wrap;overflow:auto;max-height:260px;overflow-wrap:anywhere}
 .source-strip a{border:1px solid #2f4364;background:#0b1728;border-radius:999px;padding:5px 8px;color:#93c5fd;font-size:11px;max-width:100%;overflow-wrap:anywhere}.feed-item .impact-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.impact-tag{border:1px solid #315077;background:#10233a;color:#bfdbfe;border-radius:999px;padding:3px 7px;font-size:11px}.source-link{display:inline-flex!important;width:auto!important;margin-top:7px;color:#93c5fd!important;font-size:12px!important}.feed-item .source-note{color:#fcd34d!important;font-size:11px!important}
 .mini-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}.mini-table th,.mini-table td{border-bottom:1px solid #243653;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}.mini-table th{background:#12213a;color:#9fd4ff}
+.sector-panel{margin-bottom:14px;min-width:0;max-width:100%}.sector-summary{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin-bottom:10px;min-width:0}.sector-table-wrap{overflow:auto;max-width:100%;max-height:330px;border:1px solid #2f4364;border-radius:12px}.sector-table{width:100%;border-collapse:collapse;min-width:900px;font-size:12px}.sector-table th,.sector-table td{padding:9px 10px;border-bottom:1px solid #243653;text-align:right;white-space:nowrap}.sector-table th{position:sticky;top:0;background:#12213a;color:#9fd4ff;z-index:1}.sector-table th:first-child,.sector-table td:first-child,.sector-table th:nth-child(2),.sector-table td:nth-child(2){text-align:left}.sector-name{display:grid;gap:2px}.sector-name small{color:var(--muted)}.sector-stage{display:inline-flex;border:1px solid #315077;border-radius:999px;padding:3px 7px;color:#bfdbfe}.sector-stage.main{border-color:#166534;background:#0d2b1c;color:#86efac}.sector-stage.weak{border-color:#7f1d1d;background:#2a1116;color:#fecaca}.sector-link{color:#93c5fd}.sector-filter.active{background:#2563eb}.sector-method{color:var(--muted);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .iframe-shell{position:fixed;top:0;right:0;bottom:0;left:268px;width:calc(100vw - 268px);max-width:none;min-width:0;background:#07111f;z-index:40;display:grid;grid-template-rows:56px minmax(0,1fr);transform:translateX(104%);transition:transform .2s ease;border-left:1px solid var(--line);box-shadow:-20px 0 60px rgba(0,0,0,.45);overflow:hidden}
 .iframe-shell.open{transform:translateX(0)}.iframe-head{display:flex;align-items:center;gap:10px;padding:0 14px;background:#0b1424;border-bottom:1px solid var(--line);min-width:0}.iframe-head b{font-size:17px;white-space:nowrap}.iframe-head .grow{flex:1;min-width:0}.iframe-head .pill{max-width:min(52vw,720px)}.workspace-frame{width:100%;height:100%;min-width:0;border:0;background:#07111f;display:block}.iframe-empty{display:grid;place-items:center;color:var(--muted)}
 .agent-box{border:1px solid #315077;background:linear-gradient(135deg,#0d1728,#10233a);border-radius:12px;padding:12px;line-height:1.6;font-size:13px}.agent-box b{display:block;color:#dbeafe;margin-bottom:5px}
@@ -102,6 +103,17 @@ def build_auto_trading_workbench_ui() -> str:
             <div class="stream-head"><b>宏观事件观察</b><span class="muted">非农 / CPI / FOMC / 商品 / 地缘</span></div>
             <div class="feed compact" id="macroFeed"><div class="feed-item"><b>等待加载全球信息面...</b><span>会优先使用缓存，手动联网刷新可能更慢。</span></div></div>
           </div>
+        </div>
+      </section>
+
+      <section class="panel sector-panel">
+        <div class="panel-h">
+          <span>主线板块 · 每日资金流与强度</span>
+          <span class="row"><button class="btn sector-filter active" data-sector-filter="all" onclick="setSectorFilter('all')">主线榜</button><button class="btn sector-filter" data-sector-filter="industry" onclick="setSectorFilter('industry')">行业</button><button class="btn sector-filter" data-sector-filter="concept" onclick="setSectorFilter('concept')">概念</button><button class="btn sector-filter" data-sector-filter="inflow" onclick="setSectorFilter('inflow')">流入榜</button><button class="btn sector-filter" data-sector-filter="outflow" onclick="setSectorFilter('outflow')">流出榜</button><button class="btn" onclick="loadSectorMainline(true)">刷新板块</button></span>
+        </div>
+        <div class="panel-b">
+          <div class="sector-summary"><div><b id="sectorHeadline">板块数据加载中...</b><div class="sector-method" id="sectorMethod">强度综合涨跌幅、公开资金净流、上涨宽度和换手参与度；不是 Level-2 主力账户识别。</div></div><span class="pill" id="sectorStatus">等待来源</span></div>
+          <div class="sector-table-wrap"><table class="sector-table"><thead><tr><th>板块</th><th>阶段</th><th>强度</th><th>主线分</th><th>涨跌幅</th><th>公开资金净流</th><th>资金占比</th><th>上涨/下跌</th><th>上涨宽度</th><th>持续天数</th><th>来源</th></tr></thead><tbody id="sectorRows"><tr><td colspan="11">正在读取真实板块数据...</td></tr></tbody></table></div>
         </div>
       </section>
 
@@ -211,7 +223,8 @@ def build_auto_trading_workbench_ui() -> str:
               <div class="notice" id="liveSafety">真实交易默认关闭。未配置券商 SDK、环境变量、账号授权时只显示 disabled/unsupported。</div>
               <div class="split" style="margin-top:10px"><div class="field"><label>预检查代码</label><input id="liveSymbol" value="300750"></div><div class="field"><label>方向</label><select id="liveSide"><option value="buy">买入</option><option value="sell">卖出</option></select></div></div>
               <div class="split"><div class="field"><label>股数</label><input id="liveQty" type="number" value="100"></div><div class="field"><label>限价</label><input id="livePrice" type="number" value="0"></div></div>
-              <div class="row"><button class="btn" onclick="previewOrder()">订单预检查</button><button class="btn" onclick="openModule('live')">进入实盘页</button></div>
+              <div class="row"><button class="btn" onclick="previewOrder()">首只订单预检查</button><button class="btn" onclick="previewOrderBatch()">股票池批量预检查</button><button class="btn" onclick="openModule('live')">进入实盘页</button></div>
+              <div class="notice" id="livePreviewSummary" style="margin-top:10px">批量预检查会逐只经过数据新鲜度、评分溯源、白名单、仓位、Kill Switch 和人工确认门控，不会直接下单。</div>
             </div>
           </div>
           <div class="panel">
@@ -262,6 +275,7 @@ MODULES.detail.url=()=>'/detail/'+encodeURIComponent(primarySymbol())+'?frame=1d
 let lastAutoConfig=null;
 let activeSessionId='';
 let currentModule='';
+let sectorMainlineData=null,sectorFilter='all';
 let currentWorkspaceUrl='about:blank';
 let globalStreamTimer=null;
 let globalTickerPaused=false;
@@ -289,7 +303,10 @@ function markNav(key){
 }
 function openModule(key,urlOverride){
   const mod=MODULES[key]||MODULES.screener;
-  const url=urlOverride||mod.url();
+  let url=urlOverride||mod.url();
+  if((key==='quote'||key==='detail')&&!/[?&]embedded=1\\b/.test(url)){
+    url+=url.includes('?')?'&embedded=1':'?embedded=1';
+  }
   const frame=$('workspaceFrame');
   if(currentModule && currentModule!==key)frame.src='about:blank';
   currentModule=key;
@@ -469,57 +486,6 @@ async function loadSessionDetails(session){
   $('sessionSnapshot').innerHTML=`现金 ${money(account.cash??account.available_cash)}<br>总资产 ${money(account.equity??account.total_value)}<br>持仓 ${posRows.length} 只；${posRows.slice(0,4).map(p=>`${esc(p.symbol)} ${esc(p.quantity??p.qty??0)}股 成本 ${esc(p.cost_price??p.avg_price??'--')}`).join('；')||'暂无持仓'}`;
   renderSessionRows({orders,fills,markers,audit});
 }
-function renderGlobalFeed(js){
-  const items=(js.data?.items||js.items||[]).slice(0,12);
-  const watch=(js.watchlist||js.data?.watchlist||[]).slice(0,6);
-  if(!items.length && !watch.length){$('macroFeed').innerHTML='<div class="feed-item"><b>暂无全球信息缓存</b><span>可以点击“联网刷新”；若数据源不可用，会显示缺失原因，不会伪造。</span></div>';return}
-  $('macroFeed').innerHTML=[
-    ...watch.map(x=>`<div class="feed-item"><time>${esc(x.status||'观察')}</time><b>${esc(x.label||x.key)}</b><span>${esc(x.reason||x.missing_reason||'等待真实数据源命中')}</span></div>`),
-    ...items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span>${esc(x.source||'全球信息源')} · ${esc(x.impact_scope||x.dimension||x.sentiment_label||'待映射')}</span></div>`)
-  ].join('');
-}
-function renderAgentDecision(js){
-  const d=js.data||{};
-  const decisions=(d.symbol_decisions||[]).slice(0,5);
-  const risks=(d.risk_flags||[]).slice(0,4);
-  const evidence=(d.evidence||[]).slice(0,3);
-  const symbolImpacts=(d.symbol_global_impacts||[]).slice(0,6);
-  const items=[
-    `<b>${esc(d.headline||'暂无智能体结论')}</b>`,
-    `<span>建议动作：${esc(d.recommended_action||'--')} · 置信度：${esc(d.confidence||'--')} · 快讯 ${esc(d.global_flash_count??0)} 条 · 来源链接 ${esc(d.source_link_count??0)} 个 · ${esc(d.llm_status||'联网证据代理')}</span>`
-  ];
-  if(decisions.length){
-    items.push('<ul>'+decisions.map(x=>`<li>${esc(x.symbol)} ${esc(x.name||'')}：${esc(x.action||'观察')}${x.score!=null?' · 评分 '+esc(x.score):''}；${esc(x.reason||'')}</li>`).join('')+'</ul>');
-  }
-  if(symbolImpacts.length){
-    items.push('<div class="agent-evidence-list"><div class="source-note">个股影响映射：只展示真实快讯/宏观事件如何命中当前股票池；未命中会明确说明，不把宏观新闻硬算成买卖信号。</div>'+symbolImpacts.map(s=>{
-      const ev=(s.related_events||[])[0]||{};
-      if(!ev.title){
-        const exposure=(s.exposure_terms||[]).slice(0,6);
-        const tags=exposure.length?`<div class="impact-row">${exposure.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
-        return `<div class="agent-evidence"><time>${esc(s.status||'no_direct_mapping')}</time><strong>${esc(s.symbol)} ${esc(s.name||'')} · 暂无全球快讯直接命中</strong><small>${esc(s.explain||'当前真实全球快讯未直接命中该标的产业链；仅作为市场环境观察。')}</small>${tags}</div>`;
-      }
-      const url=sourceUrlOf(ev);
-      const terms=(ev.matched_terms||ev.impact_targets||s.exposure_terms||[]).slice(0,6);
-      const tags=terms.length?`<div class="impact-row">${terms.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
-      const link=url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">查看影响来源 / 原文</a>`:'<small class="warn">该映射暂无公开跳转链接</small>';
-      return `<div class="agent-evidence"><time>${esc(ev.published_at||'池内影响映射')}</time><strong>${esc(s.symbol)} ${esc(s.name||'')} · ${esc(ev.title||'全球事件映射')}</strong><small>来源：${esc(sourceLabelOf(ev))}</small><small>${esc(ev.impact_note||s.explain||'仅作信息面风险观察')}</small>${tags}${link}</div>`;
-    }).join('')+'</div>');
-  }
-  if(evidence.length){
-    items.push('<div class="agent-evidence-list">'+evidence.map(x=>{
-      const url=sourceUrlOf(x);
-      const tags=impactTagsOf(x);
-      const impacts=tags.length?`<div class="impact-row">${tags.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
-      const link=url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开来源 / 原文</a>`:'<small class="warn">该证据未提供公开跳转链接</small>';
-      return `<div class="agent-evidence"><time>${esc(x.published_at||x.type||'证据')}</time><strong>${esc(x.title||x.reason||'事件')}</strong><small>来源：${esc(sourceLabelOf(x))}</small><small>${esc(impactNoteOf(x))}</small>${impacts}${link}</div>`;
-    }).join('')+'</div>');
-  }
-  if(risks.length){
-    items.push('<div class="risk">'+risks.map(esc).join('；')+'</div>');
-  }
-  $('agentDecision').innerHTML=items.join('');
-}
 async function loadAgentDecision(force=false){
   const js=await api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80&force='+(force?'true':'false'));
   renderAgentDecision(js);
@@ -565,90 +531,6 @@ function mergeGlobalStreams(jin10,global){
     },
     refresh_seconds:refresh
   };
-}
-function sourceUrlOf(x){
-  return String(x?.source_ref||x?.source_url||x?.url||x?.source_page||x?.source_api||'').trim();
-}
-function sourceLabelOf(x){
-  const source=x?.source||x?.source_name||'全球信息源';
-  const api=x?.source_api?'API':'';
-  const page=x?.source_page?'页面':'';
-  return [source,api,page].filter(Boolean).join(' · ');
-}
-function impactTagsOf(x){
-  const fields=[x?.impact_targets,x?.affected_sectors,x?.affected_assets,x?.industry_tags,x?.related_symbols];
-  const tags=[];
-  fields.forEach(arr=>{
-    (Array.isArray(arr)?arr:String(arr||'').split(/[,\s，、;；]+/)).forEach(v=>{
-      const s=String(v||'').trim();
-      if(s&&!tags.includes(s))tags.push(s);
-    });
-  });
-  const fallback=String(x?.impact_scope||x?.message_dimension||x?.category||'').trim();
-  if(!tags.length&&fallback)tags.push(fallback);
-  return tags.slice(0,8);
-}
-function impactNoteOf(x){
-  return x?.impact_note||x?.impact_scope||x?.sentiment_label||'仅作宏观/商品/信息面风险观察，不直接等于买卖信号';
-}
-function renderGlobalFeed(js){
-  const items=(js.data?.items||js.items||[]).slice(0,12);
-  const watch=(js.watchlist||js.data?.watchlist||[]).slice(0,6);
-  if(!items.length && !watch.length){
-    $('macroFeed').innerHTML='<div class="feed-item"><b>暂无全球信息缓存</b><span>可以点击“联网刷新”；若数据源不可用，会显示缺失原因，不会伪造新闻。</span></div>';
-    return;
-  }
-  const watchRows=watch.map(x=>{
-    const latest=x.latest_title?`<span>最近命中：${esc(x.latest_source||'来源未标注')} · ${esc(x.latest_title)}</span>`:'';
-    return `<div class="feed-item"><time>${esc(x.status||'观察')}</time><b>${esc(x.label||x.key)}</b><span>${esc(x.reason||x.missing_reason||'等待真实数据源命中')}</span>${latest}</div>`;
-  });
-  const itemRows=items.map(x=>{
-    const url=sourceUrlOf(x);
-    const tags=impactTagsOf(x);
-    const impacts=tags.length?`<div class="impact-row"><span class="impact-tag">影响</span>${tags.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
-    const link=url?`<a class="source-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">查看来源 / 原文</a>`:`<span class="source-note">来源：${esc(sourceLabelOf(x))}；未提供公开跳转链接</span>`;
-    return `<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span>来源：${esc(sourceLabelOf(x))}</span><span>${esc(impactNoteOf(x))}</span>${impacts}${link}</div>`;
-  });
-  $('macroFeed').innerHTML=[...watchRows,...itemRows].join('');
-}
-function renderGlobalStreamSources(data){
-  const rows=(data.sources_status||[]).slice(0,8);
-  if(!rows.length){$('globalStreamSources').innerHTML='<span>来源状态：等待金十直连和全球源返回</span>';return}
-  $('globalStreamSources').innerHTML=rows.map(x=>{
-    const source=x.source||'来源';
-    const count=x.count??0;
-    const status=x.status||'--';
-    const api=x.source_api||x.source_page||'';
-    const label=`${source} · ${count}条 · ${status}${api?' · '+api:''}`;
-    if(api)return `<a href="${esc(api)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
-    return `<span>${esc(source)} · ${esc(count)}条 · ${esc(status)}${api?' · '+esc(api):''}</span>`;
-  }).join('');
-}
-function renderGlobalStream(js){
-  const data=js.data||{};
-  const items=(js.items||data.items||[]).slice(0,60);
-  const status=$('globalStreamStatus');
-  const mode=data.stream_mode||js.cache_status?.status||'stream';
-  const refresh=Math.max(12,Math.min(60,Number(js.refresh_seconds||data.refresh_seconds||20)));
-  globalStreamRefreshMs=refresh*1000;
-  status.textContent=(items.length?items.length+' 条':'暂无快讯')+' · '+mode;
-  status.className='pill '+(items.length?'good':'warn');
-  renderGlobalStreamSources(data);
-  if(!items.length){
-    const reason=data.missing_reason||js.cache_status?.error||'当前真实来源暂未返回快讯；不会伪造新闻。';
-    $('globalTickerTrack').innerHTML=`<span class="ticker-item"><b>缺失</b><span>${esc(reason)}</span></span>`;
-    $('globalStream').innerHTML=`<div class="feed-item"><time>${esc(data.updated_at||'')}</time><b>暂无可展示全球快讯</b><span>${esc(reason)}</span></div>`;
-    return;
-  }
-  const tickerItems=items.slice(0,24).map(x=>`<span class="ticker-item"><b>${esc(x.source||'全球')}</b><span>${esc(x.title||'未命名快讯')}</span></span>`).join('');
-  $('globalTickerTrack').innerHTML=tickerItems+tickerItems;
-  $('globalStream').innerHTML=items.slice(0,18).map(x=>{
-    const url=sourceUrlOf(x);
-    const tags=impactTagsOf(x);
-    const impacts=tags.length?`<div class="impact-row"><span class="impact-tag">影响</span>${tags.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`:'';
-    const link=url?`<a class="source-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">查看来源 / 原文</a>`:`<span class="source-note">来源：${esc(sourceLabelOf(x))}；未提供公开跳转链接</span>`;
-    return `<div class="feed-item ${x.is_jin10?'jin10':''}"><div class="stream-meta"><time>${esc(x.published_at||'时间缺失')}</time><i>${esc(sourceLabelOf(x))}</i><span>${esc(x.category||x.message_dimension||'全球快讯')}</span></div><b>${esc(x.title||'未命名快讯')}</b><span>${esc(x.summary||'')}</span><span>${esc(impactNoteOf(x))}</span>${impacts}${link}</div>`;
-  }).join('');
 }
 async function loadGlobalStream(force=false){
   const [jin10,global]=await Promise.all([
@@ -720,12 +602,12 @@ function impactTagsHtml(x,prefix='影响对象'){
   if(!tags.length)return `<div class="impact-summary"><b>${esc(prefix)}：</b>暂无明确映射，需结合个股行业、资金面和技术面继续确认。</div>`;
   return `<div class="impact-row"><span class="impact-tag">${esc(prefix)}</span>${tags.map(t=>`<span class="impact-tag">${esc(t)}</span>`).join('')}</div>`;
 }
-function sourceLinksHtml(x,primaryLabel='打开来源 / 原文'){
+function sourceLinksHtml(x,primaryLabel='查看来源 / 原文'){
   const api=String(x?.source_api||x?.latest_source_api||'').trim();
   const page=String(x?.source_page||x?.latest_source_page||'').trim();
   const ref=sourceUrlOf(x);
   const links=[];
-  if(ref)links.push(`<a href="${esc(ref)}" target="_blank" rel="noopener noreferrer">${esc(primaryLabel)}</a>`);
+  if(ref)links.push(`<a href="${esc(ref)}" target="_blank" rel="noopener noreferrer" title="打开来源 / 原文">${esc(primaryLabel)}</a>`);
   if(api&&api!==ref)links.push(`<a href="${esc(api)}" target="_blank" rel="noopener noreferrer">查看数据接口</a>`);
   if(page&&page!==ref&&page!==api)links.push(`<a href="${esc(page)}" target="_blank" rel="noopener noreferrer">查看来源页面</a>`);
   if(!links.length)links.push('<span>无公开跳转链接：仅展示可追溯来源名称和缓存记录</span>');
@@ -742,7 +624,7 @@ function renderGlobalFeed(js){
     const latest=x.latest_title?`<div class="impact-summary"><b>最近命中：</b>${esc(x.latest_title)}${x.latest_source?` · ${esc(x.latest_source)}`:''}</div>`:'';
     return `<div class="feed-item"><time>${esc(x.status||'观察')}</time><b>${esc(x.label||x.key)}</b><span>${esc(x.reason||x.missing_reason||'等待真实数据源命中')}</span>${impactTagsHtml(x,'影响维度')}${latest}${sourceMetaHtml(x)}${sourceLinksHtml(x,'打开命中来源')}</div>`;
   });
-  const itemRows=items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`);
+  const itemRows=items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span><b>影响说明：</b>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`);
   $('macroFeed').innerHTML=[...watchRows,...itemRows].join('');
 }
 function renderAgentDecision(js){
@@ -804,18 +686,43 @@ function renderGlobalStream(js){
   const tickerItems=items.slice(0,24).map(x=>`<span class="ticker-item"><b>${esc(sourceLabelOf(x))}</b><span>${esc(x.title||'未命名快讯')}</span></span>`).join('');
   $('globalTickerTrack').innerHTML=tickerItems+tickerItems;
   $('globalStream').innerHTML=items.slice(0,18).map(x=>{
-    return `<div class="feed-item ${x.is_jin10?'jin10':''}"><div class="stream-meta"><time>${esc(x.published_at||'时间缺失')}</time><i>${esc(sourceLabelOf(x))}</i><span>${esc(x.category||x.message_dimension||'全球快讯')}</span></div><b>${esc(x.title||'未命名快讯')}</b><span>${esc(x.summary||'')}</span><span>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`;
+    return `<div class="feed-item ${x.is_jin10?'jin10':''}"><div class="stream-meta"><time>${esc(x.published_at||'时间缺失')}</time><i>${esc(sourceLabelOf(x))}</i><span>${esc(x.category||x.message_dimension||'全球快讯')}</span></div><b>${esc(x.title||'未命名快讯')}</b><span>${esc(x.summary||'')}</span><span>来源：${esc(sourceLabelOf(x))}</span><span><b>影响说明：</b>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x,'影响对象')}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`;
   }).join('');
 }
+function sectorMoney(v){
+  const n=Number(v);if(!Number.isFinite(n))return'字段缺失';
+  const sign=n>0?'+':'';const a=Math.abs(n);
+  return sign+(a>=1e8?(n/1e8).toFixed(2)+'亿':a>=1e4?(n/1e4).toFixed(1)+'万':n.toFixed(0));
+}
+function setSectorFilter(value){sectorFilter=value||'all';document.querySelectorAll('.sector-filter').forEach(x=>x.classList.toggle('active',x.dataset.sectorFilter===sectorFilter));renderSectorMainline(sectorMainlineData||{})}
+function renderSectorMainline(js){
+  sectorMainlineData=js||{};let rows=[...(js.items||[])];
+  if(sectorFilter==='industry'||sectorFilter==='concept')rows=rows.filter(x=>x.board_type===sectorFilter);
+  if(sectorFilter==='inflow')rows=rows.filter(x=>Number(x.net_inflow)>0).sort((a,b)=>Number(b.net_inflow)-Number(a.net_inflow));
+  if(sectorFilter==='outflow')rows=rows.filter(x=>Number(x.net_inflow)<0).sort((a,b)=>Number(a.net_inflow)-Number(b.net_inflow));
+  const items=rows.slice(0,24);
+  const status=$('sectorStatus');const cache=js.cache_status||{};
+  status.textContent=`${js.session_label||'--'} · ${items.length}板块 · ${cache.status||js.quality_status||'--'}`;
+  status.className='pill '+(items.length?'good':'warn');
+  const main=items.filter(x=>x.stage==='主线');const lead=items[0];
+  $('sectorHeadline').textContent=lead?`${main.length} 个主线板块；当前领先 ${lead.board_name}，主线分 ${Number(lead.mainline_score||0).toFixed(1)}`:'暂无可用真实板块快照';
+  $('sectorMethod').textContent=js.methodology?.truth_boundary||'公开板块资金流只作强弱与轮动观察，不等于 Level-2 主力账户识别。';
+  $('sectorRows').innerHTML=items.length?items.map(x=>{
+    const stageClass=x.stage==='主线'?'main':x.stage==='退潮'?'weak':'';const change=Number(x.change_pct);
+    return `<tr><td><div class="sector-name"><b>${esc(x.board_name||x.board_code)}</b><small>${esc(x.board_type_name||'板块')} · ${esc(x.board_code||'')}</small></div></td><td><span class="sector-stage ${stageClass}">${esc(x.stage||'观察')}</span></td><td>${Number(x.strength_score||0).toFixed(1)}</td><td>${Number(x.mainline_score||0).toFixed(1)}</td><td class="${change>=0?'ok':'bad'}">${Number.isFinite(change)?(change>0?'+':'')+change.toFixed(2)+'%':'缺失'}</td><td class="${Number(x.net_inflow)>=0?'ok':'bad'}">${sectorMoney(x.net_inflow)}</td><td>${x.net_inflow_ratio_pct==null?'缺失':Number(x.net_inflow_ratio_pct).toFixed(2)+'%'}</td><td>${x.up_count??0}/${x.down_count??0}</td><td>${x.breadth_pct==null?'缺失':Number(x.breadth_pct).toFixed(1)+'%'}</td><td>${x.history_days??0}</td><td><a class="sector-link" href="${esc(x.source_url||js.source_url||'#')}" target="_blank" rel="noopener noreferrer">${esc(x.source_name||js.source_name||'来源')}</a></td></tr>`;
+  }).join(''):`<tr><td colspan="11">${esc((js.missing_reasons||['当前没有真实板块资金数据']).join('；'))}</td></tr>`;
+}
+async function loadSectorMainline(force=false){const js=await api('/api/market/sectors/mainline?limit=50&include_concept=true&force='+force);renderSectorMainline(js);return js}
 async function refreshAll(){
   try{
     renderModuleCards();
-    const [broker,sessions,records,data,queue,liveAccount,livePositions,autoConfig,readiness,score,macro,stream,agent]=await Promise.all([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),loadGlobalStream(false),api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80')]);
+    const [broker,sessions,records,data,queue,liveAccount,livePositions,autoConfig,readiness,score,macro,stream,agent,sectors]=await Promise.all([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),loadGlobalStream(false),api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80'),api('/api/market/sectors/mainline?limit=50&include_concept=true')]);
     applyAutoConfig(autoConfig.data);
     renderConfigSummary(autoConfig.data,readiness);
     renderGlobalFeed(macro);
     renderGlobalStream(stream);
     renderAgentDecision(agent);
+    renderSectorMainline(sectors);
     renderPortfolioOverview(liveAccount,livePositions,records);
     const brokerName=broker.broker?.broker||broker.config?.broker_type||'disabled';
     const brokerStatus=broker.broker?.status||broker.status||'disabled';
@@ -861,7 +768,7 @@ async function startPaper(){
 async function manualTick(){
   if(!activeSessionId){$('auditLog').textContent='请先启动或恢复一个实时模拟 session。';return}
   const cfg=collectAutoConfig();
-  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:primarySymbol(),manual_replay:true,quote_hydrate_request:true,...cfg})});
+  const js=await api('/api/realtime-paper/tick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:activeSessionId,symbol:primarySymbol(),quote_hydrate_request:true,...cfg})});
   $('auditLog').textContent=JSON.stringify(js,null,2);refreshAll();
 }
 async function runConfigBacktest(){
@@ -874,7 +781,26 @@ async function killLive(){const js=await api('/api/live/kill-switch',{method:'PO
 async function previewOrder(){
   const body={...collectAutoConfig(),symbol:$('liveSymbol').value.trim(),side:$('liveSide').value,quantity:Number($('liveQty').value||0),limit_price:Number($('livePrice').value||0)||null,order_type:'limit',source_page:'auto-trading'};
   const js=await api('/api/live/orders/preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  $('livePreviewSummary').innerHTML=renderLivePreviewSummary([{symbol:body.symbol,preview:js}]);
   $('auditLog').textContent=JSON.stringify(js,null,2);refreshAll();
+}
+function renderLivePreviewSummary(rows){
+  if(!rows.length)return '暂无预检查结果。';
+  return rows.map(row=>{
+    const r=row.preview||row.result||row||{};
+    const ok=!!(r.ok||r.approved||r.status==='needs_confirmation');
+    const reason=r.status_reason||r.reason||r.message||r.risk?.reason||r.data?.risk?.reason||(ok?'通过或等待人工确认':'未通过');
+    return `<div><b>${esc(row.symbol||r.symbol||'--')}</b> · <span class="${ok?'ok':'warn'}">${esc(r.status||(ok?'通过/待确认':'阻断'))}</span> · ${esc(reason)}</div>`;
+  }).join('');
+}
+async function previewOrderBatch(){
+  const cfg=collectAutoConfig();
+  const body={...cfg,symbols:cfg.symbols,side:$('liveSide').value,quantity:Number($('liveQty').value||0),limit_price:Number($('livePrice').value||0)||null,order_type:'limit',source_page:'auto-trading'};
+  const js=await api('/api/live/orders/preview-batch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const rows=(js.data||[]).map(x=>({symbol:x.symbol,preview:x.preview||x.result||x}));
+  $('livePreviewSummary').innerHTML=renderLivePreviewSummary(rows);
+  $('auditLog').textContent=JSON.stringify(js,null,2);
+  refreshAll();
 }
 renderModuleCards();
 refreshAll();

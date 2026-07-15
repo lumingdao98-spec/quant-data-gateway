@@ -67,6 +67,11 @@ def test_realtime_paper_engine_blocks_non_trading_and_replays_without_lookahead(
 
 def test_realtime_paper_api_and_screener_bridge(monkeypatch):
     monkeypatch.setattr(api.watchlist_service, "add", lambda symbols: {"symbols": list(symbols), "count": len(symbols)})
+    monkeypatch.setattr(
+        api,
+        "_market_session",
+        lambda market="CN": {"market": market, "status": "continuous_auction", "label": "交易中", "can_refresh": True, "now": "2026-06-01T10:00:00"},
+    )
     client = TestClient(api.app)
     started = client.post("/api/realtime-paper/start", json={"symbols": ["300750"], "initial_cash": 100_000}).json()
     tick = client.post(

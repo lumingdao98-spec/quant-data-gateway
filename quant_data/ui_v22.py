@@ -60,6 +60,7 @@ def build_ui_v22(initial_symbol: str = "300750", full: bool = False, initial_fra
 .app.embedded .tooltip{max-width:min(320px,calc(100vw - 28px));z-index:220}
 .app.embedded .log{max-height:68px;overflow:auto}
 @media(max-width:1280px){.app.embedded .metrics,.app.embedded .info{grid-template-columns:repeat(3,minmax(0,1fr))}.app.embedded .chart-grid.time{grid-template-columns:1fr!important}.app.embedded .book{max-width:100%!important;max-height:220px!important}}
+.sector-pulse{margin:10px 12px 0;border:1px solid var(--line);background:#0d1428;border-radius:8px;overflow:hidden;min-width:0}.sector-pulse-head{min-height:36px;display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line)}.sector-pulse-head b{font-size:13px}.sector-pulse-head .grow{flex:1}.sector-pulse-list{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1px;background:var(--line)}.sector-pulse-item{display:grid;gap:3px;padding:8px 9px;background:#101827;min-width:0}.sector-pulse-item b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sector-pulse-item span{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sector-pulse-item strong{font-size:12px}.sector-pulse-empty{grid-column:1/-1;padding:10px;background:#101827;color:var(--muted);font-size:12px}.app.embedded .sector-pulse-list{grid-template-columns:repeat(4,minmax(0,1fr))}@media(max-width:1050px){.sector-pulse-list{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style></head><body>
 <div id="app" class="app">
 <aside class="side"><div class="brand"><span class="dot"></span>量化数据网关 V3.18.3</div><div class="row wrap"><button onclick="location.href='/auto-trading'">自动交易总控台</button><button class="btn2" onclick="location.href='/screener'">进入筛选模块</button><button class="btn2" onclick="location.href='/docs-cn'">中文API</button><button class="btn2" onclick="location.href='/docs'">API文档</button></div><div><div class="section-title">实时监测列表<button class="btn2" onclick="saveWatchList()" style="padding:5px 8px">保存</button></div><textarea id="watchText">300750,600519,000001,159915,510300</textarea><div class="row wrap" style="margin-top:8px"><button onclick="manualRefresh(true)">强制刷新</button><button class="btn2" onclick="manualRefresh(false)">普通刷新</button></div><div class="watch-tools" style="margin-top:8px"><button class="btn2" onclick="removeSelectedWatch()">删除勾选</button><button class="btn-red" onclick="clearWatchList()">清空列表</button></div></div><div><div class="section-title">股票/基金搜索</div><div class="row"><input id="searchInput" class="grow" placeholder="如 宁德 / 茅台 / ETF" onkeydown="if(event.key==='Enter')searchAsset()"><button onclick="searchAsset()">搜索</button></div></div><div id="searchResults" class="search-results"></div><div><div class="section-title">常用标的</div><div class="quick"><button onclick="appendSymbol('300750');openSymbol('300750')">300750 宁德时代</button><button onclick="appendSymbol('600519');openSymbol('600519')">600519 贵州茅台</button><button onclick="appendSymbol('000001');openSymbol('000001')">000001 平安银行</button><button onclick="appendSymbol('159915');openSymbol('159915')">159915 创业板ETF</button><button onclick="appendSymbol('510300');openSymbol('510300')">510300 沪深300ETF</button><button onclick="appendSymbol('512100');openSymbol('512100')">512100 中证1000ETF</button></div></div><div><div class="section-title">自动刷新</div><div class="row"><select id="refreshSec" onchange="scheduleAuto()"><option value="5" selected>交易时段 5秒</option><option value="10">交易时段 10秒</option><option value="30">交易时段 30秒</option><option value="60">交易时段 60秒</option><option value="0">停止</option></select><button class="btn-green" onclick="scheduleAuto()">应用</button></div><div class="note" id="calendarNote">读取交易日历中...</div><div class="note">休市、午休默认不拉取外部行情；页面系统时钟每秒更新，自动刷新会等待到下一交易时段。</div></div></aside>
@@ -202,7 +203,7 @@ function bindChartDrag(){let drag=null;['mainCanvas','subCanvas1','subCanvas2','
 
 // V3.23 final chart behavior overrides. Compress the CN lunch break so intraday lines stay readable without drawing a fake noon flatline.
 const __v323BaseRefreshTimeline=refreshTimeline;
-async function refreshTimeline(force=false){
+refreshTimeline=async function(force=false){
   const now=Date.now();
   if(!force&&window.__timelineFetchSymbol===currentSymbol&&timelineCacheUsable(lastTimeline)&&now-(window.__timelineFetchAt||0)<30000){lastBars=[];behaviorAnalysis={};klineMarkers=[];renderBehaviorMarkers();viewStart=0;viewCount=lastTimeline.length||240;updateSlider();$('chartLabel').textContent=`${currentQuote?.name||''} ${currentSymbol} · 分时 · ${lastTimeline.length}点 · 缓存快速显示`;return}
   if(!force&&sessionData&&!sessionData.can_refresh){
@@ -214,7 +215,7 @@ async function refreshTimeline(force=false){
   await __v323BaseRefreshTimeline(force);
   window.__timelineFetchAt=Date.now();
   window.__timelineFetchSymbol=currentSymbol;
-}
+};
 function isCnLunchMinutePoint(d){const m=parseMinuteValue(d?.ts||d?.date);return Number.isFinite(m)&&m>11*60+30&&m<13*60}
 function timeTradeFrac(ts){const start=9*60+30,lunchStart=11*60+30,lunchEnd=13*60,end=15*60+30,afternoonOffset=1,total=(lunchStart-start)+afternoonOffset+(end-lunchEnd);let m=parseMinuteValue(ts);if(!Number.isFinite(m))m=start;m=Math.max(start,Math.min(end,m));if(m>lunchStart&&m<lunchEnd)m=lunchStart;const traded=m<=lunchStart?m-start:(lunchStart-start)+afternoonOffset+(m-lunchEnd);return Math.max(0,Math.min(1,traded/(total||1)))}
 function timeTradeX(d,w){return 48+(w-100)*timeTradeFrac(d?.ts||d?.date)}
@@ -228,13 +229,24 @@ const __v323DrawSeriesSegmented=drawSeriesSegmented;
 drawSeriesSegmented=function(ctx,series,data,x,y,color,width=1.8,mode='k',breakLunch=true){return __v323DrawSeriesSegmented(ctx,series,data,x,y,color,width,mode,mode==='time'?true:breakLunch)}
 drawTimeline=function(){const c=$('mainCanvas'),{ctx,w,h}=resizeCanvas(c),data=visibleData();$('mainTitle').textContent='分时走势 · 固定 09:30-15:30 · 午休断线';drawBg(ctx,w,h);const lunchStartX=timeTradeX({ts:'2026-01-01T11:30:00'},w),lunchEndX=timeTradeX({ts:'2026-01-01T13:00:00'},w),breakLunch=true;ctx.fillStyle='rgba(148,163,184,.06)';ctx.fillRect(lunchStartX,12,Math.max(0,lunchEndX-lunchStartX),h-37);ctx.fillStyle='#8ea3c3';ctx.textAlign='left';ctx.fillText('09:30',48,h-7);ctx.textAlign='center';ctx.fillText('11:30',lunchStartX,h-7);ctx.fillText('13:00',lunchEndX,h-7);ctx.textAlign='right';ctx.fillText('15:30',w-52,h-7);if(!data.length){ctx.textAlign='center';ctx.fillStyle='#8ea3c3';ctx.fillText('暂无当日可信分时数据，未绘制伪分时线',w/2,h/2-8);ctx.fillText('分时固定显示 09:30-15:30；午休不连线；日K/周K/月K 可左右拖动',w/2,h/2+14);ctx.textAlign='left';return}const prices=data.map(x=>Number(x.price||0)).filter(v=>Number.isFinite(v)&&v>0),avgs=data.map(x=>Number(x.avg_price||x.price||0)).filter(v=>Number.isFinite(v)&&v>0);if(!prices.length&&!avgs.length){ctx.textAlign='center';ctx.fillStyle='#8ea3c3';ctx.fillText('分时点缺少可信价格，已停止绘制异常线',w/2,h/2-8);ctx.fillText('等待真实分时源恢复或保留上一笔可信缓存',w/2,h/2+14);ctx.textAlign='left';return}const base=Number(currentQuote?.pre_close||prices[0]||avgs[0]);let min=Math.min(...prices,...avgs,base),max=Math.max(...prices,...avgs,base);if(max===min){max*=1.01;min*=0.99}const span=(max-min)||1;max+=span*.04;min-=span*.04;const y=v=>12+(max-v)/(max-min)*(h-37);ctx.strokeStyle='rgba(148,163,184,.55)';ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(48,y(base));ctx.lineTo(w-52,y(base));ctx.stroke();ctx.setLineDash([]);drawSegmentedTimeLine(ctx,data,d=>d.price,(d)=>timeTradeX(d,w),y,'#d1d5db',2,breakLunch);drawSegmentedTimeLine(ctx,data,d=>d.avg_price||d.price,(d)=>timeTradeX(d,w),y,'#f59e0b',2,breakLunch);ctx.fillStyle='#8ea3c3';ctx.textAlign='right';ctx.fillText(fmt(max),w-8,18);ctx.fillText(fmt(min),w-8,h-25);setupHover(c,data,'time')}
 const __v323BaseLoadQuotes=loadQuotes;
-async function loadQuotes(force=false,opts={}){
+function syncCurrentQuoteFromWatchRows(){
+  const rows=Array.isArray(window.__lastQuoteRows)?window.__lastQuoteRows:[];
+  const hit=rows.find(q=>String(q?.symbol||'')===String(currentSymbol));
+  if(!hit)return;
+  if(!currentQuote||quoteTsMs(hit)>=quoteTsMs(currentQuote)){
+    currentQuote={...hit,extra:hit.extra||currentQuoteExtra||{}};
+    currentQuoteExtra=hit.extra||currentQuoteExtra||{};
+  }
+  renderDetailHeader(currentQuote,currentQuoteExtra);
+}
+loadQuotes=async function(force=false,opts={}){
   const now=Date.now(),cached=Array.isArray(window.__lastQuoteRows)&&window.__lastQuoteRows.length;
   const canRefresh=!!sessionData?.can_refresh;
   const quietCacheMs=canRefresh?15000:300000;
   if(!force&&cached&&now-(window.__quoteCacheAt||0)<quietCacheMs){
     const rows=typeof mergeCurrentQuoteIntoRows==='function'?mergeCurrentQuoteIntoRows(window.__lastQuoteRows):window.__lastQuoteRows;
     renderQuoteRows(rows);
+    syncCurrentQuoteFromWatchRows();
     if($('quotePill'))$('quotePill').textContent=(canRefresh?'缓存 ':'休市缓存 ')+new Date().toLocaleTimeString();
     if($('quoteStatus'))$('quoteStatus').textContent=canRefresh?'行情缓存快速显示':'休市/午休使用收盘缓存，已暂停重复外部刷新';
     return;
@@ -243,8 +255,50 @@ async function loadQuotes(force=false,opts={}){
   window.__suppressQuoteLog=quiet;
   try{await __v323BaseLoadQuotes(force)}
   finally{window.__suppressQuoteLog=false}
+  syncCurrentQuoteFromWatchRows();
   window.__quoteCacheAt=Date.now();
-}
+};
+
+/* qd-v323-draw-reentry-guard: ResizeObserver may fire while a canvas is being
+   resized. Coalesce those callbacks so an embedded workbench never recursively
+   enters drawCharts and hits "Maximum call stack size exceeded". */
+const __v323FinalDrawCharts=drawCharts;
+let __v323DrawingCharts=false;
+let __v323DrawQueued=false;
+let __v323LayoutRetries=0;
+drawCharts=function(){
+  if(__v323DrawingCharts){__v323DrawQueued=true;return}
+  __v323DrawingCharts=true;
+  try{return __v323FinalDrawCharts()}
+  finally{
+    __v323DrawingCharts=false;
+    if(__v323DrawQueued){
+      __v323DrawQueued=false;
+      requestAnimationFrame(()=>drawCharts());
+    }
+  }
+};
+safeDrawCharts=function(){
+  if(!chartReady()){
+    if(__v323LayoutRetries<6){
+      __v323LayoutRetries+=1;
+      if($('chartLabel'))$('chartLabel').textContent='图表布局稳定中，稍后重绘';
+      requestAnimationFrame(()=>setTimeout(()=>safeDrawCharts(),80));
+    }
+    return;
+  }
+  __v323LayoutRetries=0;
+  drawCharts();
+};
+resizeChart=function(){
+  if(window.__v323ResizeFrame)cancelAnimationFrame(window.__v323ResizeFrame);
+  window.__v323ResizeFrame=requestAnimationFrame(()=>safeDrawCharts());
+};
+
+const installSectorPulse=()=>{if($('sectorPulse'))return;const target=document.querySelector('.detail>div:nth-child(2)');if(!target)return;const panel=document.createElement('div');panel.className='sector-pulse';panel.id='sectorPulse';panel.innerHTML='<div class="sector-pulse-head"><b>主线板块</b><span class="small" id="sectorPulseStatus">读取公开板块资金与强度...</span><span class="grow"></span><button class="btn2" onclick="loadSectorPulse(true)">刷新</button></div><div class="sector-pulse-list" id="sectorPulseList"><div class="sector-pulse-empty">等待真实板块数据</div></div>';target.appendChild(panel)};
+const renderSectorPulse=(js)=>{installSectorPulse();const box=$('sectorPulseList'),status=$('sectorPulseStatus');if(!box||!status)return;const items=(js.items||[]).slice(0,6);status.textContent=`${js.session_label||'--'} · ${items.length}项 · ${js.cache_status?.status||js.quality_status||'--'} · 公开口径`;box.innerHTML=items.length?items.map(x=>`<a class="sector-pulse-item" href="${esc(x.source_url||js.source_url||'#')}" target="_blank" rel="noopener noreferrer" title="${esc(x.explanation||'')}；公开板块资金口径，不是Level-2账户识别"><b>${esc(x.board_name||x.board_code)}</b><strong class="${Number(x.change_pct)>=0?'up':'down'}">${x.change_pct==null?'缺失':(Number(x.change_pct)>0?'+':'')+Number(x.change_pct).toFixed(2)+'%'}</strong><span>${esc(x.stage||'观察')} · 强度${fmt(x.strength_score,1)} · 净流${money(x.net_inflow)}</span></a>`).join(''):`<div class="sector-pulse-empty">${esc((js.missing_reasons||['暂无真实板块数据']).join('；'))}</div>`};
+window.loadSectorPulse=async(force=false)=>{try{const js=await api('/api/market/sectors/mainline?limit=12&include_concept=true&force='+force);renderSectorPulse(js);return js}catch(e){installSectorPulse();const s=$('sectorPulseStatus');if(s)s.textContent='板块数据读取失败：'+e;return null}};
+installSectorPulse();window.loadSectorPulse(false);setInterval(()=>window.loadSectorPulse(false),120000);
 
 window.addEventListener('resize',()=>setTimeout(resizeChart,80));(async function init(){if(FULL_MODE)$('app').classList.add('full');if(EMBEDDED_MODE)$('app').classList.add('embedded');currentMode=normalizeMode(currentMode);restoreWatchlistState();renderModeButtons();installChartResizeObserver();await loadServerWatchList();scheduleClock();bindWheelZoom();bindChartDrag();await refreshSession();const active=shouldForceActiveRefresh();if(!FULL_MODE){loadQuotes(active).catch(e=>log(e,'ERROR'));kickBackgroundWatchlistRefresh()}refreshDetail(active).catch(e=>log(e,'ERROR'));scheduleAuto(false);requestAnimationFrame(resizeChart);log(`页面初始化完成，V3.18.3 Stable Recovery：先恢复本地缓存，再${active?'收盘补刷一次':'仅后台复用缓存'}`)})();
 </script></body></html>

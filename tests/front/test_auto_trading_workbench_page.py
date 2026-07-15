@@ -10,6 +10,9 @@ def test_auto_trading_workbench_page_visible():
     assert "首页总览 + 右侧覆盖模块" in html
     assert "交易工作流" in html
     assert "联网智能辅助" in html
+    assert "主线板块 · 每日资金流与强度" in html
+    assert "/api/market/sectors/mainline" in html
+    assert "公开板块资金" in html
     assert "宏观事件" not in html or "/api/macro/global-events" in html
     assert "paperControl" in html
     assert "strategySelectedSummary" in html
@@ -60,6 +63,9 @@ def test_auto_trading_workbench_page_visible():
     assert "renderPortfolioOverview" in html
     assert "/api/live/account" in html
     assert "/api/live/positions" in html
+    assert "/api/live/orders/preview-batch" in html
+    assert "股票池批量预检查" in html
+    assert "livePreviewSummary" in html
     assert "agentDecision" in html
     assert "renderAgentDecision" in html
     assert "symbol_global_impacts" in html
@@ -90,6 +96,7 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     assert "/ui?symbol=" in html
     assert "frame=time&embedded=1" in html
     assert "frame=1d&embedded=1" in html
+    assert "!/[?&]embedded=1\\b/.test(url)" in html
     assert "/detail/" in html
     assert "/backtest?symbol=" in html
     assert "/realtime-paper" in html
