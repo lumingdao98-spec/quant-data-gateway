@@ -16,6 +16,9 @@ class UnifiedSignal:
     action: SignalAction
     confidence: float
     final_score: float
+    screening_score: float | None = None
+    daily_k_score: float | None = None
+    intraday_score: float | None = None
     fundamental_score: float | None = None
     technical_score: float | None = None
     information_score: float | None = None
@@ -37,6 +40,7 @@ class UnifiedSignal:
 
 @dataclass(slots=True)
 class SignalFusionConfig:
+    screening_weight: float = 0.30
     fundamental_weight: float = 0.28
     technical_weight: float = 0.34
     information_weight: float = 0.24
@@ -58,6 +62,9 @@ class SignalFusionEngine:
         *,
         symbol: str,
         horizon: str = "swing",
+        screening_score: float | None = None,
+        daily_k_score: float | None = None,
+        intraday_score: float | None = None,
         fundamental_score: float | None = None,
         technical_score: float | None = None,
         information_score: float | None = None,
@@ -76,6 +83,7 @@ class SignalFusionEngine:
     ) -> UnifiedSignal:
         cfg = self.config
         scores = {
+            "screening": screening_score,
             "fundamental": fundamental_score,
             "technical": technical_score,
             "information": information_score,
@@ -83,6 +91,7 @@ class SignalFusionEngine:
             "market": market_score,
         }
         weights = {
+            "screening": cfg.screening_weight,
             "fundamental": cfg.fundamental_weight,
             "technical": cfg.technical_weight,
             "information": cfg.information_weight,
@@ -91,6 +100,7 @@ class SignalFusionEngine:
         }
         if score_weights:
             aliases = {
+                "screening": ("screening", "screening_score", "screener", "screener_score"),
                 "fundamental": ("fundamental", "fundamental_score"),
                 "technical": ("technical", "technical_score"),
                 "information": ("information", "information_score", "info"),
@@ -109,7 +119,9 @@ class SignalFusionEngine:
                         weights[key] = value
                     break
         usable = {k: v for k, v in scores.items() if v is not None}
-        missing = list(missing_data or []) + [k for k in scores if scores[k] is None]
+        # screening_score is a V3.23 baseline. Older callers remain valid and
+        # are not marked incomplete only because they do not provide it.
+        missing = list(missing_data or []) + [k for k in scores if k != "screening" and scores[k] is None]
         if usable:
             total_w = sum(weights[k] for k in usable) or 1.0
             final_score = sum(float(usable[k]) * weights[k] / total_w for k in usable)
@@ -127,10 +139,10 @@ class SignalFusionEngine:
             reason_parts.append("异常波动触发规避")
         elif final_score >= cfg.add_threshold and anomaly_score < 25:
             action = "add"
-            reason_parts.append("三面评分强且异常较低")
+            reason_parts.append("综合评分强且异常较低")
         elif final_score >= cfg.buy_threshold and anomaly_score < 35:
             action = "buy"
-            reason_parts.append("三面评分达到买入观察阈值")
+            reason_parts.append("综合评分达到买入观察阈值")
         elif final_score <= cfg.sell_threshold or anomaly_score >= 55:
             action = "sell" if anomaly_score >= 55 else "reduce"
             reason_parts.append("评分转弱或异常升高")
@@ -151,7 +163,7 @@ class SignalFusionEngine:
             base_weight = 0.0
         elif action == "reduce":
             base_weight = min(base_weight, cfg.max_target_weight * 0.35)
-        expected_dims = 5.0 if fund_flow_score is not None else 4.0
+        expected_dims = (5.0 if fund_flow_score is not None else 4.0) + (1.0 if screening_score is not None else 0.0)
         confidence = min(1.0, max(0.0, len(usable) / expected_dims * (1.0 - min(anomaly_score, 80) / 120.0)))
         risk_level = "low" if anomaly_score < 20 and final_score >= 65 else "high" if anomaly_score >= 45 or final_score < 45 else "medium"
         freshness = data_freshness or {}
@@ -163,6 +175,9 @@ class SignalFusionEngine:
             action=action,
             confidence=round(confidence, 4),
             final_score=round(final_score, 2),
+            screening_score=screening_score,
+            daily_k_score=daily_k_score,
+            intraday_score=intraday_score,
             fundamental_score=fundamental_score,
             technical_score=technical_score,
             information_score=information_score,

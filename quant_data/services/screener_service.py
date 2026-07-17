@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
 from quant_data.indicators import (
@@ -271,22 +272,49 @@ class ScreenerService:
         passed: list[ScreenerResult] = []
         errors: list[dict] = []
         skipped_low_amount = 0
+        eligible: list[Quote] = []
         for q in quotes[: config.max_items]:
-            try:
-                if config.min_amount and (q.amount or 0) < config.min_amount:
-                    skipped_low_amount += 1
-                    continue
-                bars = self.market_data.get_kline(q.symbol, frame="1d", limit=config.kline_limit, adjust=config.kline_adjust, force_refresh=config.force_kline)
-                if len(bars) < 60:
-                    errors.append({"symbol": q.symbol, "name": q.name, "error": "K线数量不足，无法稳定评分"})
-                    continue
-                q = self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes, bars=bars)
-                result = self.analyze(q, bars, mode=config.mode, strategies=config.strategies or [], kline_adjust=config.kline_adjust, market_regime=market_regime)
-                analyzed.append(result)
-                if result.total_score >= config.min_score:
-                    passed.append(result)
-            except Exception as exc:
-                errors.append({"symbol": q.symbol, "name": q.name, "error": str(exc)[:220]})
+            if config.min_amount and (q.amount or 0) < config.min_amount:
+                skipped_low_amount += 1
+                continue
+            eligible.append(q)
+
+        def analyze_one(q: Quote) -> ScreenerResult:
+            bars = self.market_data.get_kline(
+                q.symbol,
+                frame="1d",
+                limit=config.kline_limit,
+                adjust=config.kline_adjust,
+                force_refresh=config.force_kline,
+            )
+            if len(bars) < 60:
+                raise ValueError("K线数量不足，无法稳定评分")
+            enriched = (
+                self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes, bars=bars)
+                if self._needs_metric_enrichment(q)
+                else q
+            )
+            return self.analyze(
+                enriched,
+                bars,
+                mode=config.mode,
+                strategies=config.strategies or [],
+                kline_adjust=config.kline_adjust,
+                market_regime=market_regime,
+            )
+
+        workers = min(4, len(eligible))
+        if workers:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="screener") as executor:
+                futures = [(q, executor.submit(analyze_one, q)) for q in eligible]
+                for q, future in futures:
+                    try:
+                        result = future.result()
+                        analyzed.append(result)
+                        if result.total_score >= config.min_score:
+                            passed.append(result)
+                    except Exception as exc:
+                        errors.append({"symbol": q.symbol, "name": q.name, "error": str(exc)[:220]})
         passed.sort(key=lambda x: x.total_score, reverse=True)
         ended = datetime.now()
         return {
@@ -303,7 +331,7 @@ class ScreenerService:
             "result_count": len(passed),
             "error_count": len(errors),
             "market_regime": market_regime,
-            "data": [x.to_dict() for x in passed],
+            "data": [{**x.to_dict(), "screener_metric_enriched": True} for x in passed],
             "errors": errors[:80],
             "note": "候选数量=通过最低评分过滤的结果；分析数量=成功完成行情+K线+技术评分的标的；股票池数量=本次输入/快照标的。评分仅作研究辅助，不构成投资建议。",
         }
@@ -317,7 +345,18 @@ class ScreenerService:
             # 去重但保序
             symbols = list(dict.fromkeys(symbols))
             custom_quotes = self.market_data.get_quotes(symbols[: config.max_items], force_refresh=config.force_quotes)
-            custom_quotes = [self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes) for q in custom_quotes]
+            workers = min(4, len(custom_quotes))
+            if workers:
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="screener-quote") as executor:
+                    custom_quotes = list(
+                        executor.map(
+                            lambda quote: self.market_data.enrich_quote_metrics(
+                                quote,
+                                force_refresh=config.force_quotes,
+                            ),
+                            custom_quotes,
+                        )
+                    )
             self._candidate_meta_by_symbol = {
                 q.symbol: {
                     "symbol": q.symbol,
@@ -348,7 +387,6 @@ class ScreenerService:
             if universe == "etf" and q.asset_type != AssetType.ETF:
                 continue
             filtered.append(q)
-        filtered = [self.market_data.enrich_quote_metrics(q, force_refresh=config.force_quotes) for q in filtered]
         # V3.17 三通道候选池：换手率 TOP50、成交额 TOP20、技术初筛互补，避免只盯单一榜单。
         if universe in {"market", "stocks", "all", "custom_market"}:
             pool = self.candidate_pool_service.build(filtered, max_items=max(config.max_items, 120))
@@ -373,6 +411,16 @@ class ScreenerService:
             if q.symbol not in by_symbol:
                 by_symbol[q.symbol] = q
         return list(by_symbol.values())[: config.max_items]
+
+    @staticmethod
+    def _needs_metric_enrichment(quote: Quote) -> bool:
+        if quote.turnover is None or quote.volume_ratio is None:
+            return True
+        if quote.total_market_cap is None and quote.float_market_cap is None and quote.circulating_market_cap is None:
+            return True
+        if quote.asset_type == AssetType.STOCK and quote.pe_dynamic is None and quote.pe_ttm is None and quote.pb is None:
+            return True
+        return False
 
     def _market_regime_for_run(self, config: ScreenerConfig, quotes: list[Quote]) -> dict:
         universe = (config.universe or "custom").lower()

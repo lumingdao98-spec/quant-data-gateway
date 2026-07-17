@@ -93,7 +93,10 @@ class TradingStore:
         sql = f"SELECT id, mode, symbol, session_id, created_at, payload_json FROM {table}"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        # Many trading events share second-level timestamps. rowid keeps the
+        # most recently persisted snapshot first instead of returning an older
+        # cash/position snapshot from the same second.
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
         params.append(max(1, int(limit or 200)))
         with sqlite3.connect(self.db_path) as con:
             rows = con.execute(sql, params).fetchall()
@@ -107,6 +110,21 @@ class TradingStore:
             payload.setdefault("created_at", row[4])
             out.append(payload)
         return out
+
+    def delete(self, table: str, *, mode: str = "", symbol: str = "", session_id: str = "", record_id: str = "") -> int:
+        if table not in TABLES:
+            raise ValueError(f"unsupported trading store table: {table}")
+        where = []
+        params: list[Any] = []
+        for column, value in (("id", record_id), ("mode", mode), ("symbol", symbol), ("session_id", session_id)):
+            if value:
+                where.append(f"{column}=?")
+                params.append(value)
+        if not where:
+            raise ValueError("refusing to delete a trading table without filters")
+        with sqlite3.connect(self.db_path) as con:
+            cur = con.execute(f"DELETE FROM {table} WHERE " + " AND ".join(where), params)
+            return int(cur.rowcount or 0)
 
     def stats(self) -> dict[str, Any]:
         with sqlite3.connect(self.db_path) as con:

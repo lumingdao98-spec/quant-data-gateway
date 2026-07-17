@@ -29,6 +29,7 @@ def build_screener_ui() -> str:
 .tag{max-width:100%;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.45}.tag.event{background:#172554;border-color:#1d4ed8;color:#bfdbfe}.tag.scope{background:#2e1065;border-color:#6d28d9;color:#ddd6fe}.tag.good{background:#052e16;border-color:#166534;color:#bbf7d0}.news-item{background:#0d1428;border:1px solid rgba(38,54,79,.75);border-radius:10px;padding:8px;margin:7px 0;overflow:hidden}.news-title{font-weight:800;color:#bfdbfe;text-decoration:none;line-height:1.45;white-space:normal;word-break:break-word;overflow-wrap:anywhere}.news-meta{margin-top:5px;font-size:12px;color:#8ea3c3;line-height:1.45}.news-summary{margin-top:6px;font-size:12px;color:#9fb2d4;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;word-break:break-word;overflow-wrap:anywhere}.profile-box{background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:9px;margin:8px 0;line-height:1.55;white-space:normal;word-break:break-word;overflow-wrap:anywhere}.global-news-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.global-news-head button{font-size:11px;padding:5px 7px}
 
 .strategy-mini{background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.strategy-mini .row{justify-content:space-between}.strategy-summary-tags{margin-top:8px;max-height:74px;overflow:auto}.strategy-inline-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.strategy-inline-actions button{font-size:11px;padding:5px 7px}.strategy-inline{display:grid;grid-template-columns:1fr;gap:6px;margin-top:8px;max-height:190px;overflow:auto}.strategy-inline label{display:flex;gap:7px;align-items:flex-start;background:#101a2e;border:1px solid #26364f;border-radius:10px;padding:7px;font-size:12px}.strategy-inline input{width:auto;margin-top:2px}.strategy-inline b{color:#dbeafe}.strategy-inline p{margin:2px 0 0;color:#9fb2d4;line-height:1.35}.screener-actions{position:sticky;bottom:-14px;z-index:15;background:linear-gradient(180deg,rgba(15,23,42,.90),#0f172a 38%);border-top:1px solid #26364f;margin:12px -14px -14px;padding:10px 14px;display:flex;gap:8px;flex-wrap:wrap}.modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,.72);z-index:120;display:none;align-items:center;justify-content:center;padding:18px}.modal-backdrop.show{display:flex}.strategy-modal{width:min(1060px,96vw);height:min(760px,92vh);background:#0f172a;border:1px solid #41618e;border-radius:18px;box-shadow:0 28px 80px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden}.strategy-modal-h{height:54px;display:flex;align-items:center;gap:10px;justify-content:space-between;padding:0 14px;border-bottom:1px solid #283956;background:#141e32}.strategy-modal-b{padding:12px;overflow:hidden;display:flex;flex-direction:column;gap:10px;min-height:0}.strategy-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.strategy-tabs{display:flex;gap:6px;flex-wrap:wrap}.strategy-tabs button{font-size:12px;padding:6px 9px;background:#172033;border:1px solid #26364f;color:#bfdbfe}.strategy-tabs button.active{background:#2563eb;color:#fff;border-color:#60a5fa}.strategy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:9px;max-height:none;overflow:auto;min-height:0}.strategy-modal .strategy-grid{flex:1}.strategy-card{background:#101a2e;border:1px solid #26364f;border-radius:12px;padding:10px;font-size:12px}.strategy-card .cat-title{font-size:14px;color:#bfdbfe;font-weight:900;margin-bottom:6px}.strategy-card label{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-top:1px solid rgba(38,54,79,.45)}.strategy-card label:first-of-type{border-top:0}.strategy-card input{width:auto;margin-top:2px}.strategy-card b{color:#dbeafe}.strategy-card p{margin:3px 0 0;color:#9fb2d4;line-height:1.35}.strategy-card .meta{color:#8ea3c3;font-size:11px;margin-top:2px}.adjust-note{background:#102037;border:1px solid #27548b;color:#bfdbfe;border-radius:10px;padding:8px;font-size:12px;line-height:1.45}
+.action-toast{position:fixed;right:24px;bottom:132px;z-index:180;max-width:min(420px,calc(100vw - 48px));padding:11px 14px;border:1px solid #166534;border-radius:10px;background:#10233a;color:#bbf7d0;box-shadow:0 18px 55px rgba(0,0,0,.45);opacity:0;transform:translateY(12px);pointer-events:none;transition:.18s}.action-toast.show{opacity:1;transform:translateY(0)}.action-toast.bad{border-color:#991b1b;color:#fecaca}
 .compact-table{table-layout:fixed!important;min-width:1420px!important}
 .compact-table th,.compact-table td{overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 .compact-table .cell-name{max-width:104px}
@@ -205,6 +206,7 @@ def score(context):
   <div id="explainBody" class="small">请选择标签</div>
 </div>
 
+<div id="actionToast" class="action-toast" role="status" aria-live="polite"></div>
 <div id="strategyModal" class="modal-backdrop" onclick="if(event.target===this)closeStrategyModal()">
   <div class="strategy-modal">
     <div class="strategy-modal-h">
@@ -221,6 +223,7 @@ def score(context):
 
 <script>
 const $=id=>document.getElementById(id);let rows=[],selected=null,sortKey='total_score',sortDir=-1,tableMode=localStorage.getItem('quant_view_mode')||localStorage.getItem('qdg_screener_view')||'compact';/* tableMode='compact' */const LS='quant_v2_watch_pool',LS_CUSTOM='quant_custom_symbols',LS_STRATEGIES='quant_selected_strategies',LS_MODE='quant_screener_mode',LS_ENABLE_NEWS='quant_enable_news',LS_VIEW='quant_view_mode',LS_SHOW_EXCLUDED='quant_show_excluded',LS_MIN_SCORE='quant_min_score',LS_MAX_ITEMS='quant_max_items',LS_SNAPSHOT='last_screener_snapshot_id',LS_SNAPSHOT_LEGACY='qdg_screener_snapshot_id',LS_SELECTED='qdg_screener_selected_symbol',LS_SCROLL='qdg_screener_scroll_top',LS_PARAMS='qdg_screener_params';
+let actionToastTimer=null;function showActionToast(message,bad=false){const box=$('actionToast');if(!box)return;box.textContent=String(message||'操作完成');box.className='action-toast show'+(bad?' bad':'');clearTimeout(actionToastTimer);actionToastTimer=setTimeout(()=>box.classList.remove('show'),3000)}
 
 let strategyLibrary=[];let currentStrategyCategory='全部';let selectedStrategyKeys=new Set();let defaultStrategyKeys=new Set();
 function selectedStrategies(){return Array.from(selectedStrategyKeys)}
@@ -715,6 +718,7 @@ clearLocalState=function(){
 runScreener=async function(){
   const btn=$('runBtn');const oldRows=rows.slice();const oldSelected=selected;
   btn.disabled=true;btn.textContent='筛选中...';
+  showActionToast('筛选任务已提交，正在复用行情和K线缓存…');
   $('cacheHint').textContent='正在筛选；如果外部源失败或返回空结果，上一批缓存会保留。';
   try{
     const query=buildQuery();
@@ -732,11 +736,12 @@ runScreener=async function(){
       render();if(selected)renderDetail(selected);else renderDetail(null);
       $('cacheHint').textContent='本次筛选返回 0 行，已保留上一批本地缓存；可切到调试视图查看是否被剔除条件过滤。';
       persistScreenerState();
+      showActionToast('本次没有新结果，已保留上一批缓存');
       return;
     }
     rows=incoming;selected=null;
     updateMetrics(js);
-    if(!rows.length){showNoCacheState('本次筛选返回 0 行');return}
+    if(!rows.length){showNoCacheState('本次筛选返回 0 行');showActionToast('筛选完成，但没有符合条件的股票');return}
     const sortMode=$('sortMode')?.value||localStorage.getItem('quant_screener_sort_mode')||'total_score';
     applySortMode(sortMode);
     render();restoreSelection(js.selected_symbol);
@@ -744,12 +749,14 @@ runScreener=async function(){
     const stableNote=js.score_stability_note?` · ${js.score_stability_note}`:'';
     $('cacheHint').textContent=`cache=${js.cache_status?.status||'refreshed'} · snapshot=${sid||'--'} · 已写入本地缓存${stableNote}`;
     log(`Screener done: result ${js.result_count}, analyzed ${js.analyzed_count??'--'}, pool ${js.pool_count??js.universe_count}, filtered ${js.filtered_out_count??0}, elapsed ${js.elapsed_seconds}s, errors ${js.error_count}, news=${js.news_enabled?'on':'off'}`);
+    showActionToast(`筛选完成：${rows.length} 只，耗时 ${js.elapsed_seconds??'--'} 秒`);
     if(js.errors&&js.errors.length)log('Partial failures: '+js.errors.slice(0,5).map(e=>e.symbol+':'+e.error).join('; '),'WARN');
     setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(localStorage.getItem(LS_Q_SCROLL)||localStorage.getItem(LS_SCROLL)||0)},50);
   }catch(e){
     rows=oldRows;selected=oldSelected;render();if(selected)renderDetail(selected);else renderDetail(null);
     if(rows.length){$('cacheHint').textContent='筛选失败，已保留上一批缓存：'+e;persistScreenerState()}else showNoCacheState('筛选失败：'+e);
     log(e,'ERROR');
+    showActionToast('筛选失败：'+e,true);
   }finally{
     btn.disabled=false;btn.textContent='开始筛选';
   }

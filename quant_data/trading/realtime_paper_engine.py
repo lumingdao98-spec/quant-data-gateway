@@ -136,6 +136,9 @@ class RealtimePaperEngine:
         signal = self.signal_fusion.fuse(
             symbol=symbol,
             horizon=str(payload.get("horizon") or self.state.config.horizon),
+            screening_score=self._optional(payload.get("screening_score")),
+            daily_k_score=self._optional(payload.get("daily_k_score")),
+            intraday_score=self._optional(payload.get("intraday_score")),
             fundamental_score=self._optional(payload.get("fundamental_score")),
             technical_score=self._optional(payload.get("technical_score")),
             information_score=self._optional(payload.get("information_score")),
@@ -159,6 +162,10 @@ class RealtimePaperEngine:
             {
                 "name": str(quote.get("name") or payload.get("name") or symbol),
                 "quote_price": price,
+                "bid1": self._best_price(quote, "bid"),
+                "ask1": self._best_price(quote, "ask"),
+                "score_breakdown": dict(payload.get("score_breakdown") or {}),
+                "score_source": str(payload.get("score_source") or "unified_realtime_score"),
                 "session_mode": "盘中实时" if is_trading else ("休市回放" if manual_replay else "休市观察"),
                 "paper_only": True,
                 "strategy_controls": strategy_controls,
@@ -168,45 +175,60 @@ class RealtimePaperEngine:
         self.signal_meta.append(signal_row)
         self.tick_log.append({"timestamp": now.isoformat(timespec="seconds"), "symbol": symbol, "name": signal_row["name"], "price": price, "signal": signal_row, "anomaly": anomaly.to_dict(), "freshness": freshness.to_dict()})
         orders: list[dict[str, Any]] = []
+        execution_diagnostic: dict[str, Any] | None = None
         if signal.action in {"buy", "add", "sell", "reduce"} and price > 0:
-            order = self.order_manager.build_order(
+            sizing = self.order_manager.preview_order(
                 symbol=symbol,
                 target_weight=signal.target_weight,
                 side=signal.action,
                 price=price,
-                order_type=str(payload.get("order_type") or "market"),
-                reason=signal.reason,
             )
-            risk = self.risk_gateway.evaluate_order(
-                order.to_dict(),
-                portfolio=self.account.snapshot(),
-                signal=signal_row,
-                quote=quote,
-                anomaly=anomaly.to_dict(),
-                freshness=freshness.to_dict(),
-                now=now,
-                manual_replay=manual_replay,
-            )
-            confirm_task = None
-            if risk["approved"] and risk["decision"] == "allow":
-                self.order_manager.simulate_fill(order, fill_price=price, fee_rate=self.state.config.fee_rate, slippage_rate=self.state.config.slippage_rate)
-                self.audit_log.record("fill_arrived", {"order": order.to_dict(), "paper_only": True})
+            if int(sizing.get("quantity") or 0) <= 0:
+                execution_diagnostic = sizing
+                signal_row["execution_diagnostic"] = sizing
+                self.audit_log.record(
+                    "order_skipped_sizing",
+                    {"symbol": symbol, "signal": signal_row, "sizing": sizing, "paper_only": True},
+                )
             else:
-                self.order_manager.reject(order, "；".join(risk.get("risk_reasons") or risk.get("warnings") or ["风控未通过"]))
-                self.audit_log.record("risk_blocked", {"order": order.to_dict(), "risk": risk, "paper_only": True})
-                if risk.get("required_confirm") or risk.get("require_human_confirmation"):
-                    confirm_task = self.human_confirm_queue.enqueue(
-                        symbol=symbol,
-                        action=signal.action,
-                        reason="；".join(risk.get("warnings") or ["需要人工确认"]),
-                        risk_flags=list(risk.get("warnings") or []),
-                        payload={"order": order.to_dict(), "risk": risk, "signal": signal_row},
-                    )
-            row = order.to_dict()
-            row["risk"] = risk
-            if confirm_task is not None:
-                row["human_confirm_task"] = confirm_task.to_dict()
-            orders.append(row)
+                order = self.order_manager.build_order(
+                    symbol=symbol,
+                    target_weight=signal.target_weight,
+                    side=signal.action,
+                    price=price,
+                    order_type=str(payload.get("order_type") or "market"),
+                    reason=signal.reason,
+                )
+                risk = self.risk_gateway.evaluate_order(
+                    order.to_dict(),
+                    portfolio=self.account.snapshot(),
+                    signal=signal_row,
+                    quote=quote,
+                    anomaly=anomaly.to_dict(),
+                    freshness=freshness.to_dict(),
+                    now=now,
+                    manual_replay=manual_replay,
+                )
+                confirm_task = None
+                if risk["approved"] and risk["decision"] == "allow":
+                    self.order_manager.simulate_fill(order, fill_price=price, fee_rate=self.state.config.fee_rate, slippage_rate=self.state.config.slippage_rate)
+                    self.audit_log.record("fill_arrived", {"order": order.to_dict(), "paper_only": True})
+                else:
+                    self.order_manager.reject(order, "；".join(risk.get("risk_reasons") or risk.get("warnings") or ["风控未通过"]))
+                    self.audit_log.record("risk_blocked", {"order": order.to_dict(), "risk": risk, "paper_only": True})
+                    if risk.get("required_confirm") or risk.get("require_human_confirmation"):
+                        confirm_task = self.human_confirm_queue.enqueue(
+                            symbol=symbol,
+                            action=signal.action,
+                            reason="；".join(risk.get("warnings") or ["需要人工确认"]),
+                            risk_flags=list(risk.get("warnings") or []),
+                            payload={"order": order.to_dict(), "risk": risk, "signal": signal_row},
+                        )
+                row = order.to_dict()
+                row["risk"] = risk
+                if confirm_task is not None:
+                    row["human_confirm_task"] = confirm_task.to_dict()
+                orders.append(row)
         self.account.mark_to_market({symbol: price})
         curve = {"timestamp": now.isoformat(timespec="seconds"), **self.account.snapshot()}
         self.portfolio_curve.append(curve)
@@ -220,7 +242,27 @@ class RealtimePaperEngine:
             "freshness": freshness.to_dict(),
             "orders": orders,
             "portfolio": self.account.snapshot(),
+            "execution_diagnostic": execution_diagnostic,
         }
+
+    @staticmethod
+    def _best_price(quote: dict[str, Any], side: str) -> float | None:
+        direct_keys = ("bid1", "buy1", "best_bid") if side == "bid" else ("ask1", "sell1", "best_ask")
+        for key in direct_keys:
+            try:
+                value = quote.get(key)
+                if value not in (None, "", "--") and float(value) > 0:
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        levels = quote.get("bids" if side == "bid" else "asks") or []
+        if levels and isinstance(levels[0], dict):
+            try:
+                value = float(levels[0].get("price") or 0)
+                return value if value > 0 else None
+            except (TypeError, ValueError):
+                return None
+        return None
 
     def replay(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
@@ -291,14 +333,21 @@ class RealtimePaperEngine:
         risk = dict(payload.get("risk_controls") or {})
         profile = dict(payload.get("screener_signal") or {})
         rows = self._strategy_param_rows(payload)
-        stop_values = [self._pct(row.get("stop_loss_pct"), 0.0) for row in rows if self._pct(row.get("stop_loss_pct"), 0.0) > 0]
-        take_values = [self._pct(row.get("take_profit_pct"), 0.0) for row in rows if self._pct(row.get("take_profit_pct"), 0.0) > 0]
-        draw_values = [self._pct(row.get("max_drawdown_pct"), 0.0) for row in rows if self._pct(row.get("max_drawdown_pct"), 0.0) > 0]
-        single_values = [self._pct(row.get("max_single_position_pct"), 0.0) for row in rows if self._pct(row.get("max_single_position_pct"), 0.0) > 0]
-        stop_pct = min(stop_values) if stop_values else self._pct(risk.get("stop_loss_pct"), 8.0)
-        take_pct = min(take_values) if take_values else self._pct(risk.get("take_profit_pct"), 18.0)
-        max_drawdown_pct = min(draw_values) if draw_values else self._pct(risk.get("max_drawdown_pct"), 18.0)
-        max_single_pct = min(single_values) if single_values else self._pct(risk.get("max_single_position_pct"), 20.0)
+        strategy_combo = self._list(payload.get("strategy_combo"))
+        tags = {str(x) for x in (profile.get("strategy_tags") or profile.get("tags") or [])}
+        selected_row = next((row for row in rows if str(row.get("strategy") or "") in tags), None)
+        if selected_row is None:
+            selected_row = next((row for row in rows if str(row.get("strategy") or "") == "score_driven"), None)
+        if selected_row is None and rows:
+            selected_row = rows[0]
+        selected_row = dict(selected_row or {})
+        selected_strategy = str(selected_row.get("strategy") or "global_risk")
+        stop_pct = self._pct(selected_row.get("stop_loss_pct"), self._pct(risk.get("stop_loss_pct"), 8.0))
+        take_pct = self._pct(selected_row.get("take_profit_pct"), self._pct(risk.get("take_profit_pct"), 18.0))
+        max_drawdown_pct = self._pct(selected_row.get("max_drawdown_pct"), self._pct(risk.get("max_drawdown_pct"), 18.0))
+        strategy_cap = self._pct(selected_row.get("max_single_position_pct"), self._pct(risk.get("max_single_position_pct"), 20.0))
+        global_cap = self._pct(risk.get("max_single_position_pct"), strategy_cap)
+        max_single_pct = min(strategy_cap, global_cap) if global_cap > 0 else strategy_cap
         cap = max(0.0, min(max_single_pct / 100.0, 1.0))
         hints: list[str] = []
 
@@ -348,9 +397,11 @@ class RealtimePaperEngine:
             signal.reason = (signal.reason + "；" if signal.reason else "") + "；".join(hints)
             signal.evidence = list(dict.fromkeys(list(signal.evidence) + hints))
         return {
-            "strategy_combo": self._list(payload.get("strategy_combo")),
+            "strategy_combo": strategy_combo,
             "position_sizing": str(payload.get("position_sizing") or ""),
             "active_strategy_parameters": rows,
+            "selected_strategy": selected_strategy,
+            "selected_strategy_parameters": selected_row,
             "stop_loss_pct": stop_pct,
             "take_profit_pct": take_pct,
             "max_drawdown_pct": max_drawdown_pct,

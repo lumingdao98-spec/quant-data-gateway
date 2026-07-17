@@ -24,6 +24,10 @@ class ManagedOrder:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     filled_quantity: int = 0
     avg_fill_price: float = 0.0
+    requested_value: float = 0.0
+    minimum_lot_value: float = 0.0
+    minimum_account_equity: float = 0.0
+    sizing_status: str = "executable"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -46,16 +50,15 @@ class OrderManager:
         reason: str = "",
         lot_size: int = 100,
     ) -> ManagedOrder:
-        equity = max(self.account.equity, 1.0)
-        current = self.account.positions.get(symbol)
-        current_value = current.market_value if current else 0.0
-        target_value = max(0.0, float(target_weight or 0.0) * equity)
-        raw_value = target_value - current_value if side in {"buy", "add"} else current_value - target_value
-        if side == "sell":
-            raw_value = current_value
-        qty = int(max(0.0, raw_value) / max(float(price or 0.0), 0.0001))
-        lot = max(1, int(lot_size or 1))
-        qty = int(qty // lot) * lot
+        sizing = self.preview_order(
+            symbol=symbol,
+            target_weight=target_weight,
+            side=side,
+            price=price,
+            lot_size=lot_size,
+        )
+        qty = int(sizing["quantity"])
+        sizing_reason = str(sizing.get("message") or "")
         order = ManagedOrder(
             order_id=f"po-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
             symbol=symbol,
@@ -64,11 +67,59 @@ class OrderManager:
             price=float(price or 0.0),
             target_weight=float(target_weight or 0.0),
             order_type=order_type,
-            reason=reason,
+            reason="；".join(x for x in (reason, sizing_reason) if x),
+            requested_value=float(sizing["requested_value"]),
+            minimum_lot_value=float(sizing["minimum_lot_value"]),
+            minimum_account_equity=float(sizing["minimum_account_equity"]),
+            sizing_status=str(sizing["status"]),
         )
         self.orders.append(order)
         self.audit_log.record("order_created", order.to_dict())
         return order
+
+    def preview_order(
+        self,
+        *,
+        symbol: str,
+        target_weight: float,
+        side: str,
+        price: float,
+        lot_size: int = 100,
+    ) -> dict[str, Any]:
+        equity = max(self.account.equity, 1.0)
+        current = self.account.positions.get(symbol)
+        current_value = current.market_value if current else 0.0
+        target_value = max(0.0, float(target_weight or 0.0) * equity)
+        raw_value = target_value - current_value if side in {"buy", "add"} else current_value - target_value
+        if side == "sell":
+            raw_value = current_value
+        px = max(float(price or 0.0), 0.0001)
+        lot = max(1, int(lot_size or 1))
+        raw_quantity = int(max(0.0, raw_value) / px)
+        quantity = int(raw_quantity // lot) * lot
+        minimum_lot_value = px * lot
+        weight = max(0.0, float(target_weight or 0.0))
+        minimum_account_equity = minimum_lot_value / weight if side in {"buy", "add"} and weight > 0 else 0.0
+        status = "executable" if quantity > 0 else "below_minimum_lot"
+        message = ""
+        if status != "executable":
+            message = (
+                f"目标仓位{weight * 100:.2f}%对应约{raw_quantity}股，低于A股最小买入{lot}股；"
+                f"按当前价格至少需要{minimum_lot_value:.2f}元，维持该仓位上限时账户权益需约{minimum_account_equity:.2f}元"
+            )
+        return {
+            "symbol": symbol,
+            "side": "buy" if side in {"buy", "add"} else "sell",
+            "target_weight": weight,
+            "requested_value": round(max(0.0, raw_value), 6),
+            "raw_quantity": raw_quantity,
+            "quantity": quantity,
+            "lot_size": lot,
+            "minimum_lot_value": round(minimum_lot_value, 6),
+            "minimum_account_equity": round(minimum_account_equity, 6),
+            "status": status,
+            "message": message,
+        }
 
     def reject(self, order: ManagedOrder, reason: str) -> ManagedOrder:
         order.status = "rejected"

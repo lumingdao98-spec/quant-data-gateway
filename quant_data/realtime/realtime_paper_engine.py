@@ -8,6 +8,7 @@ from typing import Any
 
 from quant_data.chart.trading_marker_engine import TradingMarkerEngine
 from quant_data.persistence.trading_store import TradingStore
+from quant_data.trading.paper_account import PaperAccount
 from quant_data.trading.realtime_paper_engine import RealtimePaperEngine
 
 from .realtime_session import RealtimeSession
@@ -17,7 +18,9 @@ class RealtimePaperEngineV323:
     """Persistent session wrapper around the tested realtime paper engine."""
 
     def __init__(self, engine: RealtimePaperEngine | None = None, store: TradingStore | None = None) -> None:
-        self.engine = engine or RealtimePaperEngine()
+        self._template_engine = engine or RealtimePaperEngine()
+        self.engine = self._template_engine
+        self.engines: dict[str, RealtimePaperEngine] = {}
         self.store = store or TradingStore()
         self.marker_engine = TradingMarkerEngine()
         self.sessions: dict[str, RealtimeSession] = {}
@@ -26,6 +29,22 @@ class RealtimePaperEngineV323:
 
     def start_session(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
+        if self.active_session_id and not bool(payload.get("parallel_session")):
+            previous = self.sessions.get(self.active_session_id)
+            if previous and previous.status in {"running", "paused"}:
+                previous.status = "stopped"
+                previous.paused = False
+                previous_engine = self.engines.get(previous.session_id)
+                if previous_engine:
+                    previous_engine.stop()
+                    self.sync_engine_state(previous.session_id)
+                self._persist_session(previous)
+                self.store.put(
+                    "audit_events",
+                    {"event_type": "realtime_session_superseded", "created_at": _now()},
+                    mode="realtime_paper",
+                    session_id=previous.session_id,
+                )
         session = RealtimeSession(
             symbols=_symbols(payload.get("symbols") or payload.get("watchlist")),
             strategy_family=str(payload.get("strategy_family") or payload.get("strategy") or "hybrid"),
@@ -35,7 +54,10 @@ class RealtimePaperEngineV323:
         )
         self.sessions[session.session_id] = session
         self.active_session_id = session.session_id
-        base = self.engine.start({**payload, "symbols": session.symbols, "interval_seconds": session.interval_seconds})
+        current_engine = self._new_engine()
+        self.engines[session.session_id] = current_engine
+        self.engine = current_engine
+        base = current_engine.start({**payload, "symbols": session.symbols, "interval_seconds": session.interval_seconds})
         self._persist_session(session)
         self.store.put(
             "audit_events",
@@ -46,12 +68,98 @@ class RealtimePaperEngineV323:
         self.sync_engine_state(session.session_id)
         return {"ok": True, "session": session.to_dict(), "engine": base}
 
+    def update_active_session(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Reconfigure the active paper session without replacing its account or history."""
+
+        payload = payload or {}
+        session_id = str(payload.get("session_id") or self.active_session_id)
+        session = self.sessions.get(session_id)
+        if not session or session.status not in {"running", "paused"}:
+            return {"ok": False, "message": "没有可恢复的实时模拟会话", "session": None}
+        if session.kill_switch:
+            return {"ok": False, "message": "会话 kill switch 已开启，请先解除后再恢复", "session": session.to_dict()}
+
+        engine = self._engine_for(session_id, restore=True)
+        if engine is None:
+            return {"ok": False, "message": "实时模拟账户恢复失败", "session": session.to_dict()}
+
+        self.sync_engine_state(session_id)
+        started_at = session.started_at
+        symbols = _symbols(payload.get("symbols") or payload.get("watchlist")) or list(session.symbols)
+        interval_seconds = max(5, min(60, int(payload.get("interval_seconds") or session.interval_seconds or 15)))
+        strategy_family = str(
+            payload.get("strategy_family")
+            or payload.get("strategy")
+            or session.strategy_family
+            or "hybrid"
+        )
+        previous_initial_cash = float(engine.account.initial_cash)
+        requested_initial_cash = float(payload.get("initial_cash") or previous_initial_cash)
+        session.symbols = symbols
+        session.interval_seconds = interval_seconds
+        session.strategy_family = strategy_family
+        session.status = "running"
+        session.paused = False
+        session.config = {
+            **(session.config or {}),
+            **_session_config(payload),
+            "initial_cash": previous_initial_cash,
+            "reset_account": False,
+        }
+
+        base = engine.start(
+            {
+                **payload,
+                **session.config,
+                "symbols": symbols,
+                "strategy": strategy_family,
+                "strategy_family": strategy_family,
+                "interval_seconds": interval_seconds,
+                "initial_cash": previous_initial_cash,
+                "reset_account": False,
+            }
+        )
+        engine.state.started_at = started_at
+        self.engine = engine
+        self.active_session_id = session_id
+        self._persist_session(session)
+        self.store.put(
+            "audit_events",
+            {
+                "event_type": "realtime_session_reconfigured",
+                "account_preserved": True,
+                "requested_initial_cash": requested_initial_cash,
+                "effective_initial_cash": previous_initial_cash,
+                "symbols": symbols,
+                "strategy_family": strategy_family,
+                "created_at": _now(),
+            },
+            mode="realtime_paper",
+            session_id=session_id,
+        )
+        self.sync_engine_state(session_id)
+        warning = ""
+        if abs(requested_initial_cash - previous_initial_cash) > 0.000001:
+            warning = "为保留现有持仓和成交，初始资金变更未生效；勾选强制新建账户后才会重置资金。"
+        return {
+            "ok": True,
+            "session": session.to_dict(),
+            "engine": base,
+            "reused_session": True,
+            "account_preserved": True,
+            "warning": warning,
+        }
+
     def pause(self, session_id: str) -> dict[str, Any]:
         session = self.sessions.get(session_id)
         if not session:
             return {"ok": False, "message": "session not found"}
         session.paused = True
         session.status = "paused"
+        engine = self.engines.get(session_id)
+        if engine:
+            engine.state.status = "paused"
+            engine.state.message = "实时模拟已暂停"
         self._persist_session(session)
         self.store.put("audit_events", {"event_type": "realtime_session_pause"}, mode="realtime_paper", session_id=session_id)
         return {"ok": True, "session": session.to_dict()}
@@ -63,6 +171,11 @@ class RealtimePaperEngineV323:
         session.paused = False
         session.status = "running"
         self.active_session_id = session_id
+        engine = self._engine_for(session_id, restore=True)
+        if engine:
+            engine.state.status = "running"
+            engine.state.message = "实时模拟运行中"
+            self.engine = engine
         self._persist_session(session)
         self.store.put("audit_events", {"event_type": "realtime_session_resume"}, mode="realtime_paper", session_id=session_id)
         return {"ok": True, "session": session.to_dict()}
@@ -73,7 +186,8 @@ class RealtimePaperEngineV323:
             session.status = "stopped"
             session.paused = False
             self._persist_session(session)
-        base = self.engine.stop()
+        engine = self._engine_for(session_id, restore=False)
+        base = engine.stop() if engine else self._stored_status(session_id)
         self.sync_engine_state(session_id)
         return {"ok": True, "session": session.to_dict() if session else None, "engine": base}
 
@@ -101,7 +215,11 @@ class RealtimePaperEngineV323:
             return {"ok": False, "message": "session paused", "session": session.to_dict()}
         if session:
             payload = _merge_session_signal(payload, session)
-        result = self.engine.tick(payload, manual_replay=manual_replay)
+        engine = self._engine_for(sid, restore=True)
+        if engine is None:
+            return {"ok": False, "message": "session not found", "session_id": sid}
+        self.engine = engine
+        result = engine.tick(payload, manual_replay=manual_replay)
         self.sync_engine_state(sid)
         if session:
             result["v323_session"] = session.to_dict()
@@ -119,18 +237,22 @@ class RealtimePaperEngineV323:
         payload = payload or {}
         sid = session_id or str(payload.get("session_id") or self.active_session_id)
         session = self.sessions.get(sid)
-        self.engine.state.is_trading_session = False
-        self.engine.state.message = "休市待机：不生成信号、委托或成交"
+        engine = self._engine_for(sid, restore=True)
+        if engine is None:
+            return {"ok": False, "message": "session not found", "session_id": sid}
+        self.engine = engine
+        engine.state.is_trading_session = False
+        engine.state.message = "休市待机：不生成信号、委托或成交"
         result: dict[str, Any] = {
             "ok": True,
             "skipped": True,
             "reason": "market_closed",
             "message": "当前为非交易时段，实时模拟已待机；未生成信号、委托或成交。历史回放请使用 /api/realtime-paper/replay。",
-            "state": self.engine.state.to_dict(),
+            "state": engine.state.to_dict(),
             "signal": None,
             "orders": [],
             "fills": [],
-            "portfolio": self.engine.account.snapshot(),
+            "portfolio": engine.account.snapshot(),
             "market_session": dict(market_session or {}),
             "paper_only": True,
             "records_written": False,
@@ -142,7 +264,11 @@ class RealtimePaperEngineV323:
 
     def replay(self, payload: dict[str, Any] | None = None, *, session_id: str = "") -> dict[str, Any]:
         sid = session_id or str((payload or {}).get("session_id") or self.active_session_id)
-        result = self.engine.replay(payload)
+        engine = self._engine_for(sid, restore=True)
+        if engine is None:
+            return {"ok": False, "message": "session not found", "session_id": sid}
+        self.engine = engine
+        result = engine.replay(payload)
         self.sync_engine_state(sid)
         result["session_id"] = sid
         return result
@@ -157,13 +283,36 @@ class RealtimePaperEngineV323:
     def active_session(self) -> dict[str, Any] | None:
         return self.get_session(self.active_session_id) if self.active_session_id else None
 
+    def status(self, session_id: str = "") -> dict[str, Any]:
+        sid = session_id or self.active_session_id
+        engine = self._engine_for(sid, restore=True) if sid else None
+        data = engine.status() if engine else self._stored_status(sid)
+        data["v323_session"] = self.get_session(sid) if sid else None
+        data["session_id"] = sid
+        return data
+
+    def portfolio(self, session_id: str = "") -> dict[str, Any]:
+        sid = session_id or self.active_session_id
+        engine = self._engine_for(sid, restore=True) if sid else None
+        if engine:
+            return {**engine.portfolio(), "session_id": sid}
+        snapshots = self.store.list("account_snapshots", mode="realtime_paper", session_id=sid, limit=1) if sid else []
+        return {"ok": True, "data": snapshots[0] if snapshots else PaperAccount().snapshot(), "curve": [], "session_id": sid}
+
+    def confirmations(self, session_id: str = ""):
+        engine = self._engine_for(session_id or self.active_session_id, restore=True)
+        return engine.human_confirm_queue if engine else self._template_engine.human_confirm_queue
+
     def sync_engine_state(self, session_id: str = "") -> dict[str, Any]:
         sid = session_id or self.active_session_id
         counts = {"signals": 0, "orders": 0, "fills": 0, "positions": 0, "markers": 0, "audit_events": 0}
         if not sid:
             return counts
+        engine = self.engines.get(sid)
+        if engine is None:
+            return counts
 
-        for row in self.engine.signal_rows(limit=1000).get("data") or []:
+        for row in engine.signal_rows(limit=1000).get("data") or []:
             item = dict(row)
             item.setdefault("mode", "realtime_paper")
             item.setdefault("session_id", sid)
@@ -172,7 +321,7 @@ class RealtimePaperEngineV323:
             self.store.put("signals", item, mode="realtime_paper", symbol=str(item.get("symbol") or ""), session_id=sid, record_id=record_id)
             counts["signals"] += 1
 
-        for row in self.engine.orders(limit=1000).get("data") or []:
+        for row in engine.orders(limit=1000).get("data") or []:
             item = dict(row)
             item.setdefault("mode", "realtime_paper")
             item.setdefault("session_id", sid)
@@ -185,7 +334,7 @@ class RealtimePaperEngineV323:
             counts["orders"] += 1
             counts["markers"] += 1
 
-        fills = list(self.engine.account.fills_dicts() or [])
+        fills = list(engine.account.fills_dicts() or [])
         for row in fills:
             item = dict(row)
             item.setdefault("mode", "realtime_paper")
@@ -199,17 +348,18 @@ class RealtimePaperEngineV323:
             counts["fills"] += 1
             counts["markers"] += 1
 
-        portfolio = self.engine.account.snapshot()
+        portfolio = engine.account.snapshot()
         portfolio.setdefault("session_id", sid)
         self.store.put("account_snapshots", portfolio, mode="realtime_paper", session_id=sid, record_id=_stable_id("account", sid, portfolio.get("cash"), len(fills)))
+        self.store.delete("positions", mode="realtime_paper", session_id=sid)
         for symbol, pos in (portfolio.get("positions") or {}).items():
             item = dict(pos)
             item.setdefault("symbol", symbol)
             item.setdefault("session_id", sid)
-            self.store.put("positions", item, mode="realtime_paper", symbol=str(symbol), session_id=sid, record_id=_stable_id("position", sid, symbol, item))
+            self.store.put("positions", item, mode="realtime_paper", symbol=str(symbol), session_id=sid, record_id=_stable_id("position", sid, symbol))
             counts["positions"] += 1
 
-        for row in self.engine.audit(limit=1000).get("data") or []:
+        for row in engine.audit(limit=1000).get("data") or []:
             item = dict(row)
             item.setdefault("mode", "realtime_paper")
             item.setdefault("session_id", sid)
@@ -222,15 +372,24 @@ class RealtimePaperEngineV323:
         self.sync_engine_state(session_id)
         return self.store.list("orders", mode="realtime_paper", session_id=session_id, limit=limit)
 
+    def stored_signals(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        self.sync_engine_state(session_id)
+        return self.store.list("signals", mode="realtime_paper", session_id=session_id, limit=limit)
+
     def stored_fills(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
         self.sync_engine_state(session_id)
         return self.store.list("fills", mode="realtime_paper", session_id=session_id, limit=limit)
 
     def stored_positions(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
         self.sync_engine_state(session_id)
-        positions = self.store.list("positions", mode="realtime_paper", session_id=session_id, limit=limit)
         snapshots = self.store.list("account_snapshots", mode="realtime_paper", session_id=session_id, limit=1)
-        return [{"snapshot": snapshots[0] if snapshots else {}, "positions": positions}]
+        snapshot = snapshots[0] if snapshots else {}
+        canonical = []
+        for symbol, raw in (snapshot.get("positions") or {}).items():
+            item = dict(raw or {})
+            item.setdefault("symbol", symbol)
+            canonical.append(item)
+        return [{"snapshot": snapshot, "positions": canonical[: max(1, int(limit or 200))]}]
 
     def stored_markers(self, session_id: str, symbol: str = "", limit: int = 300) -> list[dict[str, Any]]:
         self.sync_engine_state(session_id)
@@ -254,8 +413,80 @@ class RealtimePaperEngineV323:
             data["config"] = data.get("config") if isinstance(data.get("config"), dict) else {}
             session = RealtimeSession(**data)
             self.sessions[session.session_id] = session
-            if not self.active_session_id and session.status in {"running", "paused"}:
-                self.active_session_id = session.session_id
+        candidates = sorted(
+            (item for item in self.sessions.values() if item.status in {"running", "paused"}),
+            key=lambda item: item.started_at,
+            reverse=True,
+        )
+        if candidates:
+            active = candidates[0]
+            self.active_session_id = active.session_id
+            for orphan in candidates[1:]:
+                orphan.status = "stopped"
+                orphan.paused = False
+                self._persist_session(orphan)
+            restored = self._engine_for(active.session_id, restore=True)
+            if restored:
+                self.engine = restored
+
+    def _new_engine(self, account: PaperAccount | None = None) -> RealtimePaperEngine:
+        return RealtimePaperEngine(
+            account=account,
+            risk_gateway=self._template_engine.risk_gateway,
+            signal_fusion=self._template_engine.signal_fusion,
+            anomaly_guard=self._template_engine.anomaly_guard,
+            freshness_guard=self._template_engine.freshness_guard,
+        )
+
+    def _engine_for(self, session_id: str, *, restore: bool) -> RealtimePaperEngine | None:
+        if not session_id or session_id not in self.sessions:
+            return None
+        existing = self.engines.get(session_id)
+        if existing or not restore:
+            return existing
+        session = self.sessions[session_id]
+        snapshots = self.store.list("account_snapshots", mode="realtime_paper", session_id=session_id, limit=1)
+        fills = self.store.list("fills", mode="realtime_paper", session_id=session_id, limit=5000)
+        account = PaperAccount.from_snapshot(
+            snapshots[0] if snapshots else {"initial_cash": (session.config or {}).get("initial_cash", 100_000)},
+            fills=list(reversed(fills)),
+        )
+        engine = self._new_engine(account)
+        engine.start(
+            {
+                **(session.config or {}),
+                "symbols": session.symbols,
+                "strategy": session.strategy_family,
+                "interval_seconds": session.interval_seconds,
+                "initial_cash": account.initial_cash,
+                "reset_account": False,
+            }
+        )
+        engine.state.started_at = session.started_at
+        if session.status != "running":
+            engine.state.status = session.status
+            engine.state.message = "实时模拟已暂停" if session.status == "paused" else "已停止"
+        self.engines[session_id] = engine
+        return engine
+
+    def _stored_status(self, session_id: str) -> dict[str, Any]:
+        snapshots = self.store.list("account_snapshots", mode="realtime_paper", session_id=session_id, limit=1) if session_id else []
+        session = self.sessions.get(session_id)
+        state = {
+            "status": session.status if session else "stopped",
+            "started_at": session.started_at if session else None,
+            "config": session.config if session else {},
+        }
+        return {
+            "ok": True,
+            "state": state,
+            "paper_only": True,
+            "real_broker_connected": False,
+            "portfolio": snapshots[0] if snapshots else PaperAccount().snapshot(),
+            "order_count": len(self.store.list("orders", mode="realtime_paper", session_id=session_id, limit=1000)) if session_id else 0,
+            "signal_count": len(self.store.list("signals", mode="realtime_paper", session_id=session_id, limit=1000)) if session_id else 0,
+            "human_confirm_pending": 0,
+        }
 
     def _persist_session(self, session: RealtimeSession) -> None:
         self.store.put("paper_sessions", session.to_dict(), mode="realtime_paper", session_id=session.session_id, record_id=session.session_id)
@@ -314,11 +545,59 @@ def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> 
         if merged.get(payload_key) in {None, "", "--"}:
             merged[payload_key] = profile.get(profile_key)
 
-    evidence = list(profile.get("evidence") or [])
-    merged.setdefault(
-        "evidence",
-        [f"来自自动交易筛选信号画像：{profile.get('action') or 'watch'}"] + evidence,
+    # The screening snapshot is the stable baseline, the daily K score is the
+    # medium-term structure, and the intraday score only times the current
+    # session. An intraday fluctuation must not overwrite the other two.
+    screening_score = _score_number(profile.get("final_score"))
+    daily_k_score = _score_number(merged.get("daily_k_score"))
+    if daily_k_score is None:
+        daily_k_score = _score_number(profile.get("technical_score"))
+    intraday_score = _score_number(merged.get("intraday_score"))
+    score_source = str(merged.get("score_source") or "").lower()
+    if intraday_score is None and ("quote" in score_source or "intraday" in score_source):
+        intraday_score = _score_number((payload or {}).get("technical_score"))
+    usable_technical = [
+        (value, weight)
+        for value, weight in ((daily_k_score, 0.58), (intraday_score, 0.42))
+        if value is not None
+    ]
+    if usable_technical:
+        weight_sum = sum(weight for _, weight in usable_technical) or 1.0
+        merged["technical_score"] = round(
+            sum(float(value) * weight for value, weight in usable_technical) / weight_sum,
+            4,
+        )
+    merged["screening_score"] = screening_score
+    merged["daily_k_score"] = daily_k_score
+    merged["intraday_score"] = intraday_score
+
+    live_fund_flow = _score_number((payload or {}).get("fund_flow_score"))
+    baseline_fund_flow = _score_number(profile.get("fund_flow_score"))
+    if live_fund_flow is not None and baseline_fund_flow is not None:
+        merged["fund_flow_score"] = round(baseline_fund_flow * 0.45 + live_fund_flow * 0.55, 4)
+    merged["score_breakdown"] = {
+        "screening_score": screening_score,
+        "daily_k_score": daily_k_score,
+        "intraday_score": intraday_score,
+        "technical_score": merged.get("technical_score"),
+        "fund_flow_score": merged.get("fund_flow_score"),
+        "formula": "最终分=筛选底座+五维评分；技术分=日K×58%+分时×42%（缺失项自动归一）",
+        "sources": {
+            "screening": profile.get("source") or "auto_trading_screener_snapshot",
+            "daily_k": "screener_technical_snapshot",
+            "intraday": str(merged.get("score_source") or "realtime_quote_snapshot"),
+        },
+        "screener_snapshot_id": config.get("screener_snapshot_id"),
+    }
+
+    evidence = [f"来自自动交易筛选信号画像：{profile.get('action') or 'watch'}"] + list(profile.get("evidence") or [])
+    evidence += list(merged.get("evidence") or [])
+    evidence.append(
+        f"三路评分：筛选 {screening_score if screening_score is not None else '--'} / "
+        f"日K {daily_k_score if daily_k_score is not None else '--'} / "
+        f"分时 {intraday_score if intraday_score is not None else '--'}"
     )
+    merged["evidence"] = list(dict.fromkeys(evidence))
     merged.setdefault("missing_data", list(profile.get("missing_data") or []))
     merged["screener_signal"] = profile
 
@@ -339,6 +618,15 @@ def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> 
         if "过期" in joined or "stale" in joined.lower() or "缺失" in joined:
             anomaly.setdefault("stale_data", True)
     return merged
+
+
+def _score_number(value: Any) -> float | None:
+    try:
+        if value in (None, "", "--"):
+            return None
+        return round(max(0.0, min(100.0, float(value))), 4)
+    except (TypeError, ValueError):
+        return None
 
 
 def _symbols(value: Any) -> list[str]:

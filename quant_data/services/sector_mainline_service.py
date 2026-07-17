@@ -56,6 +56,99 @@ def _friendly_source_error(value: Any) -> str:
     return (head or "东方财富公开板块资金接口未返回有效数据")[:120]
 
 
+def _parse_snapshot_time(value: Any) -> datetime | None:
+    text = str(value or "").strip().replace("Z", "+00:00")
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def _flow_window_metrics(
+    current_at: datetime,
+    current_flow: float | None,
+    samples: list[tuple[datetime, float]],
+) -> dict[str, Any]:
+    if current_flow is None:
+        return {
+            "intraday_sample_count": len(samples),
+            "flow_state": "资金字段缺失",
+            "flow_state_reason": "当前公开累计净流入字段缺失",
+        }
+    points = sorted(
+        [(at, value) for at, value in samples if at.date() == current_at.date() and at < current_at]
+        + [(current_at, current_flow)],
+        key=lambda item: item[0],
+    )
+
+    def before(minutes: int) -> float | None:
+        target = current_at - timedelta(minutes=minutes)
+        eligible = [value for at, value in points[:-1] if at <= target]
+        return eligible[-1] if eligible else None
+
+    def change(minutes: int) -> float | None:
+        base = before(minutes)
+        return round(current_flow - base, 2) if base is not None else None
+
+    deltas = {minutes: change(minutes) for minutes in (5, 15, 30, 60)}
+    morning_points = [(at, value) for at, value in points if at.time() <= datetime.strptime("11:30", "%H:%M").time()]
+    afternoon_points = [(at, value) for at, value in points if at.time() >= datetime.strptime("13:00", "%H:%M").time()]
+    morning_change = None
+    if len(morning_points) >= 2:
+        morning_change = round(morning_points[-1][1] - morning_points[0][1], 2)
+    afternoon_change = None
+    if len(afternoon_points) >= 2:
+        afternoon_change = round(afternoon_points[-1][1] - afternoon_points[0][1], 2)
+
+    delta15 = deltas[15]
+    delta30 = deltas[30]
+    previous_15 = None
+    base15 = before(15)
+    base30 = before(30)
+    if base15 is not None and base30 is not None:
+        previous_15 = base15 - base30
+    acceleration = round(delta15 - previous_15, 2) if delta15 is not None and previous_15 is not None else None
+    if delta15 is None:
+        state = "等待日内快照"
+        reason = "至少需要两个真实快照才能计算时间段资金变化"
+    elif delta30 is not None and delta15 > 0 and delta30 > 0 and (acceleration or 0) > 0:
+        state = "加速流入"
+        reason = "近15分钟和近30分钟累计净流变化均为正，且近15分钟增量扩大"
+    elif delta30 is not None and delta15 > 0 and delta30 > 0:
+        state = "持续流入"
+        reason = "近15分钟和近30分钟累计净流变化均为正"
+    elif delta30 is not None and delta15 < 0 and delta30 < 0:
+        state = "高位分歧" if current_flow > 0 else "持续流出"
+        reason = "累计净流在近15分钟和近30分钟均回落"
+    elif delta30 is not None and delta15 > 0 >= delta30:
+        state = "资金回流"
+        reason = "近30分钟仍偏弱，但近15分钟累计净流已经回升"
+    elif delta30 is not None and delta15 < 0 <= delta30:
+        state = "流入放缓"
+        reason = "近30分钟仍有增量，但近15分钟累计净流转为回落"
+    else:
+        state = "区间震荡"
+        reason = "可用快照尚未形成一致流入或流出方向"
+    recent = [{"time": at.isoformat(timespec="seconds"), "net_inflow": value} for at, value in points[-12:]]
+    return {
+        "intraday_sample_count": max(0, len(points) - 1),
+        "interval_flow_5m": deltas[5],
+        "interval_flow_15m": delta15,
+        "interval_flow_30m": delta30,
+        "interval_flow_60m": deltas[60],
+        "morning_flow_change": morning_change,
+        "afternoon_flow_change": afternoon_change,
+        "flow_acceleration_15m": acceleration,
+        "flow_state": state,
+        "flow_state_reason": reason,
+        "recent_flow_snapshots": recent,
+        "flow_truth_boundary": "时间段数值为系统保存的东方财富公开累计净流字段之差；不是逐笔或Level-2账户资金。",
+    }
+
+
 class SectorMainlineService:
     """Real-source sector flow and strength monitor.
 
@@ -116,11 +209,13 @@ class SectorMainlineService:
             return self._missing_response(limit, include_concept, session_label, errors)
 
         history = self._history(trading_date, days=10)
+        intraday_history = self._intraday_history(trading_date, limit=300)
+        fetched_at = datetime.now().isoformat(timespec="seconds")
+        fetched_dt = _parse_snapshot_time(fetched_at) or datetime.now()
         all_items: list[dict[str, Any]] = []
         for board_type, rows in raw_by_type.items():
-            all_items.extend(self._normalize_rows(board_type, rows, history))
+            all_items.extend(self._normalize_rows(board_type, rows, history, intraday_history, fetched_dt))
         all_items.sort(key=lambda item: (item["mainline_score"], item["net_inflow"] or float("-inf")), reverse=True)
-        fetched_at = datetime.now().isoformat(timespec="seconds")
         published_at = max((str(item.get("published_at") or "") for item in all_items), default=fetched_at) or fetched_at
         data_trading_date = published_at[:10] if len(published_at) >= 10 else trading_date
         source_status = build_source_status(
@@ -145,10 +240,12 @@ class SectorMainlineService:
             "items": all_items,
             "industry_count": sum(1 for item in all_items if item["board_type"] == "industry"),
             "concept_count": sum(1 for item in all_items if item["board_type"] == "concept"),
+            "rotation_summary": self._rotation_summary(all_items),
             "methodology": {
                 "strength_score": "30%涨跌幅横截面排名 + 30%公开资金净流横截面排名 + 25%上涨家数宽度 + 15%换手参与度",
                 "mainline_score": "70%当日强度 + 30%近10个已保存交易日持续性；无历史时持续性保持50分中性",
                 "truth_boundary": "资金流为东方财富公开板块资金字段口径，不是券商逐笔成交或 Level-2 主力账户识别。",
+                "intraday_change": "近5/15/30/60分钟、上午和下午资金变化均由系统实际保存的累计净流快照做差；样本不足不计算。",
             },
             "source_status": source_status,
             "source_id": source_status["source_id"],
@@ -179,6 +276,14 @@ class SectorMainlineService:
             ttl_seconds=45 * 24 * 60 * 60,
             source="eastmoney_sector_flow",
         )
+        intraday_key = f"{data_trading_date}:{fetched_at[11:16]}"
+        self.cache.put(
+            "sector_mainline_intraday",
+            intraday_key,
+            payload,
+            ttl_seconds=14 * 24 * 60 * 60,
+            source="eastmoney_sector_flow_snapshot",
+        )
         return self._slice_payload(payload, cache_status, limit, include_concept)
 
     def history(self, *, days: int = 10, limit: int = 20) -> dict[str, Any]:
@@ -189,6 +294,17 @@ class SectorMainlineService:
             "days": len(rows),
             "items": rows[: max(1, min(int(limit or 20), 100))],
             "note": "仅返回系统实际保存的公开板块快照；缺少日期不会回填或伪造。",
+        }
+
+    def intraday_history(self, *, session_date: str = "", limit: int = 120) -> dict[str, Any]:
+        trading_date = session_date or datetime.now().date().isoformat()
+        rows = self._intraday_history(trading_date, limit=max(1, min(int(limit or 120), 500)))
+        return {
+            "ok": True,
+            "trading_date": trading_date,
+            "count": len(rows),
+            "items": rows,
+            "note": "仅返回系统实际保存的公开累计净流快照，时间段资金变化由相邻快照做差。",
         }
 
     def _fetch_rows(self, board_type: str) -> list[dict[str, Any]]:
@@ -232,6 +348,8 @@ class SectorMainlineService:
         board_type: str,
         rows: list[dict[str, Any]],
         history: list[dict[str, Any]],
+        intraday_history: list[dict[str, Any]],
+        current_at: datetime,
     ) -> list[dict[str, Any]]:
         valid = [row for row in rows if row.get("f12") and row.get("f14")]
         changes = [_number(row.get("f3")) for row in valid]
@@ -245,6 +363,17 @@ class SectorMainlineService:
             for item in snapshot.get("items") or []:
                 if item.get("board_type") == board_type and item.get("board_code"):
                     history_by_code.setdefault(str(item["board_code"]), []).append(item)
+        intraday_by_code: dict[str, list[tuple[datetime, float]]] = {}
+        for snapshot in intraday_history:
+            snapshot_at = _parse_snapshot_time(snapshot.get("updated_at") or snapshot.get("_cache_updated_at"))
+            if snapshot_at is None:
+                continue
+            for item in snapshot.get("items") or []:
+                if item.get("board_type") != board_type or not item.get("board_code"):
+                    continue
+                value = _number(item.get("net_inflow"))
+                if value is not None:
+                    intraday_by_code.setdefault(str(item["board_code"]), []).append((snapshot_at, value))
         result = []
         for row in valid:
             code = str(row.get("f12"))
@@ -263,6 +392,13 @@ class SectorMainlineService:
             old_items = history_by_code.get(code, [])
             persistence_values = [float(item.get("strength_score") or 50) for item in old_items[:10]]
             persistence = sum(persistence_values) / len(persistence_values) if persistence_values else 50.0
+            recent_flows = [
+                value for value in (_number(item.get("net_inflow")) for item in old_items[:5])
+                if value is not None
+            ]
+            recent_flow_3d = round(sum(recent_flows[:3]), 2) if recent_flows else None
+            recent_flow_5d = round(sum(recent_flows[:5]), 2) if recent_flows else None
+            recent_positive_days = sum(1 for value in recent_flows if value > 0)
             mainline = _clamp(strength * 0.70 + persistence * 0.30)
             if flow is not None and flow < 0:
                 mainline = max(0.0, mainline - min(12.0, abs(flow_rank - 50) * 0.12 + 3.0))
@@ -284,6 +420,17 @@ class SectorMainlineService:
                 missing.append("上涨/下跌家数字段缺失")
             timestamp = int(_number(row.get("f124")) or 0)
             published_at = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds") if timestamp else ""
+            flow_windows = _flow_window_metrics(current_at, flow, intraday_by_code.get(code, []))
+            if recent_flow_5d is None:
+                capital_phase = "近期样本不足"
+            elif recent_flow_5d > 0 and (flow or 0) >= 0:
+                capital_phase = "阶段持续流入"
+            elif recent_flow_5d > 0 > (flow or 0):
+                capital_phase = "强势后分歧"
+            elif recent_flow_5d < 0 < (flow or 0):
+                capital_phase = "低位资金回补"
+            else:
+                capital_phase = "阶段持续流出"
             result.append(
                 {
                     "board_code": code,
@@ -311,6 +458,11 @@ class SectorMainlineService:
                     "mainline_score": round(mainline, 2),
                     "stage": stage,
                     "history_days": len(persistence_values),
+                    "recent_flow_3d_sum": recent_flow_3d,
+                    "recent_flow_5d_sum": recent_flow_5d,
+                    "recent_positive_days": recent_positive_days,
+                    "recent_flow_days": len(recent_flows),
+                    "capital_phase": capital_phase,
                     "published_at": published_at,
                     "source_id": "eastmoney",
                     "source_name": "东方财富公开板块资金",
@@ -319,6 +471,7 @@ class SectorMainlineService:
                     "quality_status": "ok" if not missing else "partial",
                     "missing_reasons": missing,
                     "explanation": f"{stage}：强度{strength:.1f}，公开资金净流排名{flow_rank:.1f}，上涨宽度{breadth_score:.1f}%。",
+                    **flow_windows,
                 }
             )
         return result
@@ -338,6 +491,40 @@ class SectorMainlineService:
                 snapshots.append(read.data)
         return snapshots
 
+    def _intraday_history(self, trading_date: str, *, limit: int) -> list[dict[str, Any]]:
+        snapshots = self.cache.list_kind("sector_mainline_intraday", limit=limit)
+        return [
+            snapshot
+            for snapshot in snapshots
+            if str(snapshot.get("trading_date") or snapshot.get("updated_at") or "").startswith(trading_date)
+        ]
+
+    @staticmethod
+    def _rotation_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+        available = [item for item in items if item.get("interval_flow_30m") is not None]
+        inflow = sorted(available, key=lambda item: float(item.get("interval_flow_30m") or 0), reverse=True)
+        outflow = sorted(available, key=lambda item: float(item.get("interval_flow_30m") or 0))
+        returning = [item for item in available if item.get("flow_state") == "资金回流"]
+        diverging = [item for item in available if item.get("flow_state") in {"高位分歧", "流入放缓"}]
+        if not available:
+            summary = "等待至少两个真实板块资金快照后计算日内轮动。"
+        else:
+            leader = inflow[0]
+            laggard = outflow[0]
+            summary = (
+                f"近30分钟流入增量领先：{leader.get('board_name')}；"
+                f"流出增量领先：{laggard.get('board_name')}。"
+            )
+        return {
+            "sampled_board_count": len(available),
+            "summary": summary,
+            "inflow_leaders": inflow[:5],
+            "outflow_leaders": outflow[:5],
+            "returning_boards": returning[:5],
+            "diverging_boards": diverging[:5],
+            "interpretation_boundary": "回流/分歧仅描述公开累计净流快照变化；是否洗盘必须结合价格、成交和Level-2进一步确认。",
+        }
+
     def _cached_response(
         self,
         payload: dict[str, Any],
@@ -346,6 +533,27 @@ class SectorMainlineService:
         include_concept: bool,
         session_label: str,
     ) -> dict[str, Any]:
+        payload = dict(payload)
+        items = [dict(item) for item in (payload.get("items") or [])]
+        for item in items:
+            item.setdefault("intraday_sample_count", 0)
+            item.setdefault("interval_flow_5m", None)
+            item.setdefault("interval_flow_15m", None)
+            item.setdefault("interval_flow_30m", None)
+            item.setdefault("interval_flow_60m", None)
+            item.setdefault("morning_flow_change", None)
+            item.setdefault("afternoon_flow_change", None)
+            item.setdefault("flow_state", "等待日内快照")
+            item.setdefault("flow_state_reason", "旧缓存尚无时间段快照；下一交易时段自动积累")
+            item.setdefault("recent_flow_3d_sum", None)
+            item.setdefault("recent_flow_5d_sum", None)
+            item.setdefault("capital_phase", "近期样本不足")
+        payload["items"] = items
+        payload.setdefault("rotation_summary", self._rotation_summary(items))
+        methodology = dict(payload.get("methodology") or {})
+        methodology.setdefault("intraday_change", "时间段资金变化由真实累计净流快照做差；旧缓存或样本不足时不计算。")
+        methodology.setdefault("truth_boundary", "资金流为公开板块资金字段，不是逐笔或 Level-2 主力账户识别。")
+        payload["methodology"] = methodology
         result = self._slice_payload(payload, cache_status, limit, include_concept)
         result["session_label"] = session_label
         result["served_from_cache"] = True

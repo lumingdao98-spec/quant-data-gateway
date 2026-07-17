@@ -7,6 +7,7 @@ from dataclasses import fields, replace
 from datetime import datetime, time
 from pathlib import Path
 from statistics import mean
+from threading import Lock, Thread
 from types import SimpleNamespace
 from typing import Any
 
@@ -142,6 +143,43 @@ strategy_suitability_v323 = StrategySuitabilityV323()
 live_trading_engine_v323 = LiveTradingEngine(store=trading_store_v323)
 realtime_paper_engine_v323 = RealtimePaperEngineV323(realtime_paper_engine_v321, trading_store_v323)
 score_provenance_memory_v323: dict[str, dict] = {}
+_background_jobs: set[str] = set()
+_background_jobs_lock = Lock()
+
+
+def _submit_background_job(key: str, callback) -> bool:
+    """Run one daemon refresh per key so cache misses never fan out."""
+
+    with _background_jobs_lock:
+        if key in _background_jobs:
+            return False
+        _background_jobs.add(key)
+
+    def runner() -> None:
+        try:
+            callback()
+        except Exception as exc:
+            try:
+                cache_state_service.put(
+                    "background_job_status",
+                    key,
+                    {
+                        "job_key": key,
+                        "status": "error",
+                        "error": str(exc)[:240],
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    },
+                    ttl_seconds=24 * 60 * 60,
+                    source="background_job_runner",
+                )
+            except Exception:
+                pass
+        finally:
+            with _background_jobs_lock:
+                _background_jobs.discard(key)
+
+    Thread(target=runner, name=f"quant-refresh-{key}", daemon=True).start()
+    return True
 FALLBACK_STRATEGIES = [
     {"key": "low_position", "name": "低位修复", "category": "低位/修复", "description": "低位区间、RSI/KDJ 修复与均线距离改善。", "enabled": True, "default_weight": 1.0, "tags": ["low", "repair"]},
     {"key": "avoid_chasing_high", "name": "高位追高过滤", "category": "风控过滤", "description": "过滤高位滞涨、压力位过近和追高风险。", "enabled": True, "default_weight": 1.0, "tags": ["risk", "high"]},
@@ -408,7 +446,7 @@ def _apply_company_profile_metrics(q: Quote) -> Quote:
     if not needs_profile:
         return q
     try:
-        profile = company_profile_service.get_profile(q.symbol, force=False)
+        profile = company_profile_service.get_profile(q.symbol, force=False, local_only=True)
     except Exception:
         return q
     updates: dict = {}
@@ -694,16 +732,33 @@ def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[
     limit = max(30, min(int(limit or 120), 500))
     if not force:
         cached = cache_state_service.get("global_news_cache", f"global:{limit}", allow_stale=True)
-        if cached.data and (cached.data.get("items") or not cached.cache_status.get("stale")):
-            return dict(cached.data), cached.cache_status
+        if cached.data and cached.data.get("items"):
+            payload = dict(cached.data)
+            if cached.cache_status.get("stale"):
+                payload["refreshing"] = _submit_background_job(
+                    f"global-news-{limit}",
+                    lambda: _read_global_news_cached(limit=limit, force=True),
+                )
+            return payload, cached.cache_status
         latest = cache_state_service.latest("global_news_cache", allow_stale=True)
         if latest.data and latest.data.get("items"):
-            return dict(latest.data), latest.cache_status
+            payload = dict(latest.data)
+            payload["refreshing"] = _submit_background_job(
+                f"global-news-{limit}",
+                lambda: _read_global_news_cached(limit=limit, force=True),
+            )
+            return payload, latest.cache_status
+        refreshing = _submit_background_job(
+            f"global-news-{limit}",
+            lambda: _read_global_news_cached(limit=limit, force=True),
+        )
         return {
             "items": [],
-            "source_logs": [{"source": "global_news_cache", "status": "miss_no_sync_fetch", "count": 0}],
-            "cache_info": {"hit": False, "status": "miss_no_sync_fetch"},
-        }, cache_state_service.status("miss", key=f"global:{limit}", source="global_news_cache", error="no cached global news; skipped synchronous fetch")
+            "source_logs": [{"source": "global_news_cache", "status": "background_refreshing" if refreshing else "refresh_already_running", "count": 0}],
+            "cache_info": {"hit": False, "status": "background_refreshing", "refreshing": True},
+            "refreshing": True,
+            "missing_reason": "暂无全球要闻缓存，已在后台刷新真实来源；当前不生成替代新闻。",
+        }, cache_state_service.status("miss", key=f"global:{limit}", source="global_news_cache", error="background refresh scheduled")
     data = news_service.fetch_global_news(limit=limit, force=force)
     status = cache_state_service.put("global_news_cache", f"global:{limit}", {
         "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
@@ -752,7 +807,7 @@ def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limi
             source_logs.append({"source": "global_news_cache", "status": "error", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": str(exc)[:160]})
     if global_items:
         try:
-            profile = company_profile_service.get_profile(symbol, force=False)
+            profile = company_profile_service.get_profile(symbol, force=False, local_only=True)
         except Exception:
             profile = {}
         mapped = global_industry_mapper.map_items(global_items, symbol, name or data.get("name") or symbol, profile=profile)
@@ -1149,16 +1204,40 @@ def calendar_markets() -> dict:
     return {"ok": True, "data": {m: _market_session(m) for m in ["CN", "HK", "US"]}}
 
 
+def _orderbook_quote_fields(book: OrderBook | None) -> dict[str, Any]:
+    if book is None:
+        return {"bid1": None, "ask1": None, "bids": [], "asks": [], "orderbook_source": "missing"}
+    bids = [level.to_dict() for level in list(book.bids or [])]
+    asks = [level.to_dict() for level in list(book.asks or [])]
+    return {
+        "bid1": bids[0].get("price") if bids else None,
+        "ask1": asks[0].get("price") if asks else None,
+        "bids": bids,
+        "asks": asks,
+        "order_ratio": book.order_ratio,
+        "order_diff": book.order_diff,
+        "orderbook_source": book.source,
+        "orderbook_ts": book.ts.isoformat(timespec="seconds"),
+    }
+
+
 @app.get("/api/quote/{symbol}")
-def quote(symbol: str, force: bool = False, refresh: bool = False) -> dict:
+def quote(symbol: str, force: bool = False, refresh: bool = False, include_orderbook: bool = False) -> dict:
     force = bool(force or refresh)
     q, data, cache_status = _enrich_quote_real(symbol, force=force)
     data["extra"] = _quote_extra(q)
+    if include_orderbook:
+        data.update(_orderbook_quote_fields(service.get_order_book(symbol, allow_external=bool(_market_session(q.market).get("can_refresh")))))
     return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session(q.market), "cache_status": cache_status, "data": data}
 
 
 @app.get("/api/quotes")
-def quotes(symbols: str = Query(..., description="逗号分隔，如 300750,600519"), force: bool = False, refresh: bool = False) -> dict:
+def quotes(
+    symbols: str = Query(..., description="逗号分隔，如 300750,600519"),
+    force: bool = False,
+    refresh: bool = False,
+    include_orderbook: bool = False,
+) -> dict:
     force = bool(force or refresh)
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
     qs = service.get_quotes(symbol_list, force_refresh=force)
@@ -1167,12 +1246,23 @@ def quotes(symbols: str = Query(..., description="逗号分隔，如 300750,6005
         q, item, _ = _enrich_quote_real(q.symbol, force=force, quote_obj=q)
         item["extra"] = _quote_extra(q)
         data.append(item)
+    if include_orderbook and data:
+        allow_external = bool(_market_session("CN").get("can_refresh"))
+        with ThreadPoolExecutor(max_workers=min(6, len(data))) as executor:
+            books = list(executor.map(lambda row: service.get_order_book(str(row.get("symbol") or ""), allow_external=allow_external), data))
+        for item, book in zip(data, books):
+            item.update(_orderbook_quote_fields(book))
     return {"ok": True, "server_time": datetime.now().isoformat(timespec="seconds"), "force": force, "session": _market_session("CN"), "count": len(data), "data": data}
 
 
 def _merge_screener_item_quote_metrics(item: dict, *, force: bool = False) -> None:
     symbol = str(item.get("symbol") or "").strip()
     if not symbol:
+        return
+    if item.get("screener_metric_enriched") and not force:
+        item["metric_refresh_mode"] = "筛选主流程已补齐，跳过重复行情请求"
+        _clean_screener_metric_missing_reasons(item)
+        _fill_screener_theme_from_profile(item)
         return
     try:
         _q, qd, cache_status = _enrich_quote_real(symbol, force=force)
@@ -1239,14 +1329,12 @@ def _clean_screener_metric_missing_reasons(item: dict) -> None:
 def _fill_screener_theme_from_profile(item: dict) -> None:
     labels = [str(x) for x in (item.get("theme_labels") or item.get("themes") or []) if str(x).strip()]
     usable = [x for x in labels if x not in {"未知", "未识别题材", "--", "None"}]
-    if usable:
-        item["theme_labels"] = list(dict.fromkeys(usable))
-        return
     symbol = str(item.get("symbol") or "").strip()
     if not symbol:
+        item["theme_labels"] = list(dict.fromkeys(usable))
         return
     try:
-        profile = company_profile_service.get_profile(symbol, force=False)
+        profile = company_profile_service.get_profile(symbol, force=False, local_only=True)
     except Exception:
         profile = {}
     try:
@@ -1255,11 +1343,85 @@ def _fill_screener_theme_from_profile(item: dict) -> None:
         exposure = {}
     concepts = [str(x) for x in exposure.get("concepts") or [] if str(x).strip()]
     industries = [str(x) for x in exposure.get("industries") or [] if str(x).strip()]
-    labels = list(dict.fromkeys(concepts[:4] + industries[:3]))
+    profile_tags = [str(x) for x in (profile.get("business_tags") or profile.get("tags") or []) if str(x).strip()]
+    labels = list(dict.fromkeys(concepts[:5] + profile_tags[:5] + industries[:3] + usable[:4]))
     if labels:
-        item["theme_labels"] = labels
+        item["theme_labels"] = labels[:10]
+        source_candidates = [
+            str(profile.get("source") or "") if profile else "",
+            "company_profile" if profile else "",
+            "global_industry_mapper" if exposure else "",
+            "wordsource_keyword" if usable else "",
+        ]
+        item["theme_classification"] = {
+            "sources": list(dict.fromkeys(source for source in source_candidates if source)),
+            "industry": profile.get("industry") or industries[:1],
+            "matched_profile_tags": profile_tags[:8],
+            "confidence": "较高" if (profile and (concepts or profile_tags)) else ("中" if usable else "低"),
+            "note": "题材优先采用公司画像、主营行业和产业链映射，名称/新闻关键词只作补充。",
+        }
         if item.get("theme_stage") in (None, "", "--", "未知", "未识别题材"):
             item["theme_stage"] = "题材待确认"
+
+
+def _attach_screener_sector_context(item: dict, sector_snapshot: dict) -> None:
+    labels = [str(value).strip() for value in (item.get("theme_labels") or []) if str(value).strip()]
+    classification = item.get("theme_classification") or {}
+    industry = classification.get("industry")
+    if isinstance(industry, list):
+        labels.extend(str(value).strip() for value in industry if str(value).strip())
+    elif industry:
+        labels.append(str(industry).strip())
+    tokens = {
+        token.replace("板块", "").replace("概念", "").replace("行业", "").strip().lower()
+        for label in labels
+        for token in str(label).replace("/", " ").replace("、", " ").split()
+        if len(token.strip()) >= 2
+    }
+    matches = []
+    for sector in sector_snapshot.get("items") or []:
+        name = str(sector.get("board_name") or "").lower()
+        if name and any(token in name or name in token for token in tokens):
+            matches.append(
+                {
+                    key: sector.get(key)
+                    for key in (
+                        "board_code",
+                        "board_name",
+                        "board_type_name",
+                        "stage",
+                        "strength_score",
+                        "mainline_score",
+                        "net_inflow",
+                        "interval_flow_15m",
+                        "interval_flow_30m",
+                        "morning_flow_change",
+                        "afternoon_flow_change",
+                        "recent_flow_3d_sum",
+                        "recent_flow_5d_sum",
+                        "recent_positive_days",
+                        "recent_flow_days",
+                        "capital_phase",
+                        "flow_state",
+                        "flow_state_reason",
+                        "source_name",
+                        "source_url",
+                        "updated_at",
+                    )
+                }
+            )
+    matches.sort(key=lambda row: float(row.get("mainline_score") or 0), reverse=True)
+    item["matched_sector_flows"] = matches[:6]
+    if matches:
+        lead = matches[0]
+        item["theme_fund_flow_summary"] = (
+            f"匹配板块 {lead.get('board_name')}：{lead.get('flow_state') or '等待日内快照'}，"
+            f"主线分 {float(lead.get('mainline_score') or 0):.1f}。"
+        )
+        item["theme_sector_match_status"] = "matched_real_snapshot"
+    else:
+        item["theme_fund_flow_summary"] = "当前真实板块快照未匹配该股题材；不据此生成热力或洗盘结论。"
+        item["theme_sector_match_status"] = "no_match"
 
 
 @app.get("/api/timeline/{symbol}")
@@ -2122,6 +2284,7 @@ def _build_auto_trading_config(
         "cooldown_days": int(_as_float(risk_in.get("cooldown_days"), 2.0)),
     }
     score_weights = {
+        "screening": _as_float(score_in.get("screening"), 0.30),
         "technical": _as_float(score_in.get("technical"), 0.30),
         "fundamental": _as_float(score_in.get("fundamental"), 0.22),
         "information": _as_float(score_in.get("information"), 0.20),
@@ -2184,7 +2347,7 @@ def _build_auto_trading_config(
         "data_requirements": data_requirements,
         "interval_seconds": max(0, min(60, int(_as_float(merged.get("interval_seconds"), 15.0)))),
         "initial_cash": _as_float(merged.get("initial_cash"), 100000.0),
-        "reset_account": _as_bool(merged.get("reset_account"), True),
+        "reset_account": _as_bool(merged.get("reset_account"), False),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "source_page": str(merged.get("source_page") or "auto-trading"),
         "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
@@ -2410,6 +2573,11 @@ def market_sector_mainline(limit: int = 20, include_concept: bool = True, force:
 @app.get("/api/market/sectors/history")
 def market_sector_history(days: int = 10, limit: int = 20) -> dict:
     return sector_mainline_service.history(days=days, limit=limit)
+
+
+@app.get("/api/market/sectors/intraday")
+def market_sector_intraday(session_date: str = "", limit: int = 120) -> dict:
+    return sector_mainline_service.intraday_history(session_date=session_date, limit=limit)
 
 
 @app.get("/api/market-rules/profiles")
@@ -3750,68 +3918,83 @@ def realtime_paper_stop() -> dict:
 @app.get("/api/realtime-paper/status")
 def realtime_paper_status() -> dict:
     realtime_paper_engine_v323.sync_engine_state()
-    data = realtime_paper_engine_v321.status()
-    data["v323_session"] = realtime_paper_engine_v323.active_session()
-    return data
+    return realtime_paper_engine_v323.status()
 
 
 @app.get("/api/realtime-paper/portfolio")
 def realtime_paper_portfolio() -> dict:
     realtime_paper_engine_v323.sync_engine_state()
-    data = realtime_paper_engine_v321.portfolio()
+    data = realtime_paper_engine_v323.portfolio()
     data["v323_session"] = realtime_paper_engine_v323.active_session()
     return data
 
 
 @app.get("/api/realtime-paper/orders")
 def realtime_paper_orders(limit: int = 200) -> dict:
-    realtime_paper_engine_v323.sync_engine_state()
-    return realtime_paper_engine_v321.orders(limit=max(1, min(int(limit or 200), 1000)))
+    sid = realtime_paper_engine_v323.active_session_id
+    rows = realtime_paper_engine_v323.stored_orders(sid, limit=max(1, min(int(limit or 200), 1000))) if sid else []
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": sid}
 
 
 @app.get("/api/realtime-paper/signals")
 def realtime_paper_signals(limit: int = 200) -> dict:
-    realtime_paper_engine_v323.sync_engine_state()
-    return realtime_paper_engine_v321.signal_rows(limit=max(1, min(int(limit or 200), 1000)))
+    sid = realtime_paper_engine_v323.active_session_id
+    rows = realtime_paper_engine_v323.stored_signals(sid, limit=max(1, min(int(limit or 200), 1000))) if sid else []
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": sid}
 
 
 @app.get("/api/realtime-paper/audit")
 def realtime_paper_audit(limit: int = 300) -> dict:
-    realtime_paper_engine_v323.sync_engine_state()
-    return realtime_paper_engine_v321.audit(limit=max(1, min(int(limit or 300), 1000)))
+    sid = realtime_paper_engine_v323.active_session_id
+    rows = realtime_paper_engine_v323.stored_audit(sid, limit=max(1, min(int(limit or 300), 1000))) if sid else []
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": sid}
 
 
 @app.get("/api/realtime-paper/confirmations")
 def realtime_paper_confirmations(status: str = "pending", limit: int = 200) -> dict:
-    rows = realtime_paper_engine_v321.human_confirm_queue.list(
+    size = max(1, min(int(limit or 200), 1000))
+    rows = realtime_paper_engine_v323.confirmations().list(
         status=status or None,
-        limit=max(1, min(int(limit or 200), 1000)),
+        limit=size,
     )
+    legacy_rows = realtime_paper_engine_v321.human_confirm_queue.list(status=status or None, limit=size)
+    by_id = {str(row.get("task_id") or ""): row for row in [*rows, *legacy_rows]}
+    rows = list(by_id.values())[:size]
     return {"ok": True, "data": rows, "count": len(rows), "paper_only": True}
 
 
 @app.post("/api/realtime-paper/confirmations/{task_id}/approve")
 def realtime_paper_confirm_approve(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    operator = str(payload.get("operator") or "paper_user")
     try:
-        task = realtime_paper_engine_v321.human_confirm_queue.approve(
+        task = realtime_paper_engine_v323.confirmations().approve(
             task_id,
-            operator=str(payload.get("operator") or "paper_user"),
+            operator=operator,
         )
         return {"ok": True, "data": task.to_dict(), "paper_only": True}
-    except KeyError as exc:
-        return {"ok": False, "message": str(exc), "paper_only": True}
+    except KeyError:
+        try:
+            task = realtime_paper_engine_v321.human_confirm_queue.approve(task_id, operator=operator)
+            return {"ok": True, "data": task.to_dict(), "paper_only": True, "legacy_queue": True}
+        except KeyError as exc:
+            return {"ok": False, "message": str(exc), "paper_only": True}
 
 
 @app.post("/api/realtime-paper/confirmations/{task_id}/reject")
 def realtime_paper_confirm_reject(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    operator = str(payload.get("operator") or "paper_user")
     try:
-        task = realtime_paper_engine_v321.human_confirm_queue.reject(
+        task = realtime_paper_engine_v323.confirmations().reject(
             task_id,
-            operator=str(payload.get("operator") or "paper_user"),
+            operator=operator,
         )
         return {"ok": True, "data": task.to_dict(), "paper_only": True}
-    except KeyError as exc:
-        return {"ok": False, "message": str(exc), "paper_only": True}
+    except KeyError:
+        try:
+            task = realtime_paper_engine_v321.human_confirm_queue.reject(task_id, operator=operator)
+            return {"ok": True, "data": task.to_dict(), "paper_only": True, "legacy_queue": True}
+        except KeyError as exc:
+            return {"ok": False, "message": str(exc), "paper_only": True}
 
 
 def _payload_has_trade_price(payload: dict) -> bool:
@@ -3936,6 +4119,10 @@ def auto_trading_readiness_get() -> dict:
 @app.post("/api/auto-trading/start-paper")
 def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict:
     config = _build_auto_trading_config(payload)
+    # Keep legacy API calls isolated when they omit the flag. The workbench
+    # always sends an explicit false unless the user requests a reset.
+    reset_requested = _as_bool(payload.get("reset_account"), True)
+    config["reset_account"] = reset_requested
     saved = _save_auto_trading_config(config, event_type="auto_trading_start_paper_config")
     session_payload = {
         **payload,
@@ -3945,9 +4132,14 @@ def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict
         "selected_strategies": config.get("strategy_combo") or [],
         "interval_seconds": int(config.get("interval_seconds") or 15),
         "initial_cash": float(config.get("initial_cash") or 100000),
+        "reset_account": reset_requested,
         "source_page": "auto-trading",
     }
-    session = realtime_paper_engine_v323.start_session(session_payload)
+    active = realtime_paper_engine_v323.active_session()
+    if active and active.get("status") in {"running", "paused"} and not reset_requested:
+        session = realtime_paper_engine_v323.update_active_session(session_payload)
+    else:
+        session = realtime_paper_engine_v323.start_session(session_payload)
     session_id = str((session.get("session") or {}).get("session_id") or "")
     trading_store_v323.put(
         "audit_events",
@@ -3956,6 +4148,8 @@ def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict
             "config": config,
             "session": session.get("session"),
             "engine": session.get("engine"),
+            "reused_session": bool(session.get("reused_session")),
+            "account_preserved": bool(session.get("account_preserved")),
             "created_at": datetime.now().isoformat(timespec="seconds"),
         },
         mode="realtime_paper",
@@ -3967,6 +4161,9 @@ def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict
         "config": config,
         "session": session.get("session"),
         "engine": session.get("engine"),
+        "reused_session": bool(session.get("reused_session")),
+        "account_preserved": bool(session.get("account_preserved")),
+        "warning": session.get("warning") or "",
         "saved": saved.get("cache_status"),
         "readiness": _auto_trading_readiness(config),
     }
@@ -3987,7 +4184,7 @@ def realtime_paper_session_get(session_id: str) -> dict:
     session = realtime_paper_engine_v323.get_session(session_id)
     if session:
         realtime_paper_engine_v323.sync_engine_state(session_id)
-    return {"ok": bool(session), "data": session, "engine": realtime_paper_engine_v321.status() if session else None}
+    return {"ok": bool(session), "data": session, "engine": realtime_paper_engine_v323.status(session_id) if session else None}
 
 
 @app.post("/api/realtime-paper/sessions/{session_id}/pause")
@@ -4024,9 +4221,66 @@ def realtime_paper_session_fills(session_id: str, limit: int = 200) -> dict:
 
 @app.get("/api/realtime-paper/sessions/{session_id}/positions")
 def realtime_paper_session_positions(session_id: str) -> dict:
-    data = realtime_paper_engine_v321.portfolio()
+    data = realtime_paper_engine_v323.portfolio(session_id)
     stored = realtime_paper_engine_v323.stored_positions(session_id)
-    return {"ok": True, "data": (stored[0] if stored else {}), "curve": data.get("curve") or [], "session_id": session_id}
+    payload = stored[0] if stored else {}
+    snapshot = dict(payload.get("snapshot") or data.get("data") or {})
+    positions = list(payload.get("positions") or [])
+    position_cost_value = 0.0
+    position_market_value = 0.0
+    for row in positions:
+        quantity = _as_float(row.get("quantity") or row.get("qty"), 0.0)
+        avg_cost = _as_float(row.get("avg_cost") or row.get("cost_price") or row.get("avg_price"), 0.0)
+        market_price = _as_float(row.get("market_price") or row.get("last_price") or avg_cost, avg_cost)
+        market_value = _as_float(row.get("market_value"), quantity * market_price)
+        row["cost_value"] = round(quantity * avg_cost, 4)
+        row["market_value"] = round(market_value, 4)
+        row["unrealized_pnl"] = round(
+            _as_float(row.get("unrealized_pnl"), market_value - quantity * avg_cost),
+            4,
+        )
+        row["unrealized_pnl_pct"] = round(
+            row["unrealized_pnl"] / row["cost_value"] * 100 if row["cost_value"] else 0.0,
+            4,
+        )
+        position_cost_value += row["cost_value"]
+        position_market_value += row["market_value"]
+
+    fill_rows = realtime_paper_engine_v323.store.list(
+        "fills", mode="realtime_paper", session_id=session_id, limit=5000
+    )
+    buy_amount = sum(
+        _as_float(row.get("amount"), _as_float(row.get("price"), 0.0) * _as_float(row.get("quantity"), 0.0))
+        for row in fill_rows
+        if str(row.get("side") or "").lower() == "buy"
+    )
+    sell_amount = sum(
+        _as_float(row.get("amount"), _as_float(row.get("price"), 0.0) * _as_float(row.get("quantity"), 0.0))
+        for row in fill_rows
+        if str(row.get("side") or "").lower() == "sell"
+    )
+    summary = {
+        "initial_cash": round(_as_float(snapshot.get("initial_cash"), 0.0), 4),
+        "cash": round(_as_float(snapshot.get("cash") or snapshot.get("available_cash"), 0.0), 4),
+        "equity": round(_as_float(snapshot.get("equity"), position_market_value), 4),
+        "position_count": len(positions),
+        "position_cost_value": round(position_cost_value, 4),
+        "position_market_value": round(position_market_value, 4),
+        "realized_pnl": round(_as_float(snapshot.get("realized_pnl"), 0.0), 4),
+        "unrealized_pnl": round(_as_float(snapshot.get("unrealized_pnl"), position_market_value - position_cost_value), 4),
+        "total_return_pct": round(_as_float(snapshot.get("total_return_pct"), 0.0), 4),
+        "fill_count": len(fill_rows),
+        "buy_amount": round(buy_amount, 4),
+        "sell_amount": round(sell_amount, 4),
+        "turnover_amount": round(buy_amount + sell_amount, 4),
+    }
+    return {
+        "ok": True,
+        "data": {"snapshot": snapshot, "positions": positions},
+        "summary": summary,
+        "curve": data.get("curve") or [],
+        "session_id": session_id,
+    }
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/markers")
@@ -4575,6 +4829,26 @@ def screener_run(
     result = screener_service.run(config)
     for item in result.get("data", []) or []:
         _merge_screener_item_quote_metrics(item, force=force_quotes)
+    try:
+        sector_context = sector_mainline_service.snapshot(
+            limit=80,
+            include_concept=True,
+            force=False,
+            allow_network=False,
+            can_refresh=False,
+            session_label="筛选复用板块快照",
+        )
+    except Exception:
+        sector_context = {"items": []}
+    for item in result.get("data", []) or []:
+        _attach_screener_sector_context(item, sector_context)
+    result["sector_context"] = {
+        "snapshot_id": (sector_context.get("cache_status") or {}).get("snapshot_id"),
+        "updated_at": sector_context.get("updated_at"),
+        "quality_status": sector_context.get("quality_status"),
+        "source_name": sector_context.get("source_name"),
+        "note": "题材与板块资金只复用已保存快照，不阻塞筛选主流程。",
+    }
     selected_strategies = [x.strip() for x in str(strategies or "").split(",") if x.strip()]
     result["selected_strategies"] = selected_strategies
     snapshot_id = _make_snapshot_id("screener", info_limit if enable_news else None)
@@ -4595,13 +4869,97 @@ def screener_run(
             calc_info_weight = max(0.05, min(float(info_weight), 0.65))
         result["info_weight"] = calc_info_weight
         result["info_limit"] = info_limit
-        for item in result.get("data", [])[: min(20, len(result.get("data", [])))]:
+        info_targets = result.get("data", [])[: min(20, len(result.get("data", [])))]
+        background_refresh_symbols = {str(item.get("symbol") or "") for item in info_targets[:8]}
+        info_futures: dict[str, Any] = {}
+
+        def _load_candidate_info(candidate: dict) -> tuple[dict, dict, str]:
+            candidate_symbol = str(candidate.get("symbol") or "")
+            cached_info = cache_state_service.latest_info_snapshot(candidate_symbol)
+            cached_payload = dict(cached_info.data or {})
+            reusable = bool(
+                cached_payload
+                and not cached_info.cache_status.get("stale")
+                and (
+                    cached_payload.get("items")
+                    or cached_payload.get("global_items")
+                    or cached_payload.get("industry_mapped_items")
+                    or cached_payload.get("source_logs")
+                )
+            )
+            if reusable:
+                analysis = cached_payload
+                load_mode = "info_snapshot_hit"
+            else:
+                # The synchronous screener path is cache-only and therefore safe
+                # to reuse the canonical analysis service. Network refresh runs in
+                # the isolated background job below.
+                analysis = info_analysis_service.analyze(
+                    candidate_symbol,
+                    name=candidate.get("name"),
+                    limit=info_limit,
+                    force=False,
+                    mode="light",
+                    allow_network=False,
+                )
+                load_mode = "local_cache_background_refresh"
+                if candidate_symbol in background_refresh_symbols:
+                    def refresh_candidate_info() -> None:
+                        refresh_news = NewsAnalysisService(
+                            cache_file=news_service.cache_file,
+                            cache_ttl_seconds=news_service.cache_ttl_seconds,
+                        )
+                        refresh_service = InfoAnalysisService(service, refresh_news)
+                        refreshed = refresh_service.analyze(
+                            candidate_symbol,
+                            name=candidate.get("name"),
+                            limit=info_limit,
+                            force=True,
+                            mode="light",
+                            allow_network=True,
+                        )
+                        local_profile = company_profile_service.get_profile(
+                            candidate_symbol, force=False, local_only=True
+                        )
+                        if not (local_profile.get("business_tags") or local_profile.get("industry")):
+                            try:
+                                local_profile = company_profile_service.get_profile(candidate_symbol, force=True)
+                            except Exception as exc:
+                                local_profile = {
+                                    **local_profile,
+                                    "quality_status": "profile_refresh_failed",
+                                    "missing_reasons": [f"公司画像后台刷新失败：{str(exc)[:120]}"],
+                                }
+                        refreshed["company_profile"] = local_profile
+                        refresh_id = f"background-{int(time_module.time())}-{candidate_symbol}"
+                        normalized = _normalize_info_payload(
+                            refreshed,
+                            candidate_symbol,
+                            candidate.get("name"),
+                            refresh_id,
+                            cache_state_service.status("refreshed", key=refresh_id, source="background_official_info"),
+                            used_snapshot=False,
+                            mode="light",
+                        )
+                        cache_state_service.save_info_snapshot(refresh_id, candidate_symbol, normalized, mode="light")
+
+                    _submit_background_job(f"screener-info:{candidate_symbol}", refresh_candidate_info)
+            profile = analysis.get("company_profile") or company_profile_service.get_profile(candidate_symbol, force=False, local_only=True)
+            return analysis, profile, load_mode
+
+        info_executor = ThreadPoolExecutor(max_workers=min(4, len(info_targets))) if info_targets else None
+        if info_executor is not None:
+            for candidate in info_targets:
+                sym = str(candidate.get("symbol") or "")
+                info_futures[sym] = info_executor.submit(_load_candidate_info, candidate)
+
+        for item in info_targets:
             try:
                 # V3.0：默认对候选股抓取/复用更多中文信息。limit 是聚合样本上限，不等于前端展示条数。
                 item_snapshot_id = f"{snapshot_id}-{item.get('symbol','')}"
-                ir = info_analysis_service.analyze(item.get("symbol", ""), name=item.get("name"), limit=info_limit, force=False, mode="light")
-                profile = company_profile_service.get_profile(item.get("symbol", ""), force=False)
+                ir, profile, info_load_mode = info_futures[str(item.get("symbol") or "")].result()
                 ir["snapshot_id"] = item_snapshot_id
+                ir["screener_info_load_mode"] = info_load_mode
                 nr = ir.get("news", {})
                 if isinstance(nr, dict):
                     nr["snapshot_id"] = item_snapshot_id
@@ -4731,6 +5089,8 @@ def screener_run(
                 item["info_unique_event_count"] = 0
                 item["info"] = {"error": str(exc)[:180], "info_score": None, "snapshot_id": item_snapshot_id, "detail_url": detail_url}
                 item["news"] = {"snapshot_id": item_snapshot_id, "detail_url": detail_url, "count": 0, "summary": "信息面 light 快照为空，详情页会显示错误原因而不自动重抓。"}
+        if info_executor is not None:
+            info_executor.shutdown(wait=False, cancel_futures=False)
         result["news_analyzed_count"] = info_count
         result["info_analyzed_count"] = info_count
         result["news_note"] = f"已对筛选结果前20只候选股进行信息面评分；抓取上限={info_limit}，融合权重={calc_info_weight:.0%}，snapshot_id={snapshot_id}。V3.18.3 筛选页可恢复快照，新闻长列表进入信息面详情；清洗页头/页脚/JS脏数据，按事件簇去重，并区分 publish_time/event_time/crawl_time。"
@@ -5200,7 +5560,10 @@ def screener_realtime_paper_start(payload: dict = Body(default_factory=dict)) ->
         "horizon": payload.get("horizon", "intraday_paper"),
         "strategy": payload.get("strategy", "three_dimension_score"),
     }
-    data = realtime_paper_engine_v321.start(start_payload)
+    started = realtime_paper_engine_v323.start_session(start_payload)
+    data = dict(started.get("engine") or {})
+    data["v323_session"] = started.get("session")
+    data["session_id"] = (started.get("session") or {}).get("session_id")
     data["symbols"] = symbols
     data["message"] = "已用当前筛选结果启动盘中实时模拟"
     return data

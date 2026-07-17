@@ -10,9 +10,15 @@ def test_auto_trading_workbench_page_visible():
     assert "首页总览 + 右侧覆盖模块" in html
     assert "交易工作流" in html
     assert "联网智能辅助" in html
-    assert "主线板块 · 每日资金流与强度" in html
+    assert "主线板块 · 日内资金轮动与近期强度" in html
+    assert "近15分" in html
+    assert "近5分钟" in html
+    assert "近60分" in html
+    assert "setSectorWindow" in html
+    assert "近5日净流" in html
+    assert "资金回流" in html
     assert "/api/market/sectors/mainline" in html
-    assert "公开板块资金" in html
+    assert "公开资金净流" in html
     assert "宏观事件" not in html or "/api/macro/global-events" in html
     assert "paperControl" in html
     assert "strategySelectedSummary" in html
@@ -21,6 +27,8 @@ def test_auto_trading_workbench_page_visible():
     assert "collectStrategyParamEditor" in html
     assert "maxDrawdownPct" in html
     assert "reset_account" in html
+    assert "强制新建模拟账户（清空当前持仓与成交）" in html
+    assert "已恢复当前模拟账户" in html
     assert "runConfigBacktest" in html
     assert "quote_hydrate_request" in html
     assert "/api/live-broker/status" in html
@@ -61,6 +69,10 @@ def test_auto_trading_workbench_page_visible():
     assert "portfolioOverview" in html
     assert "recordOverviewRows" in html
     assert "renderPortfolioOverview" in html
+    assert "当前模拟账户" in html
+    assert "持仓成本" in html
+    assert "总成交额" in html
+    assert "latestPaperPortfolio" in html
     assert "/api/live/account" in html
     assert "/api/live/positions" in html
     assert "/api/live/orders/preview-batch" in html
@@ -79,6 +91,11 @@ def test_auto_trading_workbench_page_visible():
     assert "impactNoteOf(x)" in html
     assert "startGlobalStreamLoop" in html
     assert "暂停轮播" in html
+    assert 'id="actionToast"' in html
+    assert "showActionToast" in html
+    assert "Promise.allSettled" in html
+    assert "核心状态已更新" in html
+    assert "总控台已更新" in html
 
 
 def test_auto_trading_workbench_uses_single_right_overlay_iframe():

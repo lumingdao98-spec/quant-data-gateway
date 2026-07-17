@@ -106,6 +106,11 @@ def test_missing_explicit_snapshot_does_not_auto_refresh(monkeypatch):
 def test_screener_returns_info_snapshot_fields(monkeypatch):
     store = MemorySnapshotStore()
     monkeypatch.setattr(api.news_service, "store", store)
+    monkeypatch.setattr(
+        api.cache_state_service,
+        "latest_info_snapshot",
+        lambda symbol: SimpleNamespace(data=None, cache_status={"status": "miss", "stale": False}),
+    )
     monkeypatch.setattr(api.company_profile_service, "get_profile", lambda *a, **k: {"name": "隆基绿能"})
     monkeypatch.setattr(api.score_history_service, "save_results", lambda data, mode="balanced": len(data))
 

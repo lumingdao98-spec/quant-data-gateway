@@ -26,22 +26,46 @@ class InfoAnalysisService:
         self.company_profile_service = CompanyProfileService()
         self.global_mapper = GlobalIndustryMapper()
 
-    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "normal", deep_refresh: bool = False) -> dict[str, Any]:
+    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "normal", deep_refresh: bool = False, allow_network: bool = True) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
         mode_raw = str(mode or "normal").lower()
         mode = "deep" if deep_refresh or mode_raw in {"deep", "deep_refresh", "full"} else "light" if mode_raw == "light" else "normal"
         quote: Quote | None = None
-        try:
-            quote = self.market_data.get_quote(symbol, force_refresh=force)
-        except Exception:
-            quote = None
+        # The screening path already owns quote/technical scoring. Re-fetching
+        # the quote here added several seconds per candidate and duplicated
+        # public endpoint traffic, so light mode remains news/profile-only.
+        if mode != "light":
+            try:
+                quote = self.market_data.get_quote(symbol, force_refresh=force)
+            except Exception:
+                quote = None
         qname = name or (quote.name if quote else symbol)
-        news = self.news_service.analyze(symbol, name=qname, limit=limit, force=force or deep_refresh, mode=mode, budget_seconds=8.0 if mode == "deep" else 5.0 if mode == "normal" else 4.0)
+        news = self.news_service.analyze(
+            symbol,
+            name=qname,
+            limit=limit,
+            force=force or deep_refresh,
+            mode=mode,
+            budget_seconds=(
+                10.0
+                if mode == "light" and force and allow_network
+                else 8.0
+                if mode == "deep"
+                else 5.0
+                if mode == "normal"
+                else 4.0
+            ),
+            allow_network=allow_network,
+        )
         # 公司画像只在 force=true 或本地缓存过期时主动刷新；全球/国内要闻按短缓存自动刷新。
-        profile = self.company_profile_service.get_profile(symbol, force=force)
+        profile = self.company_profile_service.get_profile(
+            symbol,
+            force=(force and mode != "light"),
+            local_only=(mode == "light"),
+        )
         global_news = self._safe_global_news(force=bool(force or deep_refresh)) if mode in {"normal", "deep"} else {"items": [], "cache_info": {"skipped": "light_mode"}}
         global_mapping = self.global_mapper.map_items((global_news or {}).get("items", []), symbol, name=qname, profile=profile)
-        finance = self._finance_snapshot(symbol, quote)
+        finance = self._finance_snapshot(symbol, quote, allow_network=allow_network and mode != "light")
         policy = self._policy_summary(news, qname, symbol, global_news=global_news, profile=profile)
         policy["industry_mapped_items"] = global_mapping.get("industry_mapped_items", [])
         policy["mapped_industries"] = global_mapping.get("mapped_industries", [])
@@ -139,7 +163,7 @@ class InfoAnalysisService:
         except Exception as exc:
             return {"items": [], "error": str(exc)[:160]}
 
-    def _finance_snapshot(self, symbol: str, q: Quote | None) -> dict[str, Any]:
+    def _finance_snapshot(self, symbol: str, q: Quote | None, allow_network: bool = True) -> dict[str, Any]:
         qd: dict[str, Any] = {}
         if q is not None:
             qd = q.to_dict()
@@ -171,7 +195,10 @@ class InfoAnalysisService:
                 score += 5; tags.append("成交额较活跃")
             elif amount and amount < 30_000_000:
                 score -= 6; risks.append("成交额偏低")
-        ak = self._try_akshare_financial(symbol)
+        ak = self._try_akshare_financial(symbol) if allow_network else {
+            "available": False,
+            "missing_reason": "轻量筛选复用已有基本面评分，不重复请求财务接口",
+        }
         if ak.get("available"):
             # 如果可获得 AKShare 财务摘要，使用最近一期增长指标修正评分。
             if ak.get("profit_growth") is not None:

@@ -402,7 +402,7 @@ def test_realtime_paper_event_watch_blocks_major_negative_news_buy():
     assert tick["orders"] == []
 
 
-def test_auto_trading_start_paper_resets_account_by_default():
+def test_auto_trading_start_paper_resets_account_when_explicitly_requested():
     client = TestClient(api.app)
     payload = {
         "rows": [{"symbol": "300750", "total_score": 78, "technical_score": 84, "fundamental_score": 72, "information_score": 68, "market_score": 62}],
@@ -410,7 +410,7 @@ def test_auto_trading_start_paper_resets_account_by_default():
         "strategy_combo": ["score_driven"],
         "initial_cash": 100000,
     }
-    first = client.post("/api/auto-trading/start-paper", json=payload).json()
+    first = client.post("/api/auto-trading/start-paper", json={**payload, "reset_account": True}).json()
     first_session_id = first["session"]["session_id"]
     client.post(
         "/api/realtime-paper/tick",
@@ -424,13 +424,56 @@ def test_auto_trading_start_paper_resets_account_by_default():
         },
     )
 
-    second = client.post("/api/auto-trading/start-paper", json={**payload, "initial_cash": 50000}).json()
+    second = client.post(
+        "/api/auto-trading/start-paper",
+        json={**payload, "initial_cash": 50000, "reset_account": True},
+    ).json()
     second_session_id = second["session"]["session_id"]
     positions = client.get(f"/api/realtime-paper/sessions/{second_session_id}/positions").json()
 
     assert positions["ok"] is True
     assert positions["data"]["snapshot"]["cash"] == 50000.0
     assert positions["data"]["snapshot"]["positions"] == {}
+
+
+def test_auto_trading_repeated_start_preserves_active_account_and_positions():
+    from quant_data.trading.paper_account import PaperFill
+
+    client = TestClient(api.app)
+    payload = {
+        "symbols": ["600438"],
+        "strategy_combo": ["score_driven"],
+        "initial_cash": 100000,
+        "reset_account": True,
+    }
+    first = client.post("/api/auto-trading/start-paper", json=payload).json()
+    session_id = first["session"]["session_id"]
+    account = api.realtime_paper_engine_v323.engines[session_id].account
+    account.apply_fill(
+        PaperFill(
+            order_id="preserved-buy",
+            symbol="600438",
+            side="buy",
+            quantity=100,
+            price=12.0,
+            amount=1200.0,
+            fee=1.0,
+        )
+    )
+    api.realtime_paper_engine_v323.sync_engine_state(session_id)
+
+    repeated = client.post(
+        "/api/auto-trading/start-paper",
+        json={**payload, "symbols": ["600438", "510300"], "initial_cash": 50000, "reset_account": False},
+    ).json()
+    positions = client.get(f"/api/realtime-paper/sessions/{session_id}/positions").json()
+
+    assert repeated["session"]["session_id"] == session_id
+    assert repeated["reused_session"] is True
+    assert repeated["account_preserved"] is True
+    assert repeated["session"]["symbols"] == ["600438", "510300"]
+    assert positions["data"]["snapshot"]["initial_cash"] == 100000.0
+    assert positions["data"]["snapshot"]["positions"]["600438"]["quantity"] == 100
 
 
 def _v323_bars(symbol: str = "399992", count: int = 90) -> list[dict]:

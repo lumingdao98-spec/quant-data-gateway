@@ -20,6 +20,7 @@ DEFAULT_TTLS = {
     "global_news_cache": 45 * 60,
     "sector_mainline_cache": 2 * 60,
     "sector_mainline_daily": 45 * 24 * 60 * 60,
+    "sector_mainline_intraday": 14 * 24 * 60 * 60,
     "auto_trading_config": 7 * 24 * 60 * 60,
 }
 
@@ -179,6 +180,32 @@ class CacheStateService:
             self._record_event(kind, "", "read", "miss", "latest_not_found", "cache_state")
             return CacheRead(None, self.status("miss", ttl_seconds=self.ttl_for(kind, ttl_seconds), source="cache_state"))
         return self.get(kind, row["key"], allow_stale=allow_stale, ttl_seconds=ttl_seconds)
+
+    def list_kind(self, kind: str, *, symbol: str = "", limit: int = 200) -> list[dict[str, Any]]:
+        """Read recent snapshots without emitting one cache event per row."""
+        sql = "SELECT key,symbol,created_at,updated_at,ttl_seconds,source,payload FROM cache_state WHERE kind=?"
+        params: list[Any] = [kind]
+        if symbol:
+            sql += " AND symbol=?"
+            params.append(symbol)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 200), 2000)))
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        result: list[dict[str, Any]] = []
+        now = time.time()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except Exception:
+                continue
+            payload["_cache_key"] = str(row["key"] or "")
+            payload["_cache_symbol"] = str(row["symbol"] or "")
+            payload["_cache_updated_at"] = datetime.fromtimestamp(float(row["updated_at"])).isoformat(timespec="seconds")
+            payload["_cache_stale"] = now - float(row["created_at"]) > int(row["ttl_seconds"] or 0)
+            payload["_cache_source"] = str(row["source"] or "")
+            result.append(payload)
+        return result
 
     def clear(self, kind: str | None = None, key: str | None = None, symbol: str | None = None) -> int:
         sql = "DELETE FROM cache_state"

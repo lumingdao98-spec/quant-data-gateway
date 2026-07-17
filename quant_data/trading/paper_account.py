@@ -54,6 +54,72 @@ class PaperAccount:
         self.equity_high = float(initial_cash)
         self.fills: list[PaperFill] = []
 
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: dict[str, Any] | None,
+        *,
+        fills: list[dict[str, Any]] | None = None,
+    ) -> "PaperAccount":
+        """Restore one paper account without replaying historical fills.
+
+        Account snapshots are authoritative for cash and positions. Replaying
+        fills here would debit cash twice after a service restart.
+        """
+
+        data = dict(snapshot or {})
+        account = cls(
+            initial_cash=_float(data.get("initial_cash"), 100_000.0),
+            account_mode=str(data.get("account_mode") or "hybrid"),
+        )
+        account.cash = _float(data.get("cash"), account.initial_cash)
+        account.frozen_cash = _float(data.get("frozen_cash"), 0.0)
+        account.realized_pnl = _float(data.get("realized_pnl"), 0.0)
+        account.unrealized_pnl = _float(data.get("unrealized_pnl"), 0.0)
+        account.daily_pnl = _float(data.get("daily_pnl"), 0.0)
+        account.max_drawdown = _float(data.get("max_drawdown"), 0.0)
+        account.trade_count_today = int(_float(data.get("trade_count_today"), 0.0))
+        account.win_loss_streak = int(_float(data.get("win_loss_streak"), 0.0))
+        positions = data.get("positions") if isinstance(data.get("positions"), dict) else {}
+        for symbol, raw in positions.items():
+            item = dict(raw or {})
+            qty = int(_float(item.get("quantity"), 0.0))
+            if qty <= 0:
+                continue
+            account.positions[str(symbol)] = PaperAccountPosition(
+                symbol=str(item.get("symbol") or symbol),
+                quantity=qty,
+                available_quantity=int(_float(item.get("available_quantity"), qty)),
+                avg_cost=_float(item.get("avg_cost"), 0.0),
+                market_price=_float(item.get("market_price"), 0.0),
+                market_value=_float(item.get("market_value"), 0.0),
+                realized_pnl=_float(item.get("realized_pnl"), 0.0),
+                unrealized_pnl=_float(item.get("unrealized_pnl"), 0.0),
+                industry=str(item.get("industry") or ""),
+            )
+        account.fills = []
+        for raw in fills or []:
+            item = dict(raw or {})
+            try:
+                account.fills.append(
+                    PaperFill(
+                        order_id=str(item.get("order_id") or ""),
+                        symbol=str(item.get("symbol") or ""),
+                        side=str(item.get("side") or ""),
+                        quantity=int(_float(item.get("quantity"), 0.0)),
+                        price=_float(item.get("price"), 0.0),
+                        amount=_float(item.get("amount"), 0.0),
+                        fee=_float(item.get("fee"), 0.0),
+                        slippage=_float(item.get("slippage"), 0.0),
+                        realized_pnl=_float(item.get("realized_pnl"), 0.0),
+                        created_at=str(item.get("created_at") or item.get("filled_at") or datetime.now().isoformat(timespec="seconds")),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        account.equity_high = max(_float(data.get("equity"), account.equity), account.equity)
+        return account
+
     @property
     def market_value(self) -> float:
         return sum(p.market_value for p in self.positions.values())
@@ -137,3 +203,12 @@ class PaperAccount:
 
     def fills_dicts(self) -> list[dict[str, Any]]:
         return [x.to_dict() for x in self.fills]
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, "", "--"):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)

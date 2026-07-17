@@ -256,10 +256,47 @@ class CompanyProfileService:
             "cache_info": {"hit": False, "store": "sqlite", "ttl_seconds": self.ttl_seconds},
         }
 
-    def get_profile(self, symbol: str, force: bool = False) -> dict[str, Any]:
+    def get_local_profile(self, symbol: str, allow_stale: bool = True) -> dict[str, Any]:
+        """Return the best immediately available profile without network I/O.
+
+        Screening and quote enrichment call this path so a missing PE or an
+        unavailable public endpoint cannot stall the whole stock pool.
+        """
+        code = normalize_symbol(symbol) or str(symbol or "").strip()
+        cached = self._cache.get(code)
+        if cached and time.time() - cached[0] <= self.ttl_seconds:
+            data = json.loads(json.dumps(cached[1], ensure_ascii=False, default=_json_default))
+            data.setdefault("cache_info", {}).update({
+                "hit": True,
+                "store": "memory",
+                "ttl_seconds": self.ttl_seconds,
+                "network_used": False,
+            })
+            return data
+        stored = self._read_store(code, allow_stale=allow_stale)
+        if stored:
+            stored.setdefault("cache_info", {})["network_used"] = False
+            return stored
+
+        profile = self._empty_profile(code)
+        self._enrich_business_profile(profile)
+        self._finalize_summary(profile)
+        profile["quality_status"] = "local_profile" if profile.get("business_tags") else "missing"
+        profile["missing_reasons"] = [] if profile.get("business_tags") else ["本地没有该标的公司画像，需后台刷新公开公司资料"]
+        profile.setdefault("cache_info", {}).update({
+            "hit": False,
+            "store": "built_in_profile",
+            "stale": False,
+            "network_used": False,
+        })
+        return profile
+
+    def get_profile(self, symbol: str, force: bool = False, local_only: bool = False) -> dict[str, Any]:
         code = normalize_symbol(symbol)
         if not code:
             code = str(symbol or "").strip()
+        if local_only:
+            return self.get_local_profile(code, allow_stale=True)
         if not force:
             cached = self._cache.get(code)
             if cached and time.time() - cached[0] <= self.ttl_seconds:
@@ -544,6 +581,7 @@ class CompanyProfileService:
         后续可把这里迁移为 data/company_business_map.json。
         """
         return {
+            "300274": {"name": "阳光电源", "industry": "光伏逆变器/储能", "tags": ["光伏", "逆变器", "储能", "新能源", "充电桩"], "products": ["光伏逆变器", "储能系统", "新能源投资开发", "充电设备"], "upstream": ["功率器件", "电子元件", "电芯"], "downstream": ["光伏电站", "储能电站", "工商业能源"], "segments": ["逆变器", "储能系统", "新能源开发"]},
             "688599": {"name": "天合光能", "industry": "光伏设备/新能源", "tags": ["光伏", "新能源", "组件", "电池片", "储能", "分布式电站"], "products": ["光伏组件", "太阳能电池片", "光伏系统", "储能系统", "智慧能源解决方案"], "upstream": ["硅料", "硅片", "银浆", "玻璃", "EVA胶膜"], "downstream": ["集中式电站", "分布式光伏", "工商业储能", "海外光伏需求"], "segments": ["光伏组件制造", "电池片研发制造", "储能及智慧能源", "光伏电站系统解决方案"]},
             "300750": {"name": "宁德时代", "industry": "动力电池/储能", "tags": ["动力电池", "锂电", "储能", "新能源车", "固态电池"], "products": ["动力电池系统", "储能电池系统", "电池材料", "电池回收"], "upstream": ["锂", "镍", "钴", "隔膜", "电解液", "正负极材料"], "downstream": ["新能源汽车", "储能电站", "海外车企"], "segments": ["动力电池", "储能电池", "电池材料及回收"]},
             "600438": {"name": "通威股份", "industry": "光伏硅料/电池片/农牧", "tags": ["光伏", "硅料", "多晶硅", "电池片", "新能源", "农牧饲料"], "products": ["高纯晶硅", "太阳能电池", "光伏组件", "水产饲料"], "upstream": ["工业硅", "电力", "硅片"], "downstream": ["光伏组件", "新能源电站", "水产养殖"], "segments": ["高纯晶硅", "太阳能电池", "组件", "农牧饲料"]},
@@ -552,6 +590,10 @@ class CompanyProfileService:
             "600519": {"name": "贵州茅台", "industry": "白酒/食品饮料", "tags": ["白酒", "高端消费", "食品饮料", "消费升级"], "products": ["茅台酒", "系列酒"], "upstream": ["高粱", "小麦", "包装材料"], "downstream": ["经销商", "直销渠道", "宴请/礼赠消费"], "segments": ["高端白酒", "系列酒"]},
             "000858": {"name": "五粮液", "industry": "白酒/食品饮料", "tags": ["白酒", "高端消费", "食品饮料"], "products": ["五粮液酒", "系列酒"], "upstream": ["粮食", "包装材料"], "downstream": ["经销商", "团购", "宴请消费"], "segments": ["高端白酒", "系列酒"]},
             "300059": {"name": "东方财富", "industry": "互联网券商/金融信息服务", "tags": ["券商", "金融科技", "基金销售", "互联网金融", "证券信息服务"], "products": ["证券经纪", "基金销售", "金融数据终端", "财富管理"], "upstream": ["行情数据", "交易所服务", "金融牌照"], "downstream": ["个人投资者", "机构客户", "基金公司"], "segments": ["证券服务", "金融电子商务服务", "金融数据服务"]},
+            "000001": {"name": "平安银行", "industry": "银行", "tags": ["银行", "大金融", "零售银行", "中特估"], "products": ["公司金融", "零售金融", "资金同业"], "upstream": ["存款", "同业资金"], "downstream": ["企业融资", "居民信贷", "财富管理"], "segments": ["商业银行"]},
+            "159915": {"name": "创业板ETF", "industry": "创业板指数ETF", "tags": ["ETF", "创业板", "成长风格"], "products": ["指数基金"], "upstream": [], "downstream": [], "segments": ["创业板指数跟踪"]},
+            "510300": {"name": "沪深300ETF", "industry": "沪深300指数ETF", "tags": ["ETF", "沪深300", "核心资产"], "products": ["指数基金"], "upstream": [], "downstream": [], "segments": ["沪深300指数跟踪"]},
+            "512100": {"name": "中证1000ETF", "industry": "中证1000指数ETF", "tags": ["ETF", "中证1000", "小盘风格"], "products": ["指数基金"], "upstream": [], "downstream": [], "segments": ["中证1000指数跟踪"]},
         }
 
     def _infer_business_from_text(self, profile: dict[str, Any]) -> dict[str, list[str]]:
@@ -565,7 +607,9 @@ class CompanyProfileService:
             "医药医疗": ["医药", "创新药", "医疗器械", "疫苗", "CXO"],
             "白酒消费": ["白酒", "食品", "饮料", "消费"],
             "资源能源": ["煤炭", "原油", "天然气", "黄金", "有色", "铜", "铝", "锂"],
-            "金融地产": ["银行", "证券", "保险", "地产", "房地产", "家居", "建材"],
+            "大金融": ["银行", "证券", "保险", "金融服务"],
+            "地产基建": ["地产", "房地产", "家居", "建材", "建筑", "水泥"],
+            "农业养殖": ["农业", "饲料", "养殖", "种业", "农产品"],
         }
         tags = [k for k, words in rules.items() if any(w in text for w in words)]
         products = []
@@ -589,6 +633,7 @@ class CompanyProfileService:
             self._mark(profile, "内置主营业务画像", "ok", 1)
         inferred = self._infer_business_from_text(profile)
         profile["business_tags"] = list(dict.fromkeys((profile.get("business_tags") or []) + inferred.get("tags", [])))[:16]
+        profile["tags"] = list(profile["business_tags"])
         profile["main_products"] = list(dict.fromkeys((profile.get("main_products") or []) + inferred.get("products", [])))[:20]
         exposure_parts = []
         for k in ["name", "company_name", "industry", "main_business", "business_scope"]:

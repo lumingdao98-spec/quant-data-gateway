@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, unquote
 
@@ -76,6 +77,7 @@ class NewsItem:
 
 
 class NewsAnalysisService:
+    _cache_file_lock = RLock()
     """中文信息面抓取与轻量评分。
 
     V2.6 改进点：
@@ -164,19 +166,24 @@ class NewsAnalysisService:
         self._current_mode: str = "light"
         self._budget_exhausted_recorded: bool = False
 
-    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "light", budget_seconds: float | None = None) -> dict[str, Any]:
+    def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "light", budget_seconds: float | None = None, allow_network: bool = True) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
         name = (name or symbol).strip()
         limit = max(30, min(int(limit or 120), 500))
         mode_raw = str(mode or "light").lower()
         mode = "deep" if mode_raw in {"deep", "deep_refresh", "full"} else "normal" if mode_raw in {"normal", "detail"} else "light"
         if budget_seconds is None:
-            budget_seconds = 8.0 if mode == "deep" else 5.0 if mode == "normal" else 4.0
-        key = f"cn_v318_{mode}:{symbol}:{name}:{limit}"
+            # Cache-only screening never reaches this network budget. A manual
+            # or background force refresh gets enough time for both official
+            # announcement sources instead of persisting a fast empty result.
+            budget_seconds = 10.0 if (mode == "light" and force and allow_network) else 8.0 if mode == "deep" else 5.0 if mode == "normal" else 4.0
+        key = f"cn_v319_{mode}:{symbol}:{name}:{limit}"
         self._log_progress(f"开始信息面分析 {name}({symbol})，抓取上限={limit}，mode={mode}，force={force}")
         if not force:
             cached = self.store.read_analysis(symbol, key, self.cache_ttl_seconds) or self._read_cache(key)
-            if cached:
+            cached_saved_at = float((cached or {}).get("cache_info", {}).get("saved_at_ts") or 0)
+            cached_age = time.time() - cached_saved_at if cached_saved_at else None
+            if cached and (cached.get("items") or (cached_age is not None and cached_age <= 60)):
                 cached.setdefault("cache_info", {"hit": True, "ttl_seconds": self.cache_ttl_seconds})
                 self._log_progress(f"命中信息面缓存 {name}({symbol})，返回缓存结果")
                 return cached
@@ -195,7 +202,10 @@ class NewsAnalysisService:
         self._log_progress(f"历史信息库读取 {len(stored_items)} 条，开始多源抓取")
         stored_valid = self._valid_count_estimate(stored_items, symbol=symbol, name=name)
         items: list[NewsItem] = []
-        if mode == "light" and stored_valid >= 80:
+        light_evidence_target = min(limit, 30)
+        if not allow_network:
+            self._record_source("筛选缓存优先", stored_valid, "仅复用本地真实信息；官方源转为后台刷新", skipped_reason="background_refresh")
+        elif mode == "light" and stored_valid >= light_evidence_target:
             self._record_source("light mode历史库复用", stored_valid, "历史高质量证据已足够，筛选页停止补源")
         else:
             items = self._search_all(query=query, symbol=symbol, name=name, limit=limit, mode=mode)
@@ -244,6 +254,7 @@ class NewsAnalysisService:
             "cache_info": {"hit": False, "store": "sqlite+json", "ttl_seconds": self.cache_ttl_seconds, "reuse_policy": "分析结果默认缓存约30分钟；新闻条目长期写入 data/news_store.sqlite 复用；force=true 将重新抓取并重算标签。"},
             "crawl_mode": mode,
             "crawl_budget_seconds": budget_seconds,
+            "network_used": bool(allow_network),
             "note": "中文公开信息源轻量抓取；新闻/公告持久化保存并可复用；结果受公开接口可用性影响，仅作筛选辅助，关键结论需人工核验公告和财报。",
         }
         self._write_cache(key, result)
@@ -812,7 +823,7 @@ class NewsAnalysisService:
         limit = max(30, min(int(limit or 120), 500))
         mode_raw = str(mode or "light").lower()
         mode = "deep" if mode_raw in {"deep", "deep_refresh", "full"} else "normal" if mode_raw in {"normal", "detail"} else "light"
-        target_valid = 80 if mode == "light" else min(limit, max(70, int(limit * 0.68))) if mode == "deep" else min(limit, 90)
+        target_valid = min(limit, 30) if mode == "light" else min(limit, max(70, int(limit * 0.68))) if mode == "deep" else min(limit, 90)
         per_source = max(30, min(90, int(limit * 0.45)))
         industry_queries = self._industry_queries(symbol, name)
         queries = list(dict.fromkeys([
@@ -825,8 +836,9 @@ class NewsAnalysisService:
             *industry_queries,
         ]))
 
+        official_limit = max(30, per_source) if mode == "light" else max(60, per_source)
         factual_sources = [
-            ("东方财富公告接口", self._search_eastmoney_ann, (symbol, name, max(60, per_source))),
+            ("东方财富公告接口", self._search_eastmoney_ann, (symbol, name, official_limit)),
             ("巨潮公告全文检索", self._search_cninfo_fulltext, (symbol, name, max(70, per_source))),
             ("东方财富F10资讯公告", self._search_eastmoney_hsf10, (symbol, name, max(50, per_source))),
         ]
@@ -845,11 +857,14 @@ class NewsAnalysisService:
                 self._record_source(source_name, len(got), "ok")
             elif not self._source_circuit_open(source_name):
                 self._record_source(source_name, 0, "无有效条目/页面结构可能变化")
+            if mode == "light" and self._valid_count_estimate(items, symbol=symbol, name=name) >= target_valid:
+                self._record_source("light mode官方源短路", len(items), "官方公告已经满足轻量筛选证据量，跳过较慢的后续来源")
+                break
 
         valid_est = self._valid_count_estimate(items, symbol=symbol, name=name)
         self._record_source("有效证据预估", valid_est, f"目标有效证据≈{target_valid}；按清洗准入后条目而不是原始条目判断是否继续补充")
-        if mode == "light" and valid_est >= 80:
-            self._record_source("light mode停止补源", valid_est, "公告/F10/巨潮有效证据已达80，筛选页立即停止补源")
+        if mode == "light" and valid_est >= target_valid:
+            self._record_source("light mode停止补源", valid_est, f"官方公告有效证据已达{target_valid}，筛选页立即停止补源")
             return items[: max(limit * 3, limit)]
 
         # 专业财经媒体/站内源补充：只有当“有效条目”不足才启用；每个源仍走 URL/正文准入，不把搜索页当新闻证据。
@@ -1055,7 +1070,7 @@ class NewsAnalysisService:
         if self._budget_exhausted():
             self._record_budget_exhausted()
             return []
-        timeout = self.source_timeout_seconds
+        timeout = 5.0 if (self._round_budget_seconds or 0) >= 8.0 else self.source_timeout_seconds
         remaining = self._budget_remaining()
         if remaining is not None:
             timeout = max(0.1, min(timeout, remaining))
@@ -1128,7 +1143,7 @@ class NewsAnalysisService:
             try:
                 data = self.http.get(url, params={
                     "sr": "-1", "page_size": str(page_size), "page_index": str(page_index), "ann_type": "A",
-                    "client_source": "web", "stock_list": to_eastmoney_secid(symbol), "f_node": "0", "s_node": "0",
+                    "client_source": "web", "stock_list": normalize_symbol(symbol), "f_node": "0", "s_node": "0",
                 }, headers={"Referer": "https://data.eastmoney.com/"}).json()
             except Exception:
                 break
@@ -1161,9 +1176,9 @@ class NewsAnalysisService:
         for page_num in range(1, max_pages + 1):
             try:
                 data = self.http.get(url, params={
-                    "searchkey": f"{name} {symbol}", "sdate": "", "edate": "", "isfulltext": "false",
+                    "searchkey": normalize_symbol(symbol), "sdate": "", "edate": "", "isfulltext": "false",
                     "sortName": "pubdate", "sortType": "desc", "pageNum": str(page_num), "pageSize": str(page_size),
-                }, headers={"Referer": "http://www.cninfo.com.cn/"}).json()
+                }, headers={"Referer": "https://www.cninfo.com.cn/", "User-Agent": "Mozilla/5.0"}).json()
             except Exception:
                 break
             rows = (data or {}).get("announcements") or (data or {}).get("data") or []
@@ -1689,7 +1704,9 @@ class NewsAnalysisService:
                 "data_quality": {"date_unknown_count": 0, "official_count": 0, "stored_items_used": 0},
             }
         # 社区/论坛不作为核心利多利空证据；高疑似传闻降权但保留在明细里。
-        core_items = [x for x in items if x.source_type != "forum" and x.fake_risk_score < 75] or items
+        eligible_core_items = [x for x in items if x.source_type != "forum" and x.fake_risk_score < 75]
+        core_items = [x for x in eligible_core_items if self._is_current_scoring_item(x)]
+        historical_excluded_count = len(eligible_core_items) - len(core_items)
         # 事件级聚合：同一财报亏损、同一监管事项、多源转载只计一次主权重。
         event_best: dict[str, NewsItem] = {}
         event_counts: dict[str, int] = {}
@@ -1699,23 +1716,30 @@ class NewsAnalysisService:
             prev = event_best.get(key)
             if prev is None or self._item_priority(x) > self._item_priority(prev):
                 event_best[key] = x
-        unique_core = list(event_best.values()) or core_items
+        unique_core = list(event_best.values())
         def w(x: NewsItem) -> float:
             return max(0.18, float(x.event_weight or 1.0))
-        total_w = sum(w(x) for x in unique_core) or 1.0
-        avg_sent = sum(x.sentiment_score * w(x) for x in unique_core) / total_w
-        avg_cred = sum(x.credibility_score * w(x) for x in unique_core) / total_w
-        avg_rel = sum(x.relevance_score * w(x) for x in unique_core) / total_w
-        avg_imp = sum(x.impact_score * w(x) for x in unique_core) / total_w
-        avg_fake = sum(x.fake_risk_score * w(x) for x in unique_core) / total_w
-        weighted_pos = sum(w(x) for x in unique_core if x.sentiment_score >= 58)
-        weighted_neg = sum(w(x) for x in unique_core if x.sentiment_score <= 45 or (x.evidence and any("风险" in e or "亏" in e or "下降" in e or "减持" in e or "问询" in e or "处罚" in e for e in x.evidence)))
-        weighted_neu = max(0.0, total_w - weighted_pos - weighted_neg)
-        pos = sum(1 for x in unique_core if x.sentiment_score >= 58)
-        neg = sum(1 for x in unique_core if x.sentiment_score <= 45 or (x.evidence and any("风险" in e or "亏" in e or "下降" in e or "减持" in e or "问询" in e or "处罚" in e for e in x.evidence)))
-        neu = len(unique_core) - pos - neg
-        # 得分更强调“有事实依据 + 近时效 + 高可信 + 与公司/行业相关”，避免大量搜索标题堆高/打低。
-        score = avg_sent * 0.42 + avg_cred * 0.20 + avg_rel * 0.16 + avg_imp * 0.12 + (100 - avg_fake) * 0.10
+        if unique_core:
+            total_w = sum(w(x) for x in unique_core) or 1.0
+            avg_sent = sum(x.sentiment_score * w(x) for x in unique_core) / total_w
+            avg_cred = sum(x.credibility_score * w(x) for x in unique_core) / total_w
+            avg_rel = sum(x.relevance_score * w(x) for x in unique_core) / total_w
+            avg_imp = sum(x.impact_score * w(x) for x in unique_core) / total_w
+            avg_fake = sum(x.fake_risk_score * w(x) for x in unique_core) / total_w
+            weighted_pos = sum(w(x) for x in unique_core if x.sentiment_score >= 58)
+            weighted_neg = sum(w(x) for x in unique_core if x.sentiment_score <= 45 or (x.evidence and any("风险" in e or "亏" in e or "下降" in e or "减持" in e or "问询" in e or "处罚" in e for e in x.evidence)))
+            weighted_neu = max(0.0, total_w - weighted_pos - weighted_neg)
+            pos = sum(1 for x in unique_core if x.sentiment_score >= 58)
+            neg = sum(1 for x in unique_core if x.sentiment_score <= 45 or (x.evidence and any("风险" in e or "亏" in e or "下降" in e or "减持" in e or "问询" in e or "处罚" in e for e in x.evidence)))
+            neu = len(unique_core) - pos - neg
+            # 当前分只使用近期可核验事件，历史内容仍保留在明细供追溯。
+            score = avg_sent * 0.42 + avg_cred * 0.20 + avg_rel * 0.16 + avg_imp * 0.12 + (100 - avg_fake) * 0.10
+        else:
+            total_w = weighted_pos = weighted_neg = weighted_neu = 0.0
+            avg_sent = avg_cred = avg_rel = avg_fake = 50.0
+            avg_imp = 0.0
+            pos = neg = neu = 0
+            score = 50.0
         # 负面官方事件按事件族扣分，不按转载条数扣分。
         official_neg_families = [x for x in unique_core if (x.source_type == "announcement" or x.credibility_score >= 85) and x.sentiment_score <= 45]
         if official_neg_families:
@@ -1723,6 +1747,8 @@ class NewsAnalysisService:
         all_text = " ".join(x.title + " " + x.summary for x in core_items)
         kws = self._keywords(all_text)
         risk_flags = []
+        if not unique_core:
+            risk_flags.append("近期计分窗口内无可核验信息，当前信息分保持中性")
         if weighted_neg >= max(1.3, weighted_pos + 0.6):
             risk_flags.append("负面事件权重偏高")
         if avg_cred < 45:
@@ -1750,7 +1776,7 @@ class NewsAnalysisService:
         ][:12]
         event_family_counts = self._counts([x.event_label for x in unique_core])
         summary = (
-            f"中文信息 {len(items)} 条，事件级计分 {len(unique_core)} 组（社区舆情 {forum_count} 条不进核心计分）："
+            f"中文信息 {len(items)} 条，近期事件级计分 {len(unique_core)} 组（社区舆情 {forum_count} 条不进核心计分，过期/日期缺失 {historical_excluded_count} 条仅供查阅）："
             f"正面 {pos}组/权重{weighted_pos:.1f}，负面 {neg}组/权重{weighted_neg:.1f}，中性 {neu}组/权重{weighted_neu:.1f}；"
             f"近90天 {recent90_count} 条，官方/高可信 {official_count} 条，平均可信度 {avg_cred:.1f}，疑似噪声 {avg_fake:.1f}，未知日期 {date_unknown_count} 条。"
         )
@@ -1781,7 +1807,7 @@ class NewsAnalysisService:
             "summary": summary,
             "event_family_counts": event_family_counts,
             "duplicate_groups": duplicate_groups,
-            "data_quality": {"date_unknown_count": date_unknown_count, "official_count": official_count, "official_negative_count": official_neg, "item_count": len(items), "core_item_count": len(core_items), "event_core_count": len(unique_core), "forum_count": forum_count, "duplicate_group_count": len(duplicate_groups), "search_engine_evidence": 0},
+            "data_quality": {"date_unknown_count": date_unknown_count, "official_count": official_count, "official_negative_count": official_neg, "item_count": len(items), "core_item_count": len(core_items), "event_core_count": len(unique_core), "current_scoring_count": len(core_items), "historical_excluded_count": historical_excluded_count, "forum_count": forum_count, "duplicate_group_count": len(duplicate_groups), "search_engine_evidence": 0},
             "credibility_method": "可信度为规则化来源权重：交易所/巨潮/公司公告最高，权威财经媒体较高，搜索聚合与社区较低；社区帖不作为核心利多利空证据。",
             "scoring_note": "V3.15/V16.2采用源头候选准入+详情正文准入+深度清洗+事件簇去重+实时全球要闻行业映射+时效权重：官方公告/交易所/巨潮为核心事实源，权威快讯进入宏观/行业映射，社区只作舆情，搜索引擎关键词页不参与评分；同一亏损/问询/减持/订单事件多源转载只计一次主权重。",
         }
@@ -1846,6 +1872,25 @@ class NewsAnalysisService:
                 ts = float(dt.toordinal())
         official = 1 if x.source_type == "announcement" or x.credibility_score >= 85 else 0
         return (official, x.relevance_score, x.credibility_score, x.impact_score, x.recency_weight, ts)
+
+    def _is_current_scoring_item(self, item: NewsItem) -> bool:
+        """Limit live information scoring to dated, decision-relevant events."""
+        dt = self._parse_item_date(item.published_at_norm or item.published_at or item.date_display)
+        if not dt:
+            return False
+        age_days = (datetime.now() - dt).days
+        if age_days < -1:
+            return False
+        source_type = str(item.source_type or "news").lower()
+        if source_type == "macro":
+            max_days = 14
+        elif source_type == "announcement":
+            max_days = 180
+        elif source_type in {"policy", "research"}:
+            max_days = 90
+        else:
+            max_days = 45
+        return age_days <= max_days
 
     def _rule_sentiment(self, text: str, source_type: str, event_meta: dict[str, str]) -> tuple[float, list[str]]:
         t = text or ""
@@ -2528,11 +2573,12 @@ class NewsAnalysisService:
         return text.strip()
 
     def _load_cache(self) -> dict[str, Any]:
-        try:
-            if self.cache_file.exists():
-                return json.loads(self.cache_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        with self._cache_file_lock:
+            try:
+                if self.cache_file.exists():
+                    return json.loads(self.cache_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
         return {}
 
     def _read_cache(self, key: str) -> dict[str, Any] | None:
@@ -2545,9 +2591,10 @@ class NewsAnalysisService:
         return result if isinstance(result, dict) else None
 
     def _write_cache(self, key: str, result: dict[str, Any]) -> None:
-        cache = self._load_cache()
-        cache[key] = {"_saved_at": time.time(), "result": result}
-        if len(cache) > 260:
-            items = sorted(cache.items(), key=lambda kv: kv[1].get("_saved_at", 0), reverse=True)[:210]
-            cache = dict(items)
-        self.cache_file.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        with self._cache_file_lock:
+            cache = self._load_cache()
+            cache[key] = {"_saved_at": time.time(), "result": result}
+            if len(cache) > 260:
+                items = sorted(cache.items(), key=lambda kv: kv[1].get("_saved_at", 0), reverse=True)[:210]
+                cache = dict(items)
+            self.cache_file.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
