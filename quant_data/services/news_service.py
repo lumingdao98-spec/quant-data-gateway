@@ -680,7 +680,10 @@ class NewsAnalysisService:
                 summary = bracket.group(2).strip() or text
             else:
                 summary = text
+            source_item_id = str(item.get("id") or payload.get("id") or "").strip()
             source_link = str(payload.get("source_link") or payload.get("url") or item.get("url") or "")
+            if not source_link and source_item_id:
+                source_link = f"https://flash.jin10.com/detail/{source_item_id}"
             pub = str(item.get("time") or payload.get("time") or item.get("created_at") or "")
             real_source = str(payload.get("source") or source_name or "金十快讯").strip() or source_name
             ok, _reason = self.valid_news_item(title, summary, source=real_source, url=source_link, source_type="macro", allow_macro=True)
@@ -698,6 +701,7 @@ class NewsAnalysisService:
                     "链接": source_link,
                     "_source_name": real_source,
                     "_source_channel": source_name,
+                    "_source_item_id": source_item_id,
                     "_source_page": "https://qihuo.jin10.com/" if "期货" in source_name else "https://www.jin10.com/",
                 }
             )

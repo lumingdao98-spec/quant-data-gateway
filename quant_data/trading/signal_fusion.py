@@ -33,6 +33,7 @@ class UnifiedSignal:
     data_freshness: dict[str, Any] = field(default_factory=dict)
     missing_data: list[str] = field(default_factory=list)
     requires_manual_confirm: bool = False
+    score_breakdown: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -122,13 +123,43 @@ class SignalFusionEngine:
         # screening_score is a V3.23 baseline. Older callers remain valid and
         # are not marked incomplete only because they do not provide it.
         missing = list(missing_data or []) + [k for k in scores if k != "screening" and scores[k] is None]
-        if usable:
-            total_w = sum(weights[k] for k in usable) or 1.0
-            final_score = sum(float(usable[k]) * weights[k] / total_w for k in usable)
-        else:
-            final_score = 0.0
-        final_score -= min(float(anomaly_score or 0.0) * 0.35, 35.0)
+        total_w = sum(weights[k] for k in usable) or 1.0
+        contributions = []
+        labels = {
+            "screening": "筛选底座",
+            "fundamental": "基本面",
+            "technical": "实时择时",
+            "information": "近期信息",
+            "fund_flow": "量价资金",
+            "market": "大盘环境",
+        }
+        for key, value in usable.items():
+            normalized_weight = weights[key] / total_w
+            contributions.append(
+                {
+                    "key": key,
+                    "label": labels[key],
+                    "score": round(float(value), 4),
+                    "configured_weight": round(weights[key], 6),
+                    "normalized_weight": round(normalized_weight, 6),
+                    "contribution": round(float(value) * normalized_weight, 4),
+                }
+            )
+        score_before_risk = sum(float(row["contribution"]) for row in contributions)
+        anomaly_deduction = min(float(anomaly_score or 0.0) * 0.35, 35.0)
+        final_score = score_before_risk - anomaly_deduction
         final_score = max(0.0, min(100.0, final_score))
+        score_breakdown = {
+            "formula": "综合交易分 = 各可用维度按有效权重归一化后的贡献之和 - 异常风险扣分",
+            "timing_formula": "实时择时分 = 日K结构55% + 当日分时45%",
+            "contributions": contributions,
+            "available_weight_total": round(total_w if usable else 0.0, 6),
+            "score_before_risk": round(score_before_risk, 4),
+            "anomaly_score": round(float(anomaly_score or 0.0), 4),
+            "anomaly_deduction": round(anomaly_deduction, 4),
+            "final_score": round(final_score, 4),
+            "missing_dimensions": [labels[key] for key, value in scores.items() if value is None],
+        }
         action: SignalAction = "hold"
         reason_parts: list[str] = []
         if info_negative_veto:
@@ -192,4 +223,5 @@ class SignalFusionEngine:
             data_freshness=freshness,
             missing_data=list(dict.fromkeys(missing)),
             requires_manual_confirm=requires_confirm,
+            score_breakdown=score_breakdown,
         )

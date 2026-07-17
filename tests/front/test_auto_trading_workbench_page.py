@@ -96,6 +96,15 @@ def test_auto_trading_workbench_page_visible():
     assert "Promise.allSettled" in html
     assert "核心状态已更新" in html
     assert "总控台已更新" in html
+    assert "这个分数怎么来的" in html
+    assert "scoreExplain" in html
+    assert "renderScoreExplain" in html
+    assert "高级自定义（完整策略目录与逐项参数）" in html
+    assert "按股票池推荐" in html
+    assert "波段观察" in html
+    assert "affected_companies" in html
+    assert "证券代码" in html
+    assert "暂无直接映射" in html
 
 
 def test_auto_trading_workbench_uses_single_right_overlay_iframe():

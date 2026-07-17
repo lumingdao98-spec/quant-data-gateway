@@ -81,7 +81,8 @@ def test_auto_trading_config_exposes_catalog_and_beginner_presets():
     assert len(data["strategy_catalog"]) >= 55
     catalog_keys = {item["key"] for item in data["strategy_catalog"]}
     assert {"vwap_reclaim", "fake_order_cancel_watch", "market_breadth_filter", "dca_core_plan"} <= catalog_keys
-    assert {"balanced", "defensive", "etf_rotation"}.issubset(set(data["beginner_presets"]))
+    assert {"balanced", "defensive", "swing", "etf_rotation"}.issubset(set(data["beginner_presets"]))
+    assert data["beginner_presets"]["swing"]["position_sizing"] == "atr_risk"
     assert data["strategy_parameters"]["ma_repair"]["name"]
     assert data["strategy_parameters"]["ma_repair"]["category"]
     assert data["strategy_parameters"]["risk_control"]["beginner_note"]
@@ -224,7 +225,12 @@ def test_realtime_paper_tick_hydrates_quote_when_price_missing(monkeypatch):
     assert tick["orders"]
 
 
-def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
+def test_auto_trading_reuses_screener_signal_profile_for_paper_tick(monkeypatch):
+    monkeypatch.setattr(
+        api.realtime_decision_service,
+        "hydrate",
+        lambda payload, profile=None, symbols=None: dict(payload or {}),
+    )
     client = TestClient(api.app)
     payload = {
         "rows": [
@@ -290,7 +296,12 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick():
     assert "screener_target_hint" in " ".join(tick["signal"]["evidence"])
 
 
-def test_realtime_paper_applies_strategy_position_and_stop_controls():
+def test_realtime_paper_applies_strategy_position_and_stop_controls(monkeypatch):
+    monkeypatch.setattr(
+        api.realtime_decision_service,
+        "hydrate",
+        lambda payload, profile=None, symbols=None: dict(payload or {}),
+    )
     client = TestClient(api.app)
     payload = {
         "rows": [

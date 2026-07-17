@@ -6,6 +6,7 @@ V3.23 把历史回测、实时模拟交易和真实券商自动交易拆成独�
 
 页面入口：
 
+- `/auto-trading`：V3.23 总控台首页，以右侧 iframe 打开并释放各功能页，集中查看流程、模拟账户、实盘安全、全球要闻和板块主线。
 - `/screener`：股票筛选，支持加入自选池、回测池、实时模拟池和真实交易观察池。
 - `/detail/{symbol}` 或 `/ui?symbol=300750`：分时/K线、盘口、信息面、技术面、行为风险和图表标注。
 - `/backtest`：历史回测，使用历史数据和 point-in-time 快照，不连接真实行情和券商。
@@ -21,6 +22,17 @@ V3.23 把历史回测、实时模拟交易和真实券商自动交易拆成独�
 - 当前支持 `DisabledBrokerAdapter`、`SimulatorBrokerAdapter`、QMT/PTrade import guard。若本机没有 `xtquant` 或 PTrade SDK，会返回 `unsupported`，不会导致服务崩溃。
 - 没有真实数据时系统不会伪造；会显示数据源缺失、字段缺失、缓存过期、休市无盘口、券商不支持或未授权。
 - 百度、360、搜狗搜索结果页永久禁用，不抓取、不计分、不展示。
+
+可选联网 AI 研判默认关闭，只能对真实、近期且带来源链接/API 的证据做研究解释，不能创建、确认或提交订单。需要使用时在本地环境配置：
+
+```bash
+MARKET_AI_ENABLED=true
+MARKET_AI_MODEL=<支持结构化输出的模型>
+MARKET_AI_API_KEY=<仅保存在本地环境>
+# 可选：MARKET_AI_API_BASE=https://api.openai.com/v1
+```
+
+未配置密钥或模型时，`/api/agent/market-brief` 继续返回规则证据代理结果并明确显示缺失原因；密钥不会写入页面、日志或 Git。
 
 V3.23 文档：
 

@@ -32,6 +32,8 @@ from quant_data.services.source_registry import SourceRegistryService
 from quant_data.services.technical_factor_registry import TechnicalFactorRegistryService
 from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
+from quant_data.services.market_ai_service import MarketAiService
+from quant_data.services.realtime_decision_service import RealtimeDecisionService
 from quant_data.services.sector_mainline_service import SectorMainlineService
 from quant_data.services.orderbook_behavior_service import OrderBookBehaviorService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot
@@ -114,10 +116,12 @@ source_registry_service = SourceRegistryService()
 technical_factor_registry_service = TechnicalFactorRegistryService()
 candidate_pool_service = CandidatePoolService()
 market_regime_service = MarketRegimeService()
+market_ai_service = MarketAiService()
 sector_mainline_service = SectorMainlineService()
 market_behavior_engine = MarketBehaviorEngine()
 orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
+realtime_decision_service = RealtimeDecisionService(service, cache_state_service, market_regime_service)
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
 technical_factor_engine = TechnicalFactorEngine()
 backtest_service = BacktestService()
@@ -701,6 +705,49 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "formula": "company/events + source credibility + finance + global/industry mapping - rumor risk",
         "screener_formula": "technical/fundamental/capital/info/style with risk penalties",
     }
+    quality = data.get("data_quality") or news.get("data_quality") or diagnostics.get("data_quality") or {}
+    dated_items = [
+        x for x in items
+        if x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date")
+    ]
+    latest_published_at = max(
+        (
+            str(x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))
+            for x in dated_items
+        ),
+        default=None,
+    )
+    derived_current_keys: set[str] = set()
+    derived_historical_count = 0
+    now = datetime.now()
+    for item in items:
+        published_raw = item.get("publish_time") or item.get("published_at_norm") or item.get("published_at") or item.get("date")
+        source_type = str(item.get("source_type") or item.get("message_dimension") or item.get("category") or "").lower()
+        if any(token in source_type for token in ("forum", "community", "search", "股吧", "社区", "论坛", "搜索")):
+            derived_historical_count += 1
+            continue
+        try:
+            published = datetime.fromisoformat(str(published_raw).replace("Z", "+00:00")).replace(tzinfo=None) if published_raw else None
+        except (TypeError, ValueError):
+            published = None
+        if published is None:
+            continue
+        max_days = 14 if any(token in source_type for token in ("macro", "宏观", "全球")) else 90 if any(token in source_type for token in ("announcement", "公告")) else 45 if any(token in source_type for token in ("policy", "research", "政策", "研报")) else 30
+        age_days = (now - published).days
+        if age_days < -1 or age_days > max_days:
+            derived_historical_count += 1
+            continue
+        event_key = str(item.get("event_key") or item.get("duplicate_group") or item.get("document_id") or f"{item.get('source')}|{published.date()}|{str(item.get('title') or '')[:80]}")
+        derived_current_keys.add(event_key)
+    quality_current = quality.get("current_scoring_count")
+    quality_historical = quality.get("historical_excluded_count")
+    current_information_summary = {
+        "current_scoring_count": int(_safe_float(quality_current) if quality_current is not None else len(derived_current_keys)),
+        "historical_excluded_count": int(_safe_float(quality_historical) if quality_historical is not None else derived_historical_count),
+        "unknown_date_count": int(_safe_float(quality.get("unknown_date_count")) or stats.get("unknown_date_count") or 0),
+        "latest_published_at": latest_published_at,
+        "score_scope": "仅近期、可核验、事件级去重信息参与当前评分；历史信息和日期缺失条目只供查阅。",
+    }
     created_at = data.get("created_at") or data.get("updated_at") or datetime.now().isoformat(timespec="seconds")
     data.update({
         "symbol": symbol,
@@ -721,6 +768,8 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "mapped_symbols": data.get("mapped_symbols") or (data.get("policy") or {}).get("mapped_symbols") or [],
         "stats": stats,
         "score_model": score_model,
+        "data_quality": quality,
+        "current_information_summary": current_information_summary,
         "diagnostics": diagnostics,
         "source_logs": source_logs,
         "errors": errors,
@@ -1708,6 +1757,25 @@ AUTO_TRADING_BEGINNER_PRESETS = {
             "market_regime",
         ],
         "risk_controls": {"stop_loss_pct": 6, "take_profit_pct": 12, "max_drawdown_pct": 10, "max_single_position_pct": 10, "max_total_position_pct": 45, "min_cash_pct": 35},
+    },
+    "swing": {
+        "label": "波段观察",
+        "description": "适合普通个股的中短期观察：评分驱动和均线趋势为主，MACD、量价资金作确认，ATR、公告和大盘环境负责拦截风险。",
+        "strategy_family": "hybrid",
+        "position_sizing": "atr_risk",
+        "strategy_combo": [
+            "score_driven",
+            "ma_repair",
+            "macd_cross",
+            "mfi_obv_resonance",
+            "volume_breakout",
+            "atr_risk",
+            "position_risk",
+            "risk_control",
+            "announcement_risk",
+            "market_regime",
+        ],
+        "risk_controls": {"stop_loss_pct": 5, "take_profit_pct": 10, "max_drawdown_pct": 12, "max_single_position_pct": 15, "max_total_position_pct": 60, "min_cash_pct": 25},
     },
     "etf_rotation": {
         "label": "ETF动量轮动",
@@ -4011,35 +4079,46 @@ def _payload_has_trade_price(payload: dict) -> bool:
 def _hydrate_realtime_tick_payload(payload: dict | None) -> dict:
     out = dict(payload or {})
     symbol = str(out.get("symbol") or "").strip()
-    if not symbol or _payload_has_trade_price(out):
+    if not symbol:
         return out
     missing = list(out.get("missing_data") or [])
+    if not _payload_has_trade_price(out):
+        try:
+            quote_obj = service.get_quote(symbol, force_refresh=False)
+            quote = quote_obj.to_dict() if hasattr(quote_obj, "to_dict") else dict(getattr(quote_obj, "__dict__", {}) or {})
+        except Exception as exc:
+            quote = {}
+            missing.append("quote_snapshot_missing")
+            out["quote_hydrated"] = False
+            out["quote_hydrate_error"] = str(exc)[:180]
+        if quote and _payload_has_trade_price({"quote": quote}):
+            merged_quote = {**quote, **dict(out.get("quote") or {})}
+            out["quote"] = merged_quote
+            out.setdefault("price", merged_quote.get("last") or merged_quote.get("price"))
+            out.setdefault("last", merged_quote.get("last") or merged_quote.get("price"))
+            out.setdefault("quote_ts", merged_quote.get("ts") or merged_quote.get("fetched_at"))
+            out.setdefault("name", merged_quote.get("name"))
+            out["quote_hydrated"] = True
+            evidence = list(out.get("evidence") or [])
+            evidence.append("quote_hydrated_from_market_service")
+            out["evidence"] = list(dict.fromkeys(evidence))
+        else:
+            missing.append("quote_snapshot_missing")
+    out["missing_data"] = list(dict.fromkeys(missing))
+
+    session_id = str(out.get("session_id") or realtime_paper_engine_v323.active_session_id or "")
+    session = realtime_paper_engine_v323.get_session(session_id) if session_id else None
+    session_config = dict((session or {}).get("config") or {})
+    signal_map = session_config.get("screener_signal_map") if isinstance(session_config.get("screener_signal_map"), dict) else {}
+    profile = dict(signal_map.get(symbol) or {})
+    session_symbols = list((session or {}).get("symbols") or session_config.get("symbols") or [symbol])
     try:
-        quote_obj = service.get_quote(symbol, force_refresh=False)
-        quote = quote_obj.to_dict() if hasattr(quote_obj, "to_dict") else dict(getattr(quote_obj, "__dict__", {}) or {})
+        out = realtime_decision_service.hydrate(out, profile=profile, symbols=session_symbols)
     except Exception as exc:
-        if "quote_snapshot_missing" not in missing:
-            missing.append("quote_snapshot_missing")
-        out["missing_data"] = missing
-        out["quote_hydrated"] = False
-        out["quote_hydrate_error"] = str(exc)[:180]
-        return out
-    if not quote or not _payload_has_trade_price({"quote": quote}):
-        if "quote_snapshot_missing" not in missing:
-            missing.append("quote_snapshot_missing")
-        out["missing_data"] = missing
-        out["quote_hydrated"] = False
-        return out
-    merged_quote = {**quote, **dict(out.get("quote") or {})}
-    out["quote"] = merged_quote
-    out.setdefault("price", merged_quote.get("last") or merged_quote.get("price"))
-    out.setdefault("last", merged_quote.get("last") or merged_quote.get("price"))
-    out.setdefault("quote_ts", merged_quote.get("ts") or merged_quote.get("fetched_at"))
-    out.setdefault("name", merged_quote.get("name"))
-    out["quote_hydrated"] = True
-    evidence = list(out.get("evidence") or [])
-    evidence.append("quote_hydrated_from_market_service")
-    out["evidence"] = list(dict.fromkeys(evidence))
+        missing = list(out.get("missing_data") or [])
+        missing.append("realtime_decision_hydration_error")
+        out["missing_data"] = list(dict.fromkeys(missing))
+        out["realtime_decision_error"] = str(exc)[:180]
     return out
 
 
@@ -5917,6 +5996,8 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
     sectors: list[str] = []
     assets: list[str] = []
     evidence: list[str] = []
+    affected_companies: list[str] = []
+    mapped_symbols: list[str] = []
 
     def add_many(dst: list[str], values: list[str]) -> None:
         for value in values:
@@ -5931,6 +6012,14 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
         return ok
 
     t = f"{text} {category} {dimension}"
+    issuer_hits = global_industry_mapper.identify_issuers(t)
+    for issuer in issuer_hits:
+        add_many(affected_companies, [f"{issuer.get('name')} {issuer.get('symbol')}"])
+        add_many(mapped_symbols, [str(issuer.get("symbol") or "")])
+        add_many(sectors, [str(x) for x in (issuer.get("industries") or [])])
+        add_many(sectors, [str(x) for x in (issuer.get("concepts") or [])])
+    if issuer_hits:
+        evidence.append("公司名称/证券代码直接命中")
     macro_hit = False
     if matched(["非农", "就业", "失业率", "初请", "ADP", "CPI", "PPI", "PMI", "ISM", "FOMC", "美联储", "降息", "加息", "通胀", "利率决议"], "宏观/利率"):
         macro_hit = True
@@ -5971,13 +6060,16 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
             inferred_tags = []
         add_many(sectors, [str(x) for x in inferred_tags])
 
-    targets = (sectors + assets)[:10]
+    targets = (affected_companies + sectors + assets)[:10]
     note = "影响提示：仅解释宏观/商品/信息面对板块和资产的可能传导，不直接等于买卖建议。"
     if targets:
         note = f"影响提示：可能影响 {', '.join(targets[:6])}；仅作信息面风险观察。"
     return {
         "affected_sectors": sectors[:8],
         "affected_assets": assets[:8],
+        "affected_companies": affected_companies[:6],
+        "mapped_symbols": mapped_symbols[:6],
+        "impact_level": "公司事件" if issuer_hits else "宏观/行业事件",
         "impact_targets": targets,
         "impact_note": note,
         "impact_evidence": evidence[:6],
@@ -6086,6 +6178,7 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
                 "source_ref": url,
                 "source_api": row.get("_source_api") or row.get("source_api") or "",
                 "source_page": row.get("_source_page") or row.get("source_page") or "",
+                "source_item_id": row.get("_source_item_id") or row.get("source_item_id") or "",
                 "published_at": published_at,
                 "category": category,
                 "message_dimension": dimension,
@@ -6620,8 +6713,26 @@ def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], s
     return out
 
 
+@app.get("/api/agent/status")
+def agent_market_status() -> dict:
+    return {
+        "ok": True,
+        "data": market_ai_service.status(),
+        "rule_agent": {
+            "status": "ready",
+            "mode": "evidence_only_online_agent",
+            "order_capability": False,
+        },
+    }
+
+
 @app.get("/api/agent/market-brief")
-def agent_market_brief(symbols: str | None = None, force: bool = False, limit: int = 80) -> dict:
+def agent_market_brief(
+    symbols: str | None = None,
+    force: bool = False,
+    limit: int = 80,
+    use_llm: bool = False,
+) -> dict:
     config = _build_auto_trading_config({"symbols": _parse_symbol_text(symbols)} if symbols else {})
     symbol_list = _parse_symbol_text(symbols) if symbols else list(config.get("symbols") or [])[:20]
     stream_data, stream_status = _read_global_news_stream(limit=limit, force=force, live=True)
@@ -6721,6 +6832,44 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
         action = "hold_or_collect_data"
     if risk_flags:
         headline += " 真实交易仍受安全门控约束。"
+    provider_status = market_ai_service.status()
+    if use_llm:
+        ai_analysis = market_ai_service.analyze(
+            symbols=symbol_list,
+            evidence=evidence[:16],
+            rule_summary={
+                "headline": headline,
+                "recommended_action": action,
+                "symbol_decisions": decisions,
+                "risk_flags": list(dict.fromkeys(risk_flags)),
+                "macro_watchlist": macro_watch,
+                "sector_mainline": [
+                    {
+                        "board_name": x.get("board_name"),
+                        "stage": x.get("stage"),
+                        "score": x.get("mainline_score"),
+                        "net_inflow": x.get("net_inflow"),
+                    }
+                    for x in sector_items[:8]
+                ],
+            },
+            force=force,
+        )
+    else:
+        ai_analysis = {
+            "ok": False,
+            "status": "not_requested",
+            "reason": "尚未请求外部模型；点击“联网AI研判”后才会调用已配置模型。",
+            "analysis": None,
+            "provider": provider_status,
+            "order_capability": False,
+        }
+    if ai_analysis.get("ok"):
+        llm_status = f"联网模型已完成证据约束分析：{ai_analysis.get('model') or provider_status.get('model') or 'configured model'}；不能直接下单。"
+    elif use_llm:
+        llm_status = str(ai_analysis.get("reason") or "联网模型未返回有效分析；保留规则证据结论。")
+    else:
+        llm_status = "联网数据 + 规则证据代理；外部模型仅在用户显式点击后调用，不能直接下单。"
     return {
         "ok": True,
         "data": {
@@ -6757,7 +6906,9 @@ def agent_market_brief(symbols: str | None = None, force: bool = False, limit: i
             "broker_safety": safety,
             "source_status": stream_data.get("sources_status") or [],
             "cache_status": stream_status,
-            "llm_status": "未接入外部 LLM 下单；当前为联网数据 + 规则证据代理。",
+            "ai_analysis": ai_analysis,
+            "ai_provider_status": provider_status,
+            "llm_status": llm_status,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
         },

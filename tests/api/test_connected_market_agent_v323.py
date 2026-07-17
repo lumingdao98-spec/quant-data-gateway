@@ -61,5 +61,5 @@ def test_connected_market_agent_brief_uses_real_stream_shape_and_safety(monkeypa
     assert "成长股估值/利率敏感" in impacts[0]["related_events"][0]["matched_terms"]
     assert brief["symbol_decisions"][0]["action"] == "模拟验证/实盘预检查"
     assert "LIVE_TRADING_ENABLED=false" in "；".join(brief["risk_flags"])
-    assert "未接入外部 LLM 下单" in brief["llm_status"]
+    assert "不能直接下单" in brief["llm_status"]
     assert "不构成投资建议" in brief["disclaimer"]

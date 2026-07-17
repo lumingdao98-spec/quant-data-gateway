@@ -573,7 +573,7 @@ def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> 
         intraday_score = _score_number((payload or {}).get("technical_score"))
     usable_technical = [
         (value, weight)
-        for value, weight in ((daily_k_score, 0.58), (intraday_score, 0.42))
+        for value, weight in ((daily_k_score, 0.55), (intraday_score, 0.45))
         if value is not None
     ]
     if usable_technical:
@@ -588,22 +588,29 @@ def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> 
 
     live_fund_flow = _score_number((payload or {}).get("fund_flow_score"))
     baseline_fund_flow = _score_number(profile.get("fund_flow_score"))
-    if live_fund_flow is not None and baseline_fund_flow is not None:
+    if "server_cache_realtime_decision" in score_source:
+        merged["fund_flow_score"] = live_fund_flow if live_fund_flow is not None else baseline_fund_flow
+    elif live_fund_flow is not None and baseline_fund_flow is not None:
         merged["fund_flow_score"] = round(baseline_fund_flow * 0.45 + live_fund_flow * 0.55, 4)
-    merged["score_breakdown"] = {
+    existing_breakdown = dict(merged.get("score_breakdown") or {})
+    existing_sources = dict(existing_breakdown.get("sources") or {})
+    existing_sources.update({
+        "screening": profile.get("source") or "auto_trading_screener_snapshot",
+        "daily_k": existing_sources.get("daily_k") or "screener_technical_snapshot",
+        "intraday": existing_sources.get("intraday") or str(merged.get("score_source") or "realtime_quote_snapshot"),
+    })
+    existing_breakdown.update({
         "screening_score": screening_score,
         "daily_k_score": daily_k_score,
         "intraday_score": intraday_score,
+        "timing_score": merged.get("technical_score"),
         "technical_score": merged.get("technical_score"),
         "fund_flow_score": merged.get("fund_flow_score"),
-        "formula": "最终分=筛选底座+五维评分；技术分=日K×58%+分时×42%（缺失项自动归一）",
-        "sources": {
-            "screening": profile.get("source") or "auto_trading_screener_snapshot",
-            "daily_k": "screener_technical_snapshot",
-            "intraday": str(merged.get("score_source") or "realtime_quote_snapshot"),
-        },
+        "formula": existing_breakdown.get("formula") or "综合交易分=筛选底座+实时择时（日K55%+分时45%）+近期信息+资金+大盘-异常风险",
+        "sources": existing_sources,
         "screener_snapshot_id": config.get("screener_snapshot_id"),
-    }
+    })
+    merged["score_breakdown"] = existing_breakdown
 
     evidence = [f"来自自动交易筛选信号画像：{profile.get('action') or 'watch'}"] + list(profile.get("evidence") or [])
     evidence += list(merged.get("evidence") or [])

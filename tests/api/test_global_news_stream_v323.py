@@ -271,3 +271,18 @@ def test_global_impact_mapping_explains_us_nonfarm_macro_chain():
     assert "银行" in fields["affected_sectors"]
     assert "美元指数" in fields["affected_assets"]
     assert "美债收益率" in fields["impact_targets"]
+
+
+def test_company_earnings_flash_maps_to_issuer_before_macro_bucket():
+    fields = api._global_impact_fields(
+        "中船特气：2026年上半年净利润3.48亿元，同比增长95.63%",
+        "macro",
+        "全球快讯",
+    )
+
+    assert "中船特气 688146" in fields["affected_companies"]
+    assert "688146" in fields["mapped_symbols"]
+    assert "电子特种气体" in fields["affected_sectors"]
+    assert "半导体" in fields["affected_sectors"]
+    assert fields["impact_level"] == "公司事件"
+    assert fields["impact_targets"][0] == "中船特气 688146"

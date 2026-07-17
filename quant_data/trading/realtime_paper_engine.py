@@ -157,6 +157,19 @@ class RealtimePaperEngine:
         )
         strategy_controls = self._apply_strategy_controls(signal, payload, price)
         self.signals.append(signal)
+        previous_signal = next(
+            (row for row in reversed(self.signal_meta) if str(row.get("symbol") or "") == symbol),
+            None,
+        )
+        previous_score = self._optional((previous_signal or {}).get("final_score"))
+        score_delta = round(signal.final_score - previous_score, 2) if previous_score is not None else None
+        score_breakdown = dict(payload.get("score_breakdown") or {})
+        signal_score_breakdown = dict(signal.score_breakdown or {})
+        sources = dict(score_breakdown.get("sources") or {})
+        score_breakdown.update(signal_score_breakdown)
+        if sources:
+            score_breakdown["sources"] = sources
+        score_breakdown["final_score_delta"] = score_delta
         signal_row = signal.to_dict()
         signal_row.update(
             {
@@ -164,7 +177,12 @@ class RealtimePaperEngine:
                 "quote_price": price,
                 "bid1": self._best_price(quote, "bid"),
                 "ask1": self._best_price(quote, "ask"),
-                "score_breakdown": dict(payload.get("score_breakdown") or {}),
+                "orderbook_source": quote.get("orderbook_source") or (payload.get("orderbook_snapshot") or {}).get("source") or "missing",
+                "orderbook_snapshot": dict(payload.get("orderbook_snapshot") or {}),
+                "recent_information": dict(payload.get("recent_information") or {}),
+                "market_regime": dict(payload.get("market_regime") or {}),
+                "score_delta": score_delta,
+                "score_breakdown": score_breakdown,
                 "score_source": str(payload.get("score_source") or "unified_realtime_score"),
                 "session_mode": "盘中实时" if is_trading else ("休市回放" if manual_replay else "休市观察"),
                 "paper_only": True,

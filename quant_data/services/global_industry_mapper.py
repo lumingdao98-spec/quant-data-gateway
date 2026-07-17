@@ -5,6 +5,14 @@ from typing import Any
 
 RULES: list[dict[str, Any]] = [
     {
+        "key": "electronic_special_gas",
+        "keywords": ["电子特气", "特种气体", "六氟化钨", "三氟化氮", "中船特气"],
+        "industries": ["电子特种气体", "半导体材料", "化工新材料"],
+        "concepts": ["半导体", "国产替代", "军工电子"],
+        "symbols": ["688146"],
+        "reason": "电子特种气体的产能、价格、订单和盈利变化会影响半导体材料及军工电子产业链预期。",
+    },
+    {
         "key": "photovoltaic",
         "keywords": ["光伏", "硅料", "多晶硅", "硅片", "组件", "TOPCon", "HJT", "BC电池"],
         "industries": ["光伏设备", "硅料", "硅片", "光伏组件", "电站"],
@@ -113,6 +121,7 @@ RULES: list[dict[str, Any]] = [
 
 
 SYMBOL_PROFILE_HINTS: dict[str, dict[str, list[str]]] = {
+    "688146": {"industries": ["电子特种气体", "半导体材料", "化工新材料"], "concepts": ["半导体", "国产替代", "军工电子"], "chain": ["电子特气", "半导体制造材料"]},
     "300274": {"industries": ["光伏设备", "逆变器", "储能系统"], "concepts": ["光伏", "储能", "新能源"], "chain": ["逆变器", "储能系统"]},
     "300750": {"industries": ["动力电池", "储能系统", "新能源汽车"], "concepts": ["锂电池", "储能", "新能源车"], "chain": ["电池", "储能"]},
     "601012": {"industries": ["光伏设备", "硅片", "光伏组件"], "concepts": ["光伏", "新能源"], "chain": ["硅片", "组件"]},
@@ -127,6 +136,20 @@ SYMBOL_PROFILE_HINTS: dict[str, dict[str, list[str]]] = {
 }
 
 
+COMPANY_PROFILE_HINTS: dict[str, dict[str, Any]] = {
+    "中船特气": {
+        "symbol": "688146",
+        "name": "中船特气",
+        "industries": ["电子特种气体", "半导体材料", "化工新材料"],
+        "concepts": ["半导体", "国产替代", "军工电子"],
+    },
+    "宁德时代": {"symbol": "300750", "name": "宁德时代", "industries": ["动力电池", "储能系统"], "concepts": ["锂电池", "新能源车"]},
+    "通威股份": {"symbol": "600438", "name": "通威股份", "industries": ["硅料", "光伏", "饲料"], "concepts": ["光伏", "农业"]},
+    "贵州茅台": {"symbol": "600519", "name": "贵州茅台", "industries": ["白酒", "食品饮料"], "concepts": ["大消费"]},
+    "平安银行": {"symbol": "000001", "name": "平安银行", "industries": ["银行"], "concepts": ["大金融"]},
+}
+
+
 def _as_words(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item).strip() for item in value if str(item).strip()]
@@ -135,6 +158,17 @@ def _as_words(value: Any) -> list[str]:
 
 
 class GlobalIndustryMapper:
+    def identify_issuers(self, text: str) -> list[dict[str, Any]]:
+        """Identify explicit listed-company mentions without guessing from broad terms."""
+        body = str(text or "")
+        found: list[dict[str, Any]] = []
+        for alias, profile in COMPANY_PROFILE_HINTS.items():
+            symbol = str(profile.get("symbol") or "")
+            if alias not in body and (not symbol or symbol not in body):
+                continue
+            found.append(dict(profile))
+        return found
+
     def company_exposure(self, symbol: str, profile: dict[str, Any] | None = None, name: str = "") -> dict[str, Any]:
         profile = profile or {}
         base = dict(SYMBOL_PROFILE_HINTS.get(str(symbol), {}))
