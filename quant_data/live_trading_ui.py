@@ -16,6 +16,7 @@ main{display:grid;grid-template-columns:360px minmax(0,1fr) 430px;gap:14px;paddi
 input,select,textarea{width:100%;background:#0d1728;color:#e5efff;border:1px solid #2f4364;border-radius:10px;padding:9px 10px;outline:none}textarea{min-height:92px;resize:vertical;line-height:1.45}.field{display:grid;gap:6px;margin-bottom:10px}.field label{font-size:12px;color:#9db4d4;font-weight:900}.btn,button{border:0;border-radius:10px;background:#253755;color:#e5efff;padding:9px 12px;font-weight:900;cursor:pointer}.btn.primary,button.primary{background:var(--blue);color:#fff}.btn.red,button.red{background:#991b1b;color:#fff}.btn.green,button.green{background:#16a34a;color:#fff}.notice{background:#0d1728;border:1px solid #2f4364;border-radius:12px;padding:10px;color:#c8d8ee;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
 table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}th,td{border-bottom:1px solid #243653;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#12213a;color:#9fd4ff}.table-wrap{overflow:auto;border:1px solid #2f4364;border-radius:12px;max-height:360px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1220;border:1px solid #2f4364;border-radius:12px;padding:10px;max-height:280px;overflow:auto;color:#b7c9e6}
 .strategy-list{display:grid;gap:7px;max-height:250px;overflow:auto}.strategy-chip{display:grid;grid-template-columns:auto 1fr;gap:8px;border:1px solid #2f4364;background:#0d1728;border-radius:10px;padding:8px;cursor:pointer}.strategy-chip input{width:auto;margin-top:3px}.strategy-chip b{display:block}.strategy-chip span{display:block;color:var(--muted);font-size:11px;line-height:1.35;margin-top:2px}.strategy-chip.on{border-color:#22d3ee;background:#092536}
+.scope-btn.active{background:#2563eb;color:#fff}.record-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}.record-toolbar .muted{margin-left:auto}.unavailable{border-color:#854d0e;background:#261c0b;color:#fde68a}
 @media(max-width:1200px){main{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){header{position:static}.grid,.cards{grid-template-columns:1fr}}
 </style>
 </head>
@@ -67,8 +68,8 @@ table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}th,t
       <div class="b"><div class="table-wrap"><table><thead><tr><th>代码</th><th>方向</th><th>数量</th><th>状态</th><th>原因/风控</th></tr></thead><tbody id="previewRows"><tr><td colspan="5">等待预检查</td></tr></tbody></table></div></div>
     </div>
     <div class="panel">
-      <div class="h"><span>今日委托 / 成交 / 统一记录</span><button onclick="load()">刷新</button></div>
-      <div class="b"><div class="table-wrap"><table><thead><tr><th>来源</th><th>代码</th><th>方向/状态</th><th>价格</th><th>数量</th><th>金额/盈亏</th><th>收益率</th><th>成本</th><th>说明</th></tr></thead><tbody id="recordRows"><tr><td colspan="9">读取中...</td></tr></tbody></table></div></div>
+      <div class="h"><span>实盘委托与成交</span><div class="row"><a href="/trading-records">打开统一记录</a><button onclick="load()">刷新</button></div></div>
+      <div class="b"><div class="record-toolbar"><button class="scope-btn active" data-scope="actual" onclick="setRecordScope('actual')">真实委托/成交</button><button class="scope-btn" data-scope="pending" onclick="setRecordScope('pending')">待人工确认</button><button class="scope-btn" data-scope="precheck" onclick="setRecordScope('precheck')">预检查/拦截</button><button class="scope-btn" data-scope="all" onclick="setRecordScope('all')">全部</button><span id="recordSummary" class="muted">读取中...</span></div><div class="table-wrap"><table><thead><tr><th>阶段</th><th>代码</th><th>方向/状态</th><th>价格</th><th>数量</th><th>委托金额</th><th>收益率</th><th>成本</th><th>说明</th></tr></thead><tbody id="recordRows"><tr><td colspan="9">读取中...</td></tr></tbody></table></div></div>
     </div>
   </section>
   <section class="stack">
@@ -89,6 +90,9 @@ table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}th,t
 <script>
 const $=id=>document.getElementById(id);
 let autoConfig=null;
+let liveRecordScope='actual';
+let liveRecordCache=[];
+let liveRecordStageSummary={};
 const LIVE_INTRADAY_STRATEGIES=['score_driven','market_regime','main_money_est','fund_flow_watch','amount_active','vwap_reclaim','volume_breakout','orderbook_imbalance_watch','fake_order_cancel_watch','mfi_obv_resonance','rsi_kdj_resonance','macd_cross','macd_hist_turn','ma_repair','atr_risk','risk_control','avoid_chasing_high','news_sentiment','announcement_risk','global_commodity_map','sector_strength','source_reliability','event_driven'];
 async function api(url,opt){const r=await fetch(url,opt);try{return await r.json()}catch(e){return {ok:false,status:r.status,message:String(e)}}}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
@@ -157,24 +161,25 @@ function renderStatus(js){
   $('safetyBox').innerHTML=`券商：${esc(b.broker||js.config?.broker_type||'disabled')} / ${esc(b.status||'disabled')}<br>SDK/环境变量/账号未配置时只能显示 disabled/unsupported；真实订单必须先进入预检查和确认队列。`;
   $('out').textContent=JSON.stringify(js,null,2);
 }
-function renderAccount(account){const d=account.data||{};$('accountBox').innerHTML=`可用资金 ${money(d.cash?.available_cash??d.available_cash??d.cash)}；总资产 ${money(d.total_assets??d.total_value??d.equity)}；数据源 ${esc(account.source?.status||d.source||'券商/模拟适配器')}`}
+function renderAccount(account){const d=account.data||{},source=account.source||{};if(account.data_available===false||d.data_available===false){$('accountBox').classList.add('unavailable');$('accountBox').innerHTML=`<b>未连接真实账户</b><br>${esc(account.missing_reason||d.missing_reason||source.message||'券商未连接或未授权')}<br>这里的 0 不是账户余额；完成 QMT/PTrade 本地配置、授权和连接后才显示真实资金与持仓。`;return}$('accountBox').classList.remove('unavailable');$('accountBox').innerHTML=`可用资金 ${money(d.cash?.available_cash??d.available_cash??d.cash)}；冻结资金 ${money(d.cash?.frozen_cash??d.frozen_cash)}；持仓市值 ${money(d.position_market_value)}；浮盈亏 ${money(d.unrealized_pnl)}；总资产 ${money(d.total_assets??d.total_value??d.equity)}；数据源 ${esc(source.status||d.source||'券商适配器')}`}
 function renderPositions(js){
   const rows=Array.isArray(js.data)?js.data:[];
   $('positionsRows').innerHTML=rows.map(p=>{const qty=Number(p.quantity??p.volume??0);const qtyText=Number.isFinite(qty)?qty:(p.quantity??p.volume??0);const cost=Number(p.cost_price??p.avg_price);const last=Number(p.last_price??p.price);const mv=Number(p.market_value??p.amount??(Number.isFinite(qty)&&Number.isFinite(last)?qty*last:NaN));const pnl=Number(p.pnl??p.unrealized_pnl??(Number.isFinite(qty)&&Number.isFinite(cost)&&Number.isFinite(last)?(last-cost)*qty:NaN));const pnlPct=Number(p.pnl_pct??p.unrealized_pnl_pct??(Number.isFinite(cost)&&cost?((last-cost)/cost*100):NaN));return `<tr><td>${esc(p.symbol)}</td><td>${esc(p.name||'--')}</td><td>${esc(qtyText)}</td><td>${esc(p.available_quantity??p.available??'--')}</td><td>${esc(Number.isFinite(cost)?cost.toFixed(3):(p.cost_price??p.avg_price??'--'))}</td><td>${esc(Number.isFinite(last)?last.toFixed(3):(p.last_price??p.price??'--'))}</td><td>${money(mv)}</td><td class="${cls(pnl)}">${money(pnl)}</td><td class="${cls(pnlPct)}">${pct(pnlPct)}</td><td>${esc(p.source||js.source?.broker||js.source?.status||'券商接口')}</td></tr>`}).join('')||'<tr><td colspan="10">暂无持仓；若券商未连接则显示接口不支持/未授权。</td></tr>';
 }
-function normalizeRecordRows(orders,trades,records){
+function normalizeRecordRows(orders,trades){
   const rows=[];
-  const amt=x=>Number(x.amount??x.pnl??x.realized_pnl??((Number(x.price??x.limit_price)*Number(x.quantity))||NaN));
-  (orders.data||[]).forEach(x=>rows.push({source:'委托',symbol:x.symbol,side:x.side||x.status,price:x.limit_price||x.price,qty:x.quantity,amount:amt(x),pnl_pct:x.display_pnl_pct||x.pnl_pct,cost:x.display_cost_price||x.cost_price||x.avg_price,status:x.status||x.status_reason}));
-  (trades.data||[]).forEach(x=>rows.push({source:'成交',symbol:x.symbol,side:x.side,price:x.price,qty:x.quantity,amount:amt(x)||x.fee,pnl_pct:x.display_pnl_pct||x.pnl_pct,cost:x.display_cost_price||x.cost_price||x.avg_price,status:x.filled_at||x.source}));
-  (records.data||[]).slice(0,30).forEach(x=>rows.push({source:x.record_type_cn||x.table||'记录',symbol:x.symbol,side:x.display_side||x.side||x.status||x.event_type,price:x.display_price||x.price||x.limit_price,qty:x.display_quantity||x.quantity,amount:x.display_pnl??x.display_amount??amt(x),pnl_pct:x.display_pnl_pct,cost:x.display_cost_price,status:x.display_summary||x.status_reason||x.reason||x.event_type}));
-  return rows.slice(0,80);
+  const amt=x=>{const direct=Number(x.amount??x.filled_amount);if(Number.isFinite(direct))return direct;const price=Number(x.price??x.limit_price),qty=Number(x.quantity);return Number.isFinite(price)&&Number.isFinite(qty)?price*qty:NaN};
+  (orders.data||[]).forEach(x=>rows.push({id:x.broker_order_id||x.order_id||x.id,stage:x.record_stage||'unknown',source:x.record_stage_cn||'委托',actual:!!x.is_actual_broker_order,symbol:x.symbol,side:x.side||x.status,price:x.limit_price??x.price,qty:x.quantity,amount:amt(x),pnl_pct:x.display_pnl_pct??x.pnl_pct,cost:x.display_cost_price??x.cost_price??x.avg_price,status:[x.status,x.status_reason].filter(Boolean).join(' · '),created_at:x.updated_at||x.created_at||''}));
+  (trades.data||[]).forEach(x=>rows.push({id:x.trade_id||x.fill_id||x.id,stage:'fill',source:x.record_stage_cn||'券商成交',actual:true,symbol:x.symbol,side:x.side,price:x.price,qty:x.quantity,amount:amt(x),pnl_pct:x.display_pnl_pct??x.pnl_pct,cost:x.display_cost_price??x.cost_price??x.avg_price,status:x.filled_at||x.source,created_at:x.filled_at||x.created_at||''}));
+  const seen=new Set();return rows.filter(x=>{const key=x.id||[x.stage,x.symbol,x.side,x.price,x.qty,x.created_at].join('|');if(seen.has(key))return false;seen.add(key);return true}).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,300);
 }
-function renderRecords(rows){$('recordRows').innerHTML=rows.map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.side||'--')}</td><td>${esc(x.price??'--')}</td><td>${esc(x.qty??'--')}</td><td>${money(x.amount)}</td><td class="${cls(x.pnl_pct)}">${pct(x.pnl_pct)}</td><td>${esc(x.cost??'--')}</td><td>${esc(x.status||'--')}</td></tr>`).join('')||'<tr><td colspan="9">暂无真实交易流水；默认关闭时只显示预检查和审计。</td></tr>'}
+function setRecordScope(scope){liveRecordScope=scope;document.querySelectorAll('.scope-btn').forEach(btn=>btn.classList.toggle('active',btn.dataset.scope===scope));renderRecords()}
+function renderRecords(){let rows=liveRecordCache;if(liveRecordScope==='actual')rows=rows.filter(x=>x.actual||x.stage==='fill');else if(liveRecordScope==='pending')rows=rows.filter(x=>x.stage==='confirmation');else if(liveRecordScope==='precheck')rows=rows.filter(x=>['precheck','risk_blocked'].includes(x.stage));const s=liveRecordStageSummary||{};$('recordSummary').textContent=`真实委托 ${s.actual_broker_orders||0} · 待确认 ${s.pending_confirmation||0} · 预检查/拦截 ${s.precheck_or_blocked||0}`;$('recordRows').innerHTML=rows.map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.side||'--')}</td><td>${esc(x.price??'--')}</td><td>${esc(x.qty??'--')}</td><td>${money(x.amount)}</td><td class="${cls(x.pnl_pct)}">${pct(x.pnl_pct)}</td><td>${esc(x.cost??'--')}</td><td>${esc(x.status||'--')}</td></tr>`).join('')||`<tr><td colspan="9">${liveRecordScope==='actual'?'暂无真实券商委托或成交；预检查不会计入这里。':'当前分类暂无记录。'}</td></tr>`}
 async function loadQueue(){const q=await api('/api/live/confirm-queue');$('queueRows').innerHTML=(q.data||[]).map(x=>`<tr><td>${esc(x.confirm_id||x.id)}</td><td>${esc(x.symbol||x.request?.symbol||'--')}</td><td>${esc(x.side||x.request?.side||'--')}</td><td>${esc(x.status||'--')}</td><td>${esc(x.reason||x.status_reason||'--')}</td></tr>`).join('')||'<tr><td colspan="5">暂无待确认订单</td></tr>';return q}
 async function load(){
-  const [status,account,positions,orders,trades,records,queue]=await Promise.all([api('/api/live-broker/status'),api('/api/live/account'),api('/api/live/positions'),api('/api/live/orders'),api('/api/live/trades'),api('/api/trading-records?mode=live&limit=80'),loadQueue()]);
-  renderStatus(status);renderAccount(account);renderPositions(positions);renderRecords(normalizeRecordRows(orders,trades,records));
+  const [status,account,positions,orders,trades,queue]=await Promise.all([api('/api/live-broker/status'),api('/api/live/account'),api('/api/live/positions'),api('/api/live/orders?scope=all&limit=500'),api('/api/live/trades'),loadQueue()]);
+  liveRecordCache=normalizeRecordRows(orders,trades);liveRecordStageSummary=orders.summary||{};
+  renderStatus(status);renderAccount(account);renderPositions(positions);renderRecords();
   $('log').textContent='最后刷新 '+new Date().toLocaleTimeString()+'\\n'+JSON.stringify({queue_count:queue.count,status:status.safety},null,2);
 }
 loadAutoConfig(true).then(load);

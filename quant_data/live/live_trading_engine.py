@@ -95,10 +95,17 @@ class LiveTradingEngine:
         pre = self._can_live_place(order)
         order.status = "prechecked" if pre["ok"] else "risk_blocked"
         order.status_reason = pre["reason"]
-        self.store.put("orders", order.to_dict(), mode="live", symbol=order.symbol, session_id=order.session_id)
+        stored_order = {
+            **order.to_dict(),
+            "record_stage": "precheck" if pre["ok"] else "risk_blocked",
+            "broker_submitted": False,
+        }
+        self.store.put("orders", stored_order, mode="live", symbol=order.symbol, session_id=order.session_id)
         self._store_marker(order.to_dict())
         preview = self.order_service.preview(order)
         preview["precheck"] = pre
+        preview["record_stage"] = stored_order["record_stage"]
+        preview["broker_submitted"] = False
         return preview
 
     def place_order(self, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
@@ -107,10 +114,11 @@ class LiveTradingEngine:
         if not pre["ok"]:
             order.status = "rejected"
             order.status_reason = pre["reason"]
-            self.store.put("orders", order.to_dict(), mode="live", symbol=order.symbol, session_id=order.session_id)
+            stored_order = {**order.to_dict(), "record_stage": "risk_blocked", "broker_submitted": False}
+            self.store.put("orders", stored_order, mode="live", symbol=order.symbol, session_id=order.session_id)
             self._store_marker(order.to_dict())
             self.audit.record("live_order_rejected", order.to_dict(), mode="live", symbol=order.symbol, session_id=order.session_id)
-            return {"ok": False, "data": order.to_dict(), "reason": pre["reason"]}
+            return {"ok": False, "data": stored_order, "reason": pre["reason"]}
 
         if self.config.order_confirm_required and not confirmed:
             task = self.confirm_queue.enqueue(
@@ -123,15 +131,18 @@ class LiveTradingEngine:
             order.status = "needs_confirmation"
             order.status_reason = "真实订单需要人工确认"
             self.store.put("manual_confirmations", task.to_dict(), mode="live", symbol=order.symbol, session_id=order.session_id, record_id=task.task_id)
-            self.store.put("orders", order.to_dict(), mode="live", symbol=order.symbol, session_id=order.session_id)
+            stored_order = {**order.to_dict(), "record_stage": "confirmation", "broker_submitted": False}
+            self.store.put("orders", stored_order, mode="live", symbol=order.symbol, session_id=order.session_id)
             self._store_marker(order.to_dict())
             self.audit.record("live_order_needs_confirmation", {"order": order.to_dict(), "confirmation": task.to_dict()}, mode="live", symbol=order.symbol, session_id=order.session_id)
-            return {"ok": False, "data": order.to_dict(), "confirmation": task.to_dict(), "reason": "needs_confirmation"}
+            return {"ok": False, "data": stored_order, "confirmation": task.to_dict(), "reason": "needs_confirmation"}
 
         result = self.order_service.place(order, confirmed=True)
         routed_order = dict(result.get("order") or order.to_dict())
         routed_order.setdefault("session_id", order.session_id)
         routed_order.setdefault("mode", "live")
+        routed_order["record_stage"] = "broker_submission"
+        routed_order["broker_submitted"] = True
         self.store.put("orders", routed_order, mode="live", symbol=order.symbol, session_id=order.session_id, record_id=str(routed_order.get("order_id") or order.order_id))
         self.store.put(
             "broker_raw_responses",

@@ -27,6 +27,10 @@ def test_realtime_paper_tick_persists_session_orders_markers(tmp_path):
     assert store.list("signals", mode="realtime_paper", session_id=session_id)
     assert store.list("account_snapshots", mode="realtime_paper", session_id=session_id)
     assert store.list("chart_markers", mode="realtime_paper", session_id=session_id)
+    audit_rows = store.list("audit_events", mode="realtime_paper", session_id=session_id, limit=100)
+    generated = next(row for row in audit_rows if row.get("event_type") == "signal_generated")
+    assert "signal_ref" in generated["payload"]
+    assert "signal" not in generated["payload"]
 
     restored = RealtimePaperEngineV323(store=store)
     assert restored.get_session(session_id)["status"] == "running"

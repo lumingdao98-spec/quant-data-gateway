@@ -4145,9 +4145,19 @@ def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict
         "audit_events",
         {
             "event_type": "auto_trading_start_paper",
-            "config": config,
-            "session": session.get("session"),
-            "engine": session.get("engine"),
+            "config_ref": {
+                "config_id": config.get("config_id"),
+                "symbols": list(config.get("symbols") or []),
+                "strategy_family": config.get("strategy_family"),
+                "strategy_count": len(config.get("strategy_combo") or []),
+                "screener_snapshot_id": config.get("screener_snapshot_id"),
+                "policy_version": config.get("policy_version"),
+            },
+            "session_ref": {
+                "session_id": session_id,
+                "status": (session.get("session") or {}).get("status"),
+                "interval_seconds": (session.get("session") or {}).get("interval_seconds"),
+            },
             "reused_session": bool(session.get("reused_session")),
             "account_preserved": bool(session.get("account_preserved")),
             "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -4344,6 +4354,85 @@ def _live_positions_summary(rows: list[dict]) -> dict:
     }
 
 
+_LIVE_STAGE_LABELS = {
+    "precheck": "预检查",
+    "risk_blocked": "风控拦截",
+    "confirmation": "待人工确认",
+    "broker_submission": "已提交券商",
+    "broker_order": "券商委托",
+    "fill": "券商成交",
+    "cancel": "撤单",
+    "unknown": "其他记录",
+}
+
+
+def _is_test_trading_record(row: dict) -> bool:
+    item = dict(row or {})
+    identifiers = [
+        item.get("id"),
+        item.get("order_id"),
+        item.get("fill_id"),
+        item.get("trade_id"),
+        item.get("session_id"),
+    ]
+    if any(str(value or "").lower().startswith(("unit-", "test-", "pytest-")) for value in identifiers):
+        return True
+    source = str(item.get("source") or item.get("source_page") or "").lower()
+    return source in {"test", "unit_test", "pytest", "test_fixture"}
+
+
+def _classify_live_order(row: dict, *, broker_source: bool = False) -> dict:
+    item = dict(row or {})
+    status = str(item.get("status") or "unknown").strip().lower()
+    stage = str(item.get("record_stage") or "").strip().lower()
+    if not stage:
+        if broker_source:
+            stage = "broker_order"
+        elif status == "prechecked":
+            stage = "precheck"
+        elif status in {"risk_blocked", "rejected", "failed", "expired"} and not item.get("broker_order_id"):
+            stage = "risk_blocked"
+        elif status == "needs_confirmation":
+            stage = "confirmation"
+        elif status in {"cancel_requested", "cancelled"}:
+            stage = "cancel"
+        elif status in {"confirmed", "submitted", "accepted", "partially_filled", "filled", "reconciled"} or item.get("broker_order_id"):
+            stage = "broker_order"
+        else:
+            stage = "unknown"
+    is_test_record = _is_test_trading_record(item)
+    actual = bool(
+        broker_source
+        or item.get("broker_submitted")
+        or item.get("broker_order_id")
+        or stage in {"broker_submission", "broker_order", "fill", "cancel"}
+    ) and not is_test_record
+    item.update(
+        {
+            "record_stage": stage,
+            "record_stage_cn": _LIVE_STAGE_LABELS.get(stage, _LIVE_STAGE_LABELS["unknown"]),
+            "is_actual_broker_order": actual,
+            "is_precheck_only": stage in {"precheck", "risk_blocked"},
+            "is_test_record": is_test_record,
+        }
+    )
+    return item
+
+
+def _live_order_stage_summary(rows: list[dict]) -> dict:
+    counts: dict[str, int] = {}
+    for row in rows:
+        stage = str(row.get("record_stage") or "unknown")
+        counts[stage] = counts.get(stage, 0) + 1
+    return {
+        "total": len(rows),
+        "actual_broker_orders": sum(1 for row in rows if row.get("is_actual_broker_order")),
+        "pending_confirmation": counts.get("confirmation", 0),
+        "precheck_or_blocked": counts.get("precheck", 0) + counts.get("risk_blocked", 0),
+        "by_stage": counts,
+    }
+
+
 def _enrich_trading_record_row(table: str, item: dict) -> dict:
     row = {"table": table, **dict(item or {})}
     price = _as_float(_first_present(row.get("price"), row.get("limit_price"), row.get("avg_fill_price")), 0.0)
@@ -4487,6 +4576,7 @@ def live_broker_disconnect() -> dict:
 @app.get("/api/live/account")
 def live_account() -> dict:
     snapshot = live_trading_engine_v323.position_sync.snapshot()
+    source = live_trading_engine_v323.broker.health_check().to_dict()
     positions = [_normalize_live_position(x) for x in snapshot.get("positions") or []]
     cash = snapshot.get("cash") or {}
     available_cash = _as_float(cash.get("available_cash") or snapshot.get("available_cash") or 0, 0.0)
@@ -4505,8 +4595,12 @@ def live_account() -> dict:
         "positions_count": len(positions),
         "quality_status": "ok" if positions or available_cash or snapshot.get("authorized") else "券商未连接/未授权或无持仓",
     }
-    trading_store_v323.put("account_snapshots", enriched, mode="live", session_id=str(enriched.get("session_id") or live_trading_engine_v323.session.session_id))
-    return {"ok": True, "data": enriched, "source": live_trading_engine_v323.broker.health_check().to_dict()}
+    data_available = bool(source.get("connected") and snapshot.get("authorized"))
+    enriched["data_available"] = data_available
+    enriched["missing_reason"] = "" if data_available else "券商未连接或未授权，当前数值不是可用于交易的真实账户余额。"
+    if data_available:
+        trading_store_v323.put("account_snapshots", enriched, mode="live", session_id=str(enriched.get("session_id") or live_trading_engine_v323.session.session_id))
+    return {"ok": True, "data": enriched, "source": source, "data_available": data_available, "missing_reason": enriched["missing_reason"]}
 
 
 @app.get("/api/live/positions")
@@ -4526,15 +4620,53 @@ def live_positions() -> dict:
 
 
 @app.get("/api/live/orders")
-def live_orders() -> dict:
-    rows = [x.to_dict() for x in live_trading_engine_v323.broker.get_orders()]
-    stored = trading_store_v323.list("orders", mode="live", limit=200)
-    return {"ok": True, "data": rows or stored, "source": live_trading_engine_v323.broker.health_check().to_dict()}
+def live_orders(scope: str = "actual", limit: int = 200) -> dict:
+    broker_rows = [_classify_live_order(x.to_dict(), broker_source=True) for x in live_trading_engine_v323.broker.get_orders()]
+    stored_rows = [_classify_live_order(x) for x in trading_store_v323.list("orders", mode="live", limit=max(1, min(int(limit or 200), 1000)))]
+    combined: list[dict] = []
+    seen: set[str] = set()
+    for row in [*broker_rows, *stored_rows]:
+        key = str(row.get("broker_order_id") or row.get("order_id") or row.get("id") or "")
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        combined.append(row)
+    scope_key = str(scope or "actual").strip().lower()
+    if scope_key == "actual":
+        visible = [row for row in combined if row.get("is_actual_broker_order")]
+    elif scope_key in {"pending", "confirmation"}:
+        visible = [row for row in combined if row.get("record_stage") == "confirmation"]
+    elif scope_key in {"precheck", "blocked"}:
+        visible = [row for row in combined if row.get("record_stage") in {"precheck", "risk_blocked"}]
+    else:
+        visible = combined
+    return {
+        "ok": True,
+        "data": visible[: max(1, min(int(limit or 200), 1000))],
+        "count": len(visible),
+        "scope": scope_key,
+        "summary": _live_order_stage_summary(combined),
+        "source": live_trading_engine_v323.broker.health_check().to_dict(),
+    }
 
 
 @app.get("/api/live/trades")
-def live_trades() -> dict:
-    return {"ok": True, "data": [x.to_dict() for x in live_trading_engine_v323.broker.get_trades()], "source": live_trading_engine_v323.broker.health_check().to_dict()}
+def live_trades(include_test: bool = False) -> dict:
+    broker_rows = [{**x.to_dict(), "record_stage": "fill", "record_stage_cn": "券商成交", "is_actual_broker_order": True} for x in live_trading_engine_v323.broker.get_trades()]
+    stored_rows = [
+        {
+            **x,
+            "record_stage": "fill",
+            "record_stage_cn": "成交",
+            "is_actual_broker_order": not _is_test_trading_record(x),
+            "is_test_record": _is_test_trading_record(x),
+        }
+        for x in trading_store_v323.list("fills", mode="live", limit=200)
+        if include_test or not _is_test_trading_record(x)
+    ]
+    rows = broker_rows or stored_rows
+    return {"ok": True, "data": rows, "count": len(rows), "source": live_trading_engine_v323.broker.health_check().to_dict()}
 
 
 @app.post("/api/live/orders/preview")
@@ -4593,7 +4725,7 @@ def live_order_place(payload: dict = Body(default_factory=dict)) -> dict:
 @app.post("/api/live/orders/{order_id}/cancel")
 def live_order_cancel(order_id: str) -> dict:
     result = live_trading_engine_v323.broker.cancel_order(order_id).to_dict()
-    trading_store_v323.put("orders", {"order_id": order_id, "status": result.get("status"), "status_reason": result.get("reason"), "mode": "live"}, mode="live", record_id=order_id)
+    trading_store_v323.put("orders", {"order_id": order_id, "status": result.get("status"), "status_reason": result.get("reason"), "mode": "live", "record_stage": "cancel", "broker_submitted": True}, mode="live", record_id=order_id)
     return {"ok": bool(result.get("ok")), "data": result}
 
 
@@ -6001,11 +6133,52 @@ def _read_jin10_realtime_stream(limit: int = 80, *, force: bool = False) -> tupl
     key = f"jin10:{limit}"
     ttl_seconds = 20
     if not force:
-        cached = cache_state_service.get("global_news_cache", key, allow_stale=False, ttl_seconds=ttl_seconds)
+        cached = cache_state_service.get("global_news_cache", key, allow_stale=True, ttl_seconds=ttl_seconds)
         if cached.data and cached.data.get("items"):
             payload = dict(cached.data)
             payload["stream_mode"] = payload.get("stream_mode") or "jin10_cache"
+            if cached.cache_status.get("stale"):
+                payload["refreshing"] = _submit_background_job(
+                    f"jin10-realtime-{limit}",
+                    lambda: _read_jin10_realtime_stream(limit=limit, force=True),
+                )
+                payload["stream_mode"] = "jin10_stale_while_revalidate"
             return payload, cached.cache_status
+        latest = cache_state_service.latest("global_news_cache", allow_stale=True)
+        if latest.data and latest.data.get("items"):
+            items = [
+                x
+                for x in _global_stream_items(list(latest.data.get("items") or []))
+                if x.get("is_jin10") or "金十" in str(x.get("source") or "")
+            ][:limit]
+            if items:
+                payload = {
+                    **dict(latest.data),
+                    "items": items,
+                    "raw_count": len(items),
+                    "stream_mode": "jin10_latest_cache_while_revalidate",
+                    "refresh_seconds": 3,
+                    "refreshing": _submit_background_job(
+                        f"jin10-realtime-{limit}",
+                        lambda: _read_jin10_realtime_stream(limit=limit, force=True),
+                    ),
+                }
+                return payload, latest.cache_status
+        refreshing = _submit_background_job(
+            f"jin10-realtime-{limit}",
+            lambda: _read_jin10_realtime_stream(limit=limit, force=True),
+        )
+        return {
+            "items": [],
+            "raw_count": 0,
+            "sources_status": [{"source": "金十/金十期货直连", "status": "background_refreshing", "count": 0}],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "jin10_background_refreshing",
+            "refresh_seconds": 3,
+            "refreshing": refreshing,
+            "missing_reason": "暂无金十真实快讯缓存，已在后台联网刷新。",
+            "source_candidates": ["https://flash-api.jin10.com/get_flash_list", "https://qihuo.jin10.com/", "https://xnews.jin10.com/"],
+        }, cache_state_service.status("miss", key=key, ttl_seconds=ttl_seconds, source="jin10_realtime", error="background refresh scheduled")
     try:
         rows = news_service._search_jin10_flash(limit=limit)  # noqa: SLF001
         items = _global_stream_items_from_rows(rows, "金十/金十期货快讯")[:limit]
@@ -6080,24 +6253,53 @@ def _fetch_global_stream_fast(limit: int = 80, *, force: bool = False) -> tuple[
     return _global_stream_items_from_rows(rows, "全球快讯")[:limit], status
 
 
+def _slice_global_stream_payload(payload: dict, limit: int, *, mode: str | None = None) -> dict:
+    out = dict(payload or {})
+    out["items"] = [x for x in list(out.get("items") or []) if isinstance(x, dict)][:limit]
+    out["raw_count"] = len(out["items"])
+    out["requested_limit"] = limit
+    if mode:
+        out["stream_mode"] = mode
+    return out
+
+
 def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool = True) -> tuple[dict, dict]:
     limit = max(20, min(int(limit or 80), 160))
-    key = f"stream:{limit}"
+    fetch_limit = max(80, limit)
+    key = "stream:latest"
     if not force:
-        cached = cache_state_service.get("global_news_cache", key, allow_stale=False, ttl_seconds=45)
+        cached = cache_state_service.get("global_news_cache", key, allow_stale=True, ttl_seconds=45)
         if cached.data and cached.data.get("items"):
-            return dict(cached.data), cached.cache_status
+            payload = _slice_global_stream_payload(cached.data, limit)
+            if cached.cache_status.get("stale") and live:
+                payload["refreshing"] = _submit_background_job(
+                    "global-news-stream",
+                    lambda: _read_global_news_stream(limit=fetch_limit, force=True, live=True),
+                )
+                payload["stream_mode"] = "stale_while_revalidate"
+            return payload, cached.cache_status
         latest = cache_state_service.latest("global_news_cache", allow_stale=True)
-        if latest.data and latest.data.get("items") and not live:
-            payload = {
-                "items": _global_stream_items(list(latest.data.get("items") or [])[:limit]),
-                "raw_count": len(latest.data.get("items") or []),
-                "sources_status": latest.data.get("source_logs") or latest.data.get("sources_status") or [],
-                "updated_at": latest.data.get("updated_at") or latest.data.get("created_at"),
-                "stream_mode": "cache_latest",
-                "refresh_seconds": 35,
-                "missing_reason": "",
-            }
+        if latest.data and latest.data.get("items"):
+            latest_items = _global_stream_items(list(latest.data.get("items") or []))
+            if not latest_items:
+                latest_items = [x for x in latest.data.get("items", []) if isinstance(x, dict)]
+            payload = _slice_global_stream_payload(
+                {
+                    **dict(latest.data),
+                    "items": latest_items,
+                    "sources_status": latest.data.get("source_logs") or latest.data.get("sources_status") or [],
+                    "updated_at": latest.data.get("updated_at") or latest.data.get("created_at"),
+                    "refresh_seconds": 3 if live else 35,
+                    "missing_reason": "",
+                },
+                limit,
+                mode="latest_cache_while_revalidate" if live else "cache_latest",
+            )
+            if live:
+                payload["refreshing"] = _submit_background_job(
+                    "global-news-stream",
+                    lambda: _read_global_news_stream(limit=fetch_limit, force=True, live=True),
+                )
             return payload, latest.cache_status
     if not live and not force:
         return {
@@ -6109,8 +6311,23 @@ def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool
             "refresh_seconds": 35,
             "missing_reason": "当前没有全球快讯缓存，且本次请求关闭了联网刷新。",
         }, cache_state_service.status("miss", key=key, ttl_seconds=45, source="global_news_stream", error="cache miss and live=false")
+    if not force:
+        refreshing = _submit_background_job(
+            "global-news-stream",
+            lambda: _read_global_news_stream(limit=fetch_limit, force=True, live=True),
+        )
+        return {
+            "items": [],
+            "raw_count": 0,
+            "sources_status": [{"source": "全球快讯", "status": "background_refreshing", "count": 0}],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "stream_mode": "background_refreshing",
+            "refresh_seconds": 3,
+            "refreshing": refreshing,
+            "missing_reason": "暂无全球快讯缓存，已在后台刷新真实来源。",
+        }, cache_state_service.status("miss", key=key, ttl_seconds=45, source="global_news_stream", error="background refresh scheduled")
     try:
-        items, source_status = _fetch_global_stream_fast(limit=limit, force=force)
+        items, source_status = _fetch_global_stream_fast(limit=fetch_limit, force=force)
         if not items:
             latest = cache_state_service.latest("global_news_cache", allow_stale=True)
             if latest.data and latest.data.get("items"):
@@ -6132,7 +6349,7 @@ def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool
                     }
                     return payload, latest.cache_status
         payload = {
-            "items": items,
+            "items": items[:fetch_limit],
             "raw_count": len(items),
             "sources_status": source_status,
             "sources_used": sorted({x.get("source", "") for x in items if x.get("source")}),
@@ -6144,7 +6361,7 @@ def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool
             "source_candidates": ["金十/金十期货快讯", "东方财富快讯", "华尔街见闻快讯", "财联社电报", "新浪财经7x24"],
         }
         status = cache_state_service.put("global_news_cache", key, payload, ttl_seconds=45, source="news_global_stream")
-        return payload, status
+        return _slice_global_stream_payload(payload, limit), status
     except Exception as exc:
         return {
             "items": [],

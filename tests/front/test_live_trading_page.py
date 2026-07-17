@@ -20,7 +20,11 @@ def test_live_trading_page_visible():
     assert "账户与持仓" in html
     assert "浮盈亏" in html
     assert "盈亏%" in html
-    assert "今日委托 / 成交 / 统一记录" in html
+    assert "实盘委托与成交" in html
+    assert "真实委托/成交" in html
+    assert "待人工确认" in html
+    assert "预检查/拦截" in html
+    assert "打开统一记录" in html
     assert "确认队列" in html
     assert "batchPreview" in html
     assert "selected_strategies" in html
@@ -30,5 +34,8 @@ def test_live_trading_page_visible():
     assert "/api/strategy/library" in html
     assert "/api/live/positions" in html
     assert "/api/live/trades" in html
+    assert "/api/live/orders?scope=all" in html
     assert "display_pnl_pct" in html
     assert "display_cost_price" in html
+    assert "未连接真实账户" in html
+    assert "预检查不会计入这里" in html

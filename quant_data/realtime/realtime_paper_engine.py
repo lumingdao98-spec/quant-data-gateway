@@ -61,7 +61,22 @@ class RealtimePaperEngineV323:
         self._persist_session(session)
         self.store.put(
             "audit_events",
-            {"event_type": "realtime_session_start", "session": session.to_dict(), "engine": base},
+            {
+                "event_type": "realtime_session_start",
+                "session_ref": {
+                    "session_id": session.session_id,
+                    "symbols": session.symbols,
+                    "strategy_family": session.strategy_family,
+                    "interval_seconds": session.interval_seconds,
+                    "started_at": session.started_at,
+                },
+                "engine_ref": {
+                    "status": (base.get("state") or {}).get("status"),
+                    "paper_only": base.get("paper_only", True),
+                    "initial_cash": (base.get("portfolio") or {}).get("initial_cash"),
+                },
+                "config_hash": _stable_id("session-config", session.config),
+            },
             mode="realtime_paper",
             session_id=session.session_id,
         )

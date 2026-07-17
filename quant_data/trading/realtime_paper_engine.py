@@ -232,8 +232,28 @@ class RealtimePaperEngine:
         self.account.mark_to_market({symbol: price})
         curve = {"timestamp": now.isoformat(timespec="seconds"), **self.account.snapshot()}
         self.portfolio_curve.append(curve)
-        self.audit_log.record("realtime_paper_tick", {"symbol": symbol, "signal": signal_row, "orders": orders, "paper_only": True})
-        self.audit_log.record("signal_generated", {"symbol": symbol, "signal": signal_row, "paper_only": True})
+        signal_ref = {
+            "symbol": symbol,
+            "timestamp": signal_row.get("timestamp") or now.isoformat(timespec="seconds"),
+            "action": signal_row.get("action"),
+            "final_score": signal_row.get("final_score"),
+            "target_weight": signal_row.get("target_weight"),
+            "quote_price": signal_row.get("quote_price"),
+            "score_source": signal_row.get("score_source"),
+            "missing_data": list(signal_row.get("missing_data") or [])[:12],
+        }
+        order_refs = [
+            {
+                "order_id": row.get("order_id"),
+                "symbol": row.get("symbol"),
+                "side": row.get("side"),
+                "status": row.get("status"),
+                "quantity": row.get("quantity"),
+            }
+            for row in orders
+        ]
+        self.audit_log.record("realtime_paper_tick", {"signal_ref": signal_ref, "order_refs": order_refs, "paper_only": True})
+        self.audit_log.record("signal_generated", {"signal_ref": signal_ref, "paper_only": True})
         return {
             "ok": True,
             "state": self.state.to_dict(),

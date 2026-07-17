@@ -40,3 +40,29 @@ def test_live_positions_include_normalized_pnl_fields():
         assert "last_price" in row
         assert "unrealized_pnl" in row
         assert "pnl_pct" in row
+
+
+def test_live_orders_separate_prechecks_from_actual_broker_orders():
+    client = TestClient(api.app)
+    client.post(
+        "/api/live/orders/preview",
+        json={"symbol": "300750", "side": "buy", "quantity": 100, "limit_price": 10},
+    )
+
+    actual = client.get("/api/live/orders?scope=actual").json()
+    prechecks = client.get("/api/live/orders?scope=precheck").json()
+
+    assert actual["ok"] is True
+    assert all(row["is_actual_broker_order"] is True for row in actual["data"])
+    assert prechecks["ok"] is True
+    assert any(row["symbol"] == "300750" for row in prechecks["data"])
+    assert all(row["record_stage"] in {"precheck", "risk_blocked"} for row in prechecks["data"])
+    assert prechecks["summary"]["precheck_or_blocked"] >= 1
+
+
+def test_live_account_reports_unavailable_instead_of_real_zero_balance():
+    data = TestClient(api.app).get("/api/live/account").json()
+
+    assert data["ok"] is True
+    assert data["data_available"] is False
+    assert "不是可用于交易的真实账户余额" in data["missing_reason"]

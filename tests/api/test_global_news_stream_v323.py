@@ -164,7 +164,7 @@ def test_agent_market_brief_exposes_traceable_evidence_and_impact(monkeypatch):
     assert "银行" in macro["affected_sectors"]
 
 
-def test_global_news_stream_keeps_last_real_items_when_live_round_empty(monkeypatch):
+def test_global_news_stream_returns_last_real_items_while_refreshing(monkeypatch):
     monkeypatch.setattr(api, "_fetch_global_stream_fast", lambda limit=80, force=False: ([], [{"source": "金十/金十期货快讯", "count": 0, "status": "TimeoutError"}]))
     monkeypatch.setattr(api.cache_state_service, "get", lambda *args, **kwargs: SimpleNamespace(data=None, cache_status={"status": "miss"}))
     monkeypatch.setattr(
@@ -180,8 +180,9 @@ def test_global_news_stream_keeps_last_real_items_when_live_round_empty(monkeypa
 
     assert data["ok"] is True
     assert data["items"][0]["title"] == "上一轮真实金十快讯"
-    assert data["data"]["stream_mode"] == "stale_cache_fallback"
-    assert "上一轮真实快讯缓存" in data["data"]["missing_reason"]
+    assert data["data"]["stream_mode"] == "latest_cache_while_revalidate"
+    assert data["data"]["refreshing"] in {True, False}
+    assert data["refresh_seconds"] == 3
 
 
 def test_global_stream_normalizer_preserves_traceable_source_fields():

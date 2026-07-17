@@ -1,6 +1,15 @@
 from fastapi.testclient import TestClient
+import pytest
 
 import quant_data.api as api
+from quant_data.persistence.trading_store import TradingStore
+
+
+@pytest.fixture(autouse=True)
+def isolated_trading_store(tmp_path, monkeypatch):
+    store = TradingStore(tmp_path / "trading-records-test.sqlite")
+    monkeypatch.setattr(api, "trading_store_v323", store)
+    return store
 
 
 def test_trading_records_api_lists_store_rows():
