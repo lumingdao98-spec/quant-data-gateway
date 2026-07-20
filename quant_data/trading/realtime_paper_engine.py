@@ -93,6 +93,66 @@ class RealtimePaperEngine:
     def audit(self, limit: int = 300) -> dict[str, Any]:
         return {"ok": True, "data": self.audit_log.list(limit)}
 
+    def approve_confirmation(self, task_id: str, *, operator: str = "paper_user") -> dict[str, Any]:
+        task = self.human_confirm_queue.tasks.get(task_id)
+        if task is None:
+            raise KeyError(f"confirm task not found: {task_id}")
+        if task.status != "pending":
+            return {"ok": False, "message": f"确认任务状态为 {task.status}，不能重复执行", "data": task.to_dict()}
+        if self.state.status != "running" or not self._is_trading_time(cn_market_now()):
+            return {"ok": False, "message": "当前非交易时段或模拟会话未运行，确认任务保持待处理", "data": task.to_dict()}
+        payload = dict(task.payload or {})
+        risk = dict(payload.get("risk") or {})
+        signal = dict(payload.get("signal") or {})
+        freshness = dict(signal.get("data_freshness") or signal.get("freshness") or {})
+        hard_reasons = list(risk.get("risk_reasons") or risk.get("reasons") or [])
+        if hard_reasons or freshness.get("action") == "block":
+            return {
+                "ok": False,
+                "message": "硬风控或过期数据不允许人工绕过",
+                "risk_reasons": hard_reasons,
+                "freshness": freshness,
+                "data": task.to_dict(),
+            }
+        source_order = dict(payload.get("order") or {})
+        symbol = str(source_order.get("symbol") or task.symbol)
+        side = str(source_order.get("side") or task.action)
+        price = float(source_order.get("price") or signal.get("quote_price") or 0.0)
+        if not symbol or price <= 0:
+            return {"ok": False, "message": "订单代码或价格缺失，不能模拟成交", "data": task.to_dict()}
+        task = self.human_confirm_queue.approve(task_id, operator=operator)
+        order = self.order_manager.build_order(
+            symbol=symbol,
+            target_weight=float(source_order.get("target_weight") or signal.get("target_weight") or 0.0),
+            side=side,
+            price=price,
+            order_type=str(source_order.get("order_type") or "market"),
+            reason=f"人工确认 {task_id}：{task.reason}",
+        )
+        self.order_manager.simulate_fill(
+            order,
+            fill_price=price,
+            fee_rate=self.state.config.fee_rate,
+            slippage_rate=self.state.config.slippage_rate,
+        )
+        self.account.mark_to_market({symbol: price})
+        self.audit_log.record(
+            "paper_confirmation_executed",
+            {
+                "task": task.to_dict(),
+                "order": order.to_dict(),
+                "portfolio": self.account.snapshot(),
+                "paper_only": True,
+            },
+        )
+        return {
+            "ok": order.status in {"filled", "partial"},
+            "data": task.to_dict(),
+            "order": order.to_dict(),
+            "portfolio": self.account.snapshot(),
+            "paper_only": True,
+        }
+
     def tick(self, payload: dict[str, Any] | None = None, *, manual_replay: bool = False) -> dict[str, Any]:
         payload = payload or {}
         now = self._parse_time(payload.get("now") or payload.get("ts")) or cn_market_now()

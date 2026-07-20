@@ -72,6 +72,57 @@ class PITStore:
             return None
         return PITRecord(row[0], row[1], row[2], row[3], row[4], json.loads(row[6] or "{}"), row[5])
 
+    def query_asof(
+        self,
+        *,
+        decision_time: str,
+        dataset: str = "",
+        symbol: str = "",
+        limit: int = 200,
+    ) -> list[PITRecord]:
+        where = ["available_at<=?"]
+        params: list[Any] = [decision_time]
+        if dataset:
+            where.append("dataset=?")
+            params.append(dataset)
+        if symbol:
+            where.append("symbol IN (?, '')")
+            params.append(symbol)
+        sql = """
+            SELECT record_id, symbol, dataset, decision_time, available_at, source_id, payload_json
+            FROM pit_records
+            WHERE """ + " AND ".join(where) + " ORDER BY available_at DESC, created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 200), 5000)))
+        with sqlite3.connect(self.db_path) as con:
+            rows = con.execute(sql, params).fetchall()
+        return [PITRecord(row[0], row[1], row[2], row[3], row[4], json.loads(row[6] or "{}"), row[5]) for row in rows]
+
+    def replay(
+        self,
+        *,
+        start_time: str,
+        end_time: str,
+        dataset: str = "",
+        symbol: str = "",
+        limit: int = 1000,
+    ) -> list[PITRecord]:
+        where = ["available_at>=?", "available_at<=?"]
+        params: list[Any] = [start_time, end_time]
+        if dataset:
+            where.append("dataset=?")
+            params.append(dataset)
+        if symbol:
+            where.append("symbol IN (?, '')")
+            params.append(symbol)
+        sql = """
+            SELECT record_id, symbol, dataset, decision_time, available_at, source_id, payload_json
+            FROM pit_records
+            WHERE """ + " AND ".join(where) + " ORDER BY available_at ASC, created_at ASC LIMIT ?"
+        params.append(max(1, min(int(limit or 1000), 10000)))
+        with sqlite3.connect(self.db_path) as con:
+            rows = con.execute(sql, params).fetchall()
+        return [PITRecord(row[0], row[1], row[2], row[3], row[4], json.loads(row[6] or "{}"), row[5]) for row in rows]
+
     def stats(self) -> dict[str, Any]:
         with sqlite3.connect(self.db_path) as con:
             rows = con.execute("SELECT dataset, COUNT(*) FROM pit_records GROUP BY dataset").fetchall()

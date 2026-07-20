@@ -8,6 +8,7 @@ from quant_data.factors.factor_engine import FactorEngine
 from quant_data.research.market_state_engine import MarketStateEngine
 from quant_data.research.stock_classifier import StockClassifier
 from quant_data.research.strategy_suitability import StrategySuitabilityEngine
+from quant_data.strategy.strategy_family import get_strategy_execution_profile
 
 
 class HistoricalScreenerSnapshotBuilder:
@@ -81,12 +82,16 @@ class HistoricalScreenerSnapshotBuilder:
             factors = self.factor_engine.compute(symbol, history, asof_time=asof)
             profile = self.classifier.classify(symbol, {**row, "technical_score": factors.score})
             suitability = self.suitability.evaluate(symbol, asof, market_state, profile, factors, {})
+            execution_profile = get_strategy_execution_profile(suitability.strategy_family)
             row.update(
                 {
                     "symbol": symbol,
                     "asof_time": asof,
                     "snapshot_trade_date": str(trade_date)[:10],
                     "strategy_family": suitability.strategy_family,
+                    "strategy_profile_hash": execution_profile.profile_hash,
+                    "policy_hash": execution_profile.policy_hash,
+                    "execution_profile_version": execution_profile.profile_version,
                     "suitability_reason": "；".join(suitability.reasons or suitability.warnings),
                     "factor_score": factors.score,
                     "market_regime": market_state.market_regime,

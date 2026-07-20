@@ -22,6 +22,8 @@ class BrokerConfig:
     qmt_session_id: str = ""
     ptrade_path: str = ""
     ptrade_account_id: str = ""
+    ptrade_module: str = "ptrade"
+    ptrade_client_factory: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,6 +47,8 @@ def load_broker_config(env: dict[str, str] | None = None) -> BrokerConfig:
         qmt_session_id=data.get("QMT_SESSION_ID", ""),
         ptrade_path=data.get("PTRADE_PATH", ""),
         ptrade_account_id=data.get("PTRADE_ACCOUNT_ID", ""),
+        ptrade_module=data.get("PTRADE_MODULE", "ptrade"),
+        ptrade_client_factory=data.get("PTRADE_CLIENT_FACTORY", ""),
     )
 
 

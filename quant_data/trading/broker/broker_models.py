@@ -43,6 +43,12 @@ class BrokerPosition:
     avg_cost: float = 0.0
     market_price: float = 0.0
     market_value: float = 0.0
+    unrealized_pnl: float = 0.0
+    unrealized_pnl_pct: float = 0.0
+    source: str = ""
+    fetched_at: str = field(default_factory=now_text)
+    available_at: str = ""
+    quality_status: str = "ok"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +62,9 @@ class BrokerAccountSnapshot:
     positions: list[BrokerPosition] = field(default_factory=list)
     fetched_at: str = field(default_factory=now_text)
     authorized: bool = False
+    source: str = ""
+    available_at: str = ""
+    quality_status: str = "ok"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +74,9 @@ class BrokerAccountSnapshot:
             "positions": [x.to_dict() for x in self.positions],
             "fetched_at": self.fetched_at,
             "authorized": self.authorized,
+            "source": self.source,
+            "available_at": self.available_at or self.fetched_at,
+            "quality_status": self.quality_status,
         }
 
 
@@ -110,6 +122,10 @@ class BrokerOrder:
     price: float | None = None
     created_at: str = field(default_factory=now_text)
     raw_response: dict[str, Any] = field(default_factory=dict)
+    broker_order_id: str = ""
+    filled_quantity: int = 0
+    updated_at: str = field(default_factory=now_text)
+    source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -126,6 +142,11 @@ class BrokerTrade:
     amount: float
     filled_at: str = field(default_factory=now_text)
     raw_response: dict[str, Any] = field(default_factory=dict)
+    broker_order_id: str = ""
+    fee: float = 0.0
+    tax: float = 0.0
+    slippage: float = 0.0
+    source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

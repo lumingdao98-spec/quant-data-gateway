@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .stock_classifier import StockProfileV323
-from .strategy_family import STRATEGY_FAMILIES
+from .strategy_family import STRATEGY_FAMILIES, normalize_strategy_family
 
 
 @dataclass(slots=True)
@@ -48,12 +48,12 @@ class StrategySuitabilityV323:
             risk_budget = 0.008
             reasons.append("ETF/指数按配置或核心-卫星处理")
         elif p.stock_type == "long_term_compounder":
-            family = "long_term"
+            family = "position"
             risk_budget = 0.016
             reasons.append("优质成长类不使用短线小止损作为主策略")
         elif p.stock_type in {"short_theme", "cyclical"}:
-            family = "short_term" if score >= 66 else "swing"
-            risk_budget = 0.009 if family == "short_term" else 0.012
+            family = "short" if score >= 66 else "swing"
+            risk_budget = 0.009 if family == "short" else 0.012
             reasons.append("题材/周期按短线或波段处理，避免长线重仓")
         elif p.stock_type == "dividend_low_vol":
             family = "core_satellite"
@@ -70,6 +70,7 @@ class StrategySuitabilityV323:
         if str(market_state.get("risk_on_off") or "").lower() == "risk_off" and family != "avoid":
             risk_budget *= 0.55
             warnings.append("大盘风险偏弱，风险预算降权")
+        family = normalize_strategy_family(family, default="avoid")
         spec = STRATEGY_FAMILIES.get(family, STRATEGY_FAMILIES["avoid"])
         return StrategySuitabilityDecision(
             symbol=p.symbol,

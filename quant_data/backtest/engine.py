@@ -17,6 +17,7 @@ from quant_data.factors.score_provenance import ScoringPolicy, build_score_prove
 from quant_data.research.market_state_engine import MarketStateEngine
 from quant_data.research.stock_classifier import StockClassifier
 from quant_data.research.strategy_suitability import StrategySuitabilityEngine
+from quant_data.strategy.strategy_family import get_strategy_execution_profile
 
 
 class BacktestEngine:
@@ -279,6 +280,7 @@ class BacktestEngine:
             factors = self.factor_engine.compute(signal.symbol, history, asof_time=current_date)
             profile = self.stock_classifier.classify(signal.symbol, {**(signal.features or {}), "technical_score": factors.score})
             suitability = self.suitability_engine.evaluate(signal.symbol, current_date, market_state, profile, factors, {})
+            execution_profile = get_strategy_execution_profile(suitability.strategy_family)
             policy = ScoringPolicy(
                 policy_id="v3.22-backtest-daily",
                 base_score=50.0,
@@ -297,6 +299,10 @@ class BacktestEngine:
             data["signal_action"] = signal.action
             data["signal_reason"] = signal.reason
             data["suitability"] = suitability.to_dict()
+            data["strategy_profile_hash"] = execution_profile.profile_hash
+            data["policy_hash"] = execution_profile.policy_hash
+            data["execution_profile_version"] = execution_profile.profile_version
+            data["strategy_execution_profile"] = execution_profile.to_dict()
             data["summary"] = summarize_many([data], limit=1)[0]
             rows.append(data)
         return rows

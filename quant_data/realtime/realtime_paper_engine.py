@@ -8,6 +8,8 @@ from typing import Any
 
 from quant_data.chart.trading_marker_engine import TradingMarkerEngine
 from quant_data.persistence.trading_store import TradingStore
+from quant_data.strategy.strategy_family import get_strategy_execution_profile, normalize_strategy_family
+from quant_data.trading.ledger import LedgerService
 from quant_data.trading.paper_account import PaperAccount
 from quant_data.trading.realtime_paper_engine import RealtimePaperEngine
 
@@ -23,6 +25,7 @@ class RealtimePaperEngineV323:
         self.engines: dict[str, RealtimePaperEngine] = {}
         self.store = store or TradingStore()
         self.marker_engine = TradingMarkerEngine()
+        self.ledger = LedgerService(self.store)
         self.sessions: dict[str, RealtimeSession] = {}
         self.active_session_id = ""
         self._restore_sessions()
@@ -45,9 +48,12 @@ class RealtimePaperEngineV323:
                     mode="realtime_paper",
                     session_id=previous.session_id,
                 )
+        family = normalize_strategy_family(payload.get("strategy_family") or payload.get("strategy") or "core_satellite")
+        profile = get_strategy_execution_profile(family)
         session = RealtimeSession(
             symbols=_symbols(payload.get("symbols") or payload.get("watchlist")),
-            strategy_family=str(payload.get("strategy_family") or payload.get("strategy") or "hybrid"),
+            strategy_family=family,
+            strategy_profile=profile.to_dict(),
             interval_seconds=max(5, min(60, int(payload.get("interval_seconds") or 15))),
             status="running",
             config=_session_config(payload),
@@ -102,17 +108,18 @@ class RealtimePaperEngineV323:
         started_at = session.started_at
         symbols = _symbols(payload.get("symbols") or payload.get("watchlist")) or list(session.symbols)
         interval_seconds = max(5, min(60, int(payload.get("interval_seconds") or session.interval_seconds or 15)))
-        strategy_family = str(
+        strategy_family = normalize_strategy_family(
             payload.get("strategy_family")
             or payload.get("strategy")
             or session.strategy_family
-            or "hybrid"
+            or "core_satellite"
         )
         previous_initial_cash = float(engine.account.initial_cash)
         requested_initial_cash = float(payload.get("initial_cash") or previous_initial_cash)
         session.symbols = symbols
         session.interval_seconds = interval_seconds
         session.strategy_family = strategy_family
+        session.strategy_profile = get_strategy_execution_profile(strategy_family).to_dict()
         session.status = "running"
         session.paused = False
         session.config = {
@@ -237,6 +244,29 @@ class RealtimePaperEngineV323:
         result = engine.tick(payload, manual_replay=manual_replay)
         self.sync_engine_state(sid)
         if session:
+            session.last_tick_at = str(engine.state.last_tick_at or _now())
+            signal = result.get("signal") if isinstance(result.get("signal"), dict) else {}
+            if signal:
+                session.last_decision_at = str(
+                    signal.get("decision_time")
+                    or signal.get("timestamp")
+                    or session.last_tick_at
+                )
+            session.freshness_status = str(engine.state.freshness_status or "missing")
+            quote = payload.get("quote") if isinstance(payload.get("quote"), dict) else {}
+            session.data_source_status = str(
+                quote.get("source")
+                or quote.get("source_id")
+                or payload.get("score_source")
+                or "数据源未标明"
+            )
+            event_context = signal.get("event_watch_context") if isinstance(signal, dict) else {}
+            event_count = len(event_context.get("events") or []) if isinstance(event_context, dict) else 0
+            if event_count:
+                session.event_trigger_count += event_count
+                session.last_event_at = session.last_decision_at
+            session.last_sync_at = _now()
+            self._persist_session(session)
             result["v323_session"] = session.to_dict()
             result["session_id"] = sid
         return result
@@ -318,6 +348,22 @@ class RealtimePaperEngineV323:
         engine = self._engine_for(session_id or self.active_session_id, restore=True)
         return engine.human_confirm_queue if engine else self._template_engine.human_confirm_queue
 
+    def approve_confirmation(
+        self,
+        task_id: str,
+        *,
+        operator: str = "paper_user",
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        sid = session_id or self.active_session_id
+        engine = self._engine_for(sid, restore=True)
+        if engine is None:
+            raise KeyError(f"session not found: {sid}")
+        result = engine.approve_confirmation(task_id, operator=operator)
+        self.sync_engine_state(sid)
+        result["session_id"] = sid
+        return result
+
     def sync_engine_state(self, session_id: str = "") -> dict[str, Any]:
         sid = session_id or self.active_session_id
         counts = {"signals": 0, "orders": 0, "fills": 0, "positions": 0, "markers": 0, "audit_events": 0}
@@ -358,6 +404,13 @@ class RealtimePaperEngineV323:
             fill_id = str(item.get("fill_id") or _stable_id("fill", sid, item))
             item["fill_id"] = fill_id
             self.store.put("fills", item, mode="realtime_paper", symbol=str(item.get("symbol") or ""), session_id=sid, record_id=fill_id)
+            self.ledger.record_fill(
+                item,
+                mode="realtime_paper",
+                session_id=sid,
+                account_id=f"paper:{sid}",
+                source="paper_matcher",
+            )
             marker = self.marker_engine.from_fill(item, mode="realtime_paper", session_id=sid).to_dict()
             self.store.put("chart_markers", marker, mode="realtime_paper", symbol=marker.get("symbol", ""), session_id=sid, record_id=marker["marker_id"])
             counts["fills"] += 1
@@ -365,7 +418,55 @@ class RealtimePaperEngineV323:
 
         portfolio = engine.account.snapshot()
         portfolio.setdefault("session_id", sid)
-        self.store.put("account_snapshots", portfolio, mode="realtime_paper", session_id=sid, record_id=_stable_id("account", sid, portfolio.get("cash"), len(fills)))
+        snapshot_id = _stable_id("account", sid, portfolio.get("cash"), len(fills))
+        self.store.put("account_snapshots", portfolio, mode="realtime_paper", session_id=sid, record_id=snapshot_id)
+        snapshot_time = _now()
+        self.store.put_normalized(
+            "broker_accounts",
+            {
+                "snapshot_id": snapshot_id,
+                "mode": "realtime_paper",
+                "session_id": sid,
+                "broker": "simulator",
+                "account_id": f"paper:{sid}",
+                "initial_cash": portfolio.get("initial_cash"),
+                "cash": portfolio.get("cash"),
+                "equity": portfolio.get("equity"),
+                "market_value": portfolio.get("market_value"),
+                "available_cash": portfolio.get("available_cash"),
+                "frozen_cash": portfolio.get("frozen_cash"),
+                "total_cash": portfolio.get("cash"),
+                "position_market_value": portfolio.get("market_value"),
+                "total_equity": portfolio.get("equity"),
+                "realized_pnl": portfolio.get("realized_pnl"),
+                "unrealized_pnl": portfolio.get("unrealized_pnl"),
+                "daily_pnl": portfolio.get("daily_pnl"),
+                "max_drawdown": portfolio.get("max_drawdown"),
+                "authorized": 1,
+                "fetched_at": snapshot_time,
+                "available_at": snapshot_time,
+                "source": "paper_matcher",
+                "quality_status": "simulated_from_real_inputs",
+            },
+            record_id=snapshot_id,
+        )
+        self.store.put_normalized(
+            "account_equity_curve",
+            {
+                "point_id": _stable_id("equity", sid, snapshot_time, portfolio.get("equity")),
+                "mode": "realtime_paper",
+                "session_id": sid,
+                "account_id": f"paper:{sid}",
+                "equity": portfolio.get("equity"),
+                "available_cash": portfolio.get("available_cash"),
+                "position_market_value": portfolio.get("market_value"),
+                "realized_pnl": portfolio.get("realized_pnl"),
+                "unrealized_pnl": portfolio.get("unrealized_pnl"),
+                "return_pct": portfolio.get("total_return_pct"),
+                "timestamp": snapshot_time,
+                "source": "paper_matcher",
+            },
+        )
         self.store.delete("positions", mode="realtime_paper", session_id=sid)
         for symbol, pos in (portfolio.get("positions") or {}).items():
             item = dict(pos)
@@ -426,6 +527,8 @@ class RealtimePaperEngineV323:
             data["paused"] = bool(data.get("paused"))
             data["kill_switch"] = bool(data.get("kill_switch"))
             data["config"] = data.get("config") if isinstance(data.get("config"), dict) else {}
+            data["strategy_family"] = normalize_strategy_family(data.get("strategy_family") or "core_satellite")
+            data["strategy_profile"] = get_strategy_execution_profile(data["strategy_family"]).to_dict()
             session = RealtimeSession(**data)
             self.sessions[session.session_id] = session
         candidates = sorted(

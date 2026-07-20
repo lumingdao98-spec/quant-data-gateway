@@ -20,6 +20,7 @@ ORDER_STATUSES = {
     "filled",
     "cancel_requested",
     "cancelled",
+    "canceled",
     "rejected",
     "expired",
     "failed",
@@ -58,6 +59,9 @@ class UnifiedOrder:
     updated_at: str = field(default_factory=now_text)
     source_page: str = ""
     strategy_family: str = ""
+    strategy_profile_hash: str = ""
+    policy_hash: str = ""
+    execution_profile_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

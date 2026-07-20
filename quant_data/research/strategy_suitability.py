@@ -6,6 +6,7 @@ from typing import Any
 
 from .market_state_engine import MarketState
 from .stock_classifier import StockProfile
+from quant_data.strategy.strategy_family import normalize_strategy_family
 
 
 @dataclass(slots=True)
@@ -70,6 +71,13 @@ class StrategySuitabilityEngine:
             warnings.append("市场风险偏好偏弱，风险预算降权")
         if not reasons and family != "avoid":
             reasons.append("由市场状态和股票画像联合适配")
+        family = normalize_strategy_family({
+            "etf_allocation": "dca",
+            "long_term_compounder": "position",
+            "short_term_momentum": "short",
+            "swing_reversion": "swing",
+            "dca_accumulate": "dca",
+        }.get(family, family), default="avoid")
         return StrategySuitabilityResult(
             symbol=symbol,
             strategy_family=family,
