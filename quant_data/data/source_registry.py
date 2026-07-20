@@ -53,4 +53,10 @@ def _default_sources() -> list[SourceDefinition]:
         SourceDefinition("f10", "公开 F10 数据", "fundamentals", supports=["fundamentals", "industry"]),
         SourceDefinition("cache", "本地最近成功缓存", "cache", supports=["quote", "kline", "snapshot"]),
         SourceDefinition("broker_disabled", "默认禁用券商适配器", "broker", supports=["status"]),
+        SourceDefinition("jin10", "金十数据公开快讯", "news", url="https://www.jin10.com/", supports=["global_news", "macro_event", "commodity_event"]),
+        SourceDefinition("reuters", "路透社授权数据", "news", supports=["global_news", "company_event"], enabled=False, note="需要用户自行配置合法授权数据接口"),
+        SourceDefinition("bloomberg", "彭博授权数据", "news", supports=["global_news", "market_event"], enabled=False, note="需要用户自行配置合法授权数据接口"),
+        SourceDefinition("sse_ipo", "上海证券交易所发行上市公开信息", "event", url="https://www.sse.com.cn/", supports=["ipo_event", "listing_event"]),
+        SourceDefinition("szse_ipo", "深圳证券交易所发行上市公开信息", "event", url="https://www.szse.cn/", supports=["ipo_event", "listing_event"]),
+        SourceDefinition("macro_official", "官方宏观数据发布机构", "event", supports=["macro_event", "calendar_event"]),
     ]

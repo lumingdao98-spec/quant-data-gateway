@@ -7,7 +7,7 @@ def build_auto_trading_workbench_ui() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>V3.23 自动交易总控台</title>
+<title>V3.24 自动交易总控台</title>
 <style>
 :root{
   --bg:#07111f;--panel:#101a2c;--panel2:#152238;--line:#263955;--text:#e6f0ff;--muted:#92a6c4;
@@ -70,7 +70,7 @@ def build_auto_trading_workbench_ui() -> str:
   </aside>
   <section>
     <header class="top">
-      <h1>V3.23 自动交易总控台</h1>
+      <h1>V3.24 自动交易总控台</h1>
       <span class="pill good">首页总览 + 右侧覆盖模块</span>
       <span class="pill" id="brokerBadge">券商状态读取中...</span>
       <div class="grow"></div>
@@ -270,7 +270,7 @@ def build_auto_trading_workbench_ui() -> str:
     <button class="btn" onclick="openWorkspaceInNewWindow()">新窗口</button>
     <button class="btn red" onclick="closeWorkspace()">关闭</button>
   </header>
-  <iframe id="workspaceFrame" class="workspace-frame" title="V3.23 自动交易右侧模块 iframe" src="about:blank"></iframe>
+  <iframe id="workspaceFrame" class="workspace-frame" title="V3.24 自动交易右侧模块 iframe" src="about:blank"></iframe>
 </section>
 <div class="action-toast" id="actionToast" role="status" aria-live="polite"></div>
 <script>

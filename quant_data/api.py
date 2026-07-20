@@ -70,12 +70,14 @@ from quant_data.auto_trading_workbench_ui import build_auto_trading_workbench_ui
 from quant_data.chart import ChartAnnotationService
 from quant_data.data import (
     PITStore,
+    build_event_snapshot,
     build_fundamentals_snapshot,
     build_news_snapshot,
     build_quote_snapshot,
     default_source_registry,
     market_session_status,
 )
+from quant_data.events import EventBus, EventTriggerEngine
 from quant_data.live import LiveTradingEngine
 from quant_data.persistence import TradingStore
 from quant_data.realtime import RealtimePaperEngineV323
@@ -95,6 +97,7 @@ from quant_data.trading import (
     SignalFusionEngine,
     TradingSignal,
 )
+from quant_data.trading.ledger import LedgerService
 
 
 service = MarketDataService()
@@ -138,7 +141,10 @@ realtime_paper_engine_v321 = RealtimePaperEngine(
     freshness_guard=DataFreshnessGuard(),
 )
 trading_store_v323 = TradingStore()
+ledger_service_v324 = LedgerService(trading_store_v323)
 pit_store_v323 = PITStore()
+event_bus_v324 = EventBus(pit_store_v323)
+event_trigger_engine_v324 = EventTriggerEngine()
 chart_annotation_service_v323 = ChartAnnotationService()
 source_registry_v323 = default_source_registry()
 factor_engine_v323 = V323FactorEngine()
@@ -3741,6 +3747,72 @@ def backtest_run_v323(payload: dict = Body(default_factory=dict)) -> dict:
             row["mode"] = "backtest"
             row["session_id"] = result.run_id
             trading_store_v323.put("fills", row, mode="backtest", symbol=str(row.get("symbol") or ""), session_id=result.run_id, record_id=str(row.get("fill_id") or ""))
+            ledger_service_v324.record_fill(
+                {
+                    **row,
+                    "amount": row.get("gross_amount"),
+                    "fee": float(row.get("commission") or 0.0) + float(row.get("transfer_fee") or 0.0),
+                    "tax": row.get("stamp_tax"),
+                    "slippage": row.get("slippage_cost"),
+                    "filled_at": row.get("date"),
+                },
+                mode="backtest",
+                session_id=result.run_id,
+                account_id=f"backtest:{result.run_id}",
+                source="historical_backtest",
+            )
+        initial_cash = float(data.get("config", {}).get("initial_cash") or cfg.initial_cash or 0.0)
+        equity_curve = list(data.get("equity_curve") or [])
+        for point in equity_curve:
+            timestamp = str(point.get("date") or point.get("timestamp") or result.ended_at)
+            equity = float(point.get("equity") or 0.0)
+            trading_store_v323.put_normalized(
+                "account_equity_curve",
+                {
+                    "point_id": f"{result.run_id}:{timestamp}",
+                    "mode": "backtest",
+                    "session_id": result.run_id,
+                    "account_id": f"backtest:{result.run_id}",
+                    "equity": equity,
+                    "available_cash": float(point.get("cash") or 0.0),
+                    "position_market_value": float(point.get("market_value") or 0.0),
+                    "realized_pnl": float(point.get("realized_pnl") or 0.0),
+                    "unrealized_pnl": float(point.get("unrealized_pnl") or 0.0),
+                    "return_pct": ((equity / initial_cash) - 1.0) * 100.0 if initial_cash > 0 else 0.0,
+                    "timestamp": timestamp,
+                    "source": "historical_backtest",
+                },
+                record_id=f"{result.run_id}:{timestamp}",
+            )
+        final_state = equity_curve[-1] if equity_curve else {}
+        final_equity = float(final_state.get("equity") or initial_cash)
+        trading_store_v323.put_normalized(
+            "broker_accounts",
+            {
+                "snapshot_id": f"{result.run_id}:final",
+                "mode": "backtest",
+                "session_id": result.run_id,
+                "broker": "historical_engine",
+                "account_id": f"backtest:{result.run_id}",
+                "initial_cash": initial_cash,
+                "cash": float(final_state.get("cash") or final_equity),
+                "equity": final_equity,
+                "market_value": float(final_state.get("market_value") or 0.0),
+                "available_cash": float(final_state.get("cash") or final_equity),
+                "position_market_value": float(final_state.get("market_value") or 0.0),
+                "total_equity": final_equity,
+                "realized_pnl": final_equity - initial_cash,
+                "unrealized_pnl": float(final_state.get("unrealized_pnl") or 0.0),
+                "daily_pnl": 0.0,
+                "max_drawdown": float(data.get("metrics", {}).get("max_drawdown_pct") or 0.0),
+                "authorized": 0,
+                "fetched_at": result.ended_at,
+                "available_at": result.ended_at,
+                "source": "historical_backtest",
+                "quality_status": "historical_point_in_time",
+            },
+            record_id=f"{result.run_id}:final",
+        )
         for row in data.get("score_provenance") or []:
             rid = str(row.get("score_provenance_id") or row.get("provenance_id") or "")
             if rid:
@@ -4035,11 +4107,11 @@ def realtime_paper_confirmations(status: str = "pending", limit: int = 200) -> d
 def realtime_paper_confirm_approve(task_id: str, payload: dict = Body(default_factory=dict)) -> dict:
     operator = str(payload.get("operator") or "paper_user")
     try:
-        task = realtime_paper_engine_v323.confirmations().approve(
+        result = realtime_paper_engine_v323.approve_confirmation(
             task_id,
             operator=operator,
         )
-        return {"ok": True, "data": task.to_dict(), "paper_only": True}
+        return result
     except KeyError:
         try:
             task = realtime_paper_engine_v321.human_confirm_queue.approve(task_id, operator=operator)
@@ -4637,6 +4709,115 @@ def _trading_records_summary(rows: list[dict]) -> dict:
     }
 
 
+@app.post("/api/events/ingest")
+def event_ingest(payload: dict = Body(default_factory=dict)) -> dict:
+    event = build_event_snapshot(payload)
+    validation = source_registry_v323.validate(event.source_id, event.source_url, event.source_ref)
+    if not validation.get("accepted"):
+        return {
+            "ok": False,
+            "message": "事件数据源未注册、未启用或不符合真实性规则",
+            "validation": validation,
+            "data": event.to_dict(),
+        }
+    event_bus_v324.publish(event)
+    return {"ok": True, "data": event.to_dict(), "records": len(event.symbols or [""])}
+
+
+@app.get("/api/events/as-of")
+def events_as_of(decision_time: str, symbol: str = "", event_type: str = "", limit: int = 200) -> dict:
+    rows = [record.to_dict() for record in pit_store_v323.query_asof(
+        decision_time=decision_time,
+        dataset="events",
+        symbol=normalize_symbol(symbol) if symbol else "",
+        limit=max(1, min(int(limit or 200), 5000)),
+    )]
+    if event_type:
+        rows = [row for row in rows if str((row.get("payload") or {}).get("event_type") or "") == event_type]
+    return {
+        "ok": True,
+        "data": rows,
+        "count": len(rows),
+        "decision_time": decision_time,
+        "pit_rule": "仅返回 available_at <= decision_time 的事件。",
+    }
+
+
+@app.get("/api/events/replay")
+def events_replay(start_time: str, end_time: str, symbol: str = "", event_type: str = "", limit: int = 1000) -> dict:
+    rows = [record.to_dict() for record in pit_store_v323.replay(
+        start_time=start_time,
+        end_time=end_time,
+        dataset="events",
+        symbol=normalize_symbol(symbol) if symbol else "",
+        limit=max(1, min(int(limit or 1000), 10000)),
+    )]
+    if event_type:
+        rows = [row for row in rows if str((row.get("payload") or {}).get("event_type") or "") == event_type]
+    return {"ok": True, "data": rows, "count": len(rows), "start_time": start_time, "end_time": end_time}
+
+
+def _dataset_asof_response(dataset: str, decision_time: str, symbol: str, limit: int) -> dict:
+    rows = [record.to_dict() for record in pit_store_v323.query_asof(
+        decision_time=decision_time,
+        dataset=dataset,
+        symbol=normalize_symbol(symbol) if symbol else "",
+        limit=max(1, min(int(limit or 200), 5000)),
+    )]
+    return {"ok": True, "data": rows, "count": len(rows), "dataset": dataset, "decision_time": decision_time, "pit_rule": "available_at <= decision_time"}
+
+
+@app.get("/api/news/asof")
+def news_asof(decision_time: str, symbol: str = "", limit: int = 200) -> dict:
+    return _dataset_asof_response("news", decision_time, symbol, limit)
+
+
+@app.get("/api/earnings/asof")
+def earnings_asof(decision_time: str, symbol: str = "", limit: int = 200) -> dict:
+    return _dataset_asof_response("earnings", decision_time, symbol, limit)
+
+
+@app.get("/api/ipo/asof")
+def ipo_asof(decision_time: str, symbol: str = "", limit: int = 200) -> dict:
+    return _dataset_asof_response("ipo", decision_time, symbol, limit)
+
+
+@app.post("/api/events/trigger/evaluate")
+@app.post("/api/events/triggers/evaluate")
+def event_trigger_evaluate(payload: dict = Body(default_factory=dict)) -> dict:
+    decision_time = str(payload.get("decision_time") or datetime.now().isoformat(timespec="seconds"))
+    event_data = dict(payload.get("event") or {})
+    if not event_data and payload.get("event_id"):
+        rows = pit_store_v323.query_asof(decision_time=decision_time, dataset="events", limit=5000)
+        match = next((record for record in rows if record.record_id == payload.get("event_id") or (record.payload or {}).get("event_id") == payload.get("event_id")), None)
+        event_data = dict(match.payload) if match else {}
+    if not event_data:
+        return {"ok": False, "message": "event or event_id required"}
+    decision = event_trigger_engine_v324.evaluate(
+        event_data,
+        decision_time=decision_time,
+        strategy_family=str(payload.get("strategy_family") or "core_satellite"),
+    )
+    return {"ok": True, "data": decision.to_dict()}
+
+
+@app.get("/api/events/triggers/live")
+def event_triggers_live(symbol: str = "", strategy_family: str = "core_satellite", limit: int = 100) -> dict:
+    decision_time = datetime.now().isoformat(timespec="seconds")
+    records = pit_store_v323.query_asof(
+        decision_time=decision_time,
+        symbol=normalize_symbol(symbol) if symbol else "",
+        limit=max(1, min(int(limit or 100), 1000)),
+    )
+    allowed_datasets = {"events", "news", "earnings", "ipo"}
+    rows = [
+        event_trigger_engine_v324.evaluate(record.payload, decision_time=decision_time, strategy_family=strategy_family).to_dict()
+        for record in records
+        if record.dataset in allowed_datasets
+    ]
+    return {"ok": True, "data": rows, "count": len(rows), "decision_time": decision_time}
+
+
 @app.get("/api/live-broker/status")
 def live_broker_status() -> dict:
     return live_trading_engine_v323.status()
@@ -4654,8 +4835,19 @@ def live_broker_disconnect() -> dict:
 
 @app.get("/api/live/account")
 def live_account() -> dict:
-    snapshot = live_trading_engine_v323.position_sync.snapshot()
-    source = live_trading_engine_v323.broker.health_check().to_dict()
+    synced = live_trading_engine_v323.sync_live_account_state()
+    snapshot = {
+        **dict(synced.get("account") or {}),
+        "account": dict(synced.get("account") or {}),
+        "positions": list(synced.get("positions") or []),
+        "cash": dict(synced.get("cash") or {}),
+        "authorized": bool((synced.get("account") or {}).get("authorized")),
+        "session_id": synced.get("session_id"),
+        "fetched_at": synced.get("fetched_at"),
+        "available_at": synced.get("available_at"),
+        "quality_status": synced.get("quality_status"),
+    }
+    source = dict(synced.get("broker") or {})
     positions = [_normalize_live_position(x) for x in snapshot.get("positions") or []]
     cash = snapshot.get("cash") or {}
     available_cash = _as_float(cash.get("available_cash") or snapshot.get("available_cash") or 0, 0.0)
@@ -4674,7 +4866,7 @@ def live_account() -> dict:
         "positions_count": len(positions),
         "quality_status": "ok" if positions or available_cash or snapshot.get("authorized") else "券商未连接/未授权或无持仓",
     }
-    data_available = bool(source.get("connected") and snapshot.get("authorized"))
+    data_available = bool(synced.get("data_available"))
     enriched["data_available"] = data_available
     enriched["missing_reason"] = "" if data_available else "券商未连接或未授权，当前数值不是可用于交易的真实账户余额。"
     if data_available:
@@ -4684,10 +4876,9 @@ def live_account() -> dict:
 
 @app.get("/api/live/positions")
 def live_positions() -> dict:
-    rows = [_normalize_live_position(x.to_dict()) for x in live_trading_engine_v323.broker.get_positions()]
-    for row in rows:
-        trading_store_v323.put("positions", row, mode="live", symbol=str(row.get("symbol") or ""), session_id=live_trading_engine_v323.session.session_id)
-    source = live_trading_engine_v323.broker.health_check().to_dict()
+    synced = live_trading_engine_v323.sync_live_account_state()
+    rows = [_normalize_live_position(x) for x in synced.get("positions") or []]
+    source = dict(synced.get("broker") or {})
     return {
         "ok": True,
         "data": rows,
@@ -4700,7 +4891,8 @@ def live_positions() -> dict:
 
 @app.get("/api/live/orders")
 def live_orders(scope: str = "actual", limit: int = 200) -> dict:
-    broker_rows = [_classify_live_order(x.to_dict(), broker_source=True) for x in live_trading_engine_v323.broker.get_orders()]
+    synced = live_trading_engine_v323.sync_live_account_state()
+    broker_rows = [_classify_live_order(x, broker_source=True) for x in synced.get("orders") or []]
     stored_rows = [_classify_live_order(x) for x in trading_store_v323.list("orders", mode="live", limit=max(1, min(int(limit or 200), 1000)))]
     combined: list[dict] = []
     seen: set[str] = set()
@@ -4726,13 +4918,14 @@ def live_orders(scope: str = "actual", limit: int = 200) -> dict:
         "count": len(visible),
         "scope": scope_key,
         "summary": _live_order_stage_summary(combined),
-        "source": live_trading_engine_v323.broker.health_check().to_dict(),
+        "source": synced.get("broker") or {},
     }
 
 
 @app.get("/api/live/trades")
 def live_trades(include_test: bool = False) -> dict:
-    broker_rows = [{**x.to_dict(), "record_stage": "fill", "record_stage_cn": "券商成交", "is_actual_broker_order": True} for x in live_trading_engine_v323.broker.get_trades()]
+    synced = live_trading_engine_v323.sync_live_account_state()
+    broker_rows = [{**x, "record_stage": "fill", "record_stage_cn": "券商成交", "is_actual_broker_order": True} for x in synced.get("trades") or []]
     stored_rows = [
         {
             **x,
@@ -4745,7 +4938,84 @@ def live_trades(include_test: bool = False) -> dict:
         if include_test or not _is_test_trading_record(x)
     ]
     rows = broker_rows or stored_rows
-    return {"ok": True, "data": rows, "count": len(rows), "source": live_trading_engine_v323.broker.health_check().to_dict()}
+    return {"ok": True, "data": rows, "count": len(rows), "source": synced.get("broker") or {}}
+
+
+@app.get("/api/live/ledger")
+@app.get("/api/trading-records/ledger")
+def live_ledger(symbol: str = "", session_id: str = "", mode: str = "live", limit: int = 500) -> dict:
+    rows = trading_store_v323.list_normalized(
+        "ledger_entries",
+        mode=mode,
+        symbol=normalize_symbol(symbol) if symbol else "",
+        session_id=session_id,
+        limit=max(1, min(int(limit or 500), 5000)),
+    )
+    return {"ok": True, "data": rows, "count": len(rows), "source": "normalized_trading_ledger", "mode": mode}
+
+
+@app.get("/api/live/account-snapshots")
+@app.get("/api/trading-records/account-snapshots")
+def live_account_snapshots(session_id: str = "", mode: str = "live", limit: int = 200) -> dict:
+    rows = trading_store_v323.list_normalized(
+        "broker_accounts",
+        mode=mode,
+        session_id=session_id,
+        limit=max(1, min(int(limit or 200), 2000)),
+    )
+    equity = trading_store_v323.list_normalized(
+        "account_equity_curve",
+        mode=mode,
+        session_id=session_id,
+        limit=max(1, min(int(limit or 200), 2000)),
+    )
+    return {"ok": True, "data": rows, "equity_curve": equity, "count": len(rows)}
+
+
+@app.get("/api/live/fills")
+@app.get("/api/trading-records/fills")
+def live_fills(symbol: str = "", session_id: str = "", mode: str = "live", limit: int = 500) -> dict:
+    if mode == "live":
+        rows = trading_store_v323.list_normalized(
+            "broker_trades",
+            symbol=normalize_symbol(symbol) if symbol else "",
+            session_id=session_id,
+            limit=max(1, min(int(limit or 500), 5000)),
+        )
+    else:
+        rows = trading_store_v323.list(
+            "fills",
+            mode=mode,
+            symbol=normalize_symbol(symbol) if symbol else "",
+            session_id=session_id,
+            limit=max(1, min(int(limit or 500), 5000)),
+        )
+    return {"ok": True, "data": rows, "count": len(rows)}
+
+
+@app.get("/api/live/position-lots")
+@app.get("/api/trading-records/position-lots")
+def trading_position_lots(
+    symbol: str = "",
+    session_id: str = "",
+    mode: str = "live",
+    status: str = "",
+    limit: int = 1000,
+) -> dict:
+    rows = trading_store_v323.list_normalized(
+        "position_lots",
+        mode=mode,
+        symbol=normalize_symbol(symbol) if symbol else "",
+        session_id=session_id,
+        status=status,
+        limit=max(1, min(int(limit or 1000), 5000)),
+    )
+    return {"ok": True, "data": rows, "count": len(rows), "mode": mode}
+
+
+@app.post("/api/live/reconciliation/run")
+def live_reconciliation_run() -> dict:
+    return live_trading_engine_v323.reconcile()
 
 
 @app.post("/api/live/orders/preview")
@@ -4758,16 +5028,7 @@ def live_order_preview_batch(payload: dict = Body(default_factory=dict)) -> dict
     symbols = _symbols_from_payload(payload)
     if not symbols:
         return {"ok": False, "message": "symbols required", "data": []}
-    rows = []
-    for sym in symbols[:50]:
-        order_payload = {**payload, "symbol": sym}
-        rows.append({"symbol": sym, "preview": live_trading_engine_v323.preview_order(order_payload)})
-    return {
-        "ok": True,
-        "data": rows,
-        "count": len(rows),
-        "note": "批量预检查只进入风控/确认流程，不会绕过 LIVE_TRADING_ENABLED、kill switch 或人工确认。",
-    }
+    return live_trading_engine_v323.preview_orders_batch(payload, symbols)
 
 
 @app.post("/api/live/orders/place-batch")
@@ -4775,17 +5036,7 @@ def live_order_place_batch(payload: dict = Body(default_factory=dict)) -> dict:
     symbols = _symbols_from_payload(payload)
     if not symbols:
         return {"ok": False, "message": "symbols required", "data": []}
-    confirmed = bool(payload.get("confirmed"))
-    rows = []
-    for sym in symbols[:50]:
-        order_payload = {**payload, "symbol": sym}
-        rows.append({"symbol": sym, "result": live_trading_engine_v323.place_order(order_payload, confirmed=confirmed)})
-    return {
-        "ok": all(bool((row.get("result") or {}).get("ok")) for row in rows),
-        "data": rows,
-        "count": len(rows),
-        "note": "真实批量下单仍逐笔经过风控、白名单、确认队列和券商适配器；默认配置下不会真实下单。",
-    }
+    return live_trading_engine_v323.place_orders_batch(payload, symbols, confirmed=bool(payload.get("confirmed")))
 
 
 @app.post("/api/live/orders/confirm")

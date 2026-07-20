@@ -7,6 +7,7 @@ from typing import Any
 
 from quant_data.chart.trading_marker_engine import TradingMarkerEngine
 from quant_data.persistence.trading_store import TradingStore
+from quant_data.strategy.strategy_family import get_strategy_execution_profile, normalize_strategy_family
 from quant_data.trading.audit_log_v323 import TradingAuditLogV323
 from quant_data.trading.broker import (
     BrokerAdapter,
@@ -25,6 +26,7 @@ from .live_order_service import LiveOrderService
 from .live_position_sync import LivePositionSync
 from .live_reconciliation import LiveReconciliation
 from .live_session import LiveSession
+from .live_sync_service import LiveSyncService
 
 
 class LiveTradingEngine:
@@ -36,9 +38,10 @@ class LiveTradingEngine:
         self.session = LiveSession(broker=self.config.broker_type)
         self.confirm_queue = LiveConfirmQueue()
         self.order_service = LiveOrderService(self.broker)
-        self.position_sync = LivePositionSync(self.broker)
-        self.reconciliation = LiveReconciliation(self.broker)
         self.store = store or TradingStore()
+        self.sync_service = LiveSyncService(self.broker, self.store)
+        self.position_sync = LivePositionSync(self.broker)
+        self.reconciliation = LiveReconciliation(self.broker, self.store)
         self.audit = TradingAuditLogV323(self.store)
         self.marker_engine = TradingMarkerEngine()
         self._store_live_session()
@@ -108,6 +111,18 @@ class LiveTradingEngine:
         preview["broker_submitted"] = False
         return preview
 
+    def preview_orders_batch(self, payload: dict[str, Any], symbols: list[str]) -> dict[str, Any]:
+        rows = []
+        for symbol in _unique_symbols(symbols)[:50]:
+            rows.append({"symbol": symbol, "preview": self.preview_order({**payload, "symbol": symbol})})
+        return {
+            "ok": bool(rows),
+            "data": rows,
+            "count": len(rows),
+            "safety": "每笔订单独立经过数据、评分、风控、白名单和确认队列检查。",
+            "note": "批量预检查不会绕过 LIVE_TRADING_ENABLED、kill switch 或人工确认。",
+        }
+
     def place_order(self, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
         order = self._order_from_payload(payload)
         pre = self._can_live_place(order)
@@ -156,6 +171,42 @@ class LiveTradingEngine:
         self.audit.record("live_order_submitted", result, mode="live", symbol=order.symbol, session_id=order.session_id)
         return {"ok": result["ok"], "data": result}
 
+    def place_orders_batch(self, payload: dict[str, Any], symbols: list[str], *, confirmed: bool = False) -> dict[str, Any]:
+        rows = []
+        for symbol in _unique_symbols(symbols)[:50]:
+            rows.append({"symbol": symbol, "result": self.place_order({**payload, "symbol": symbol}, confirmed=confirmed)})
+        return {
+            "ok": bool(rows) and all(bool((row.get("result") or {}).get("ok")) for row in rows),
+            "data": rows,
+            "count": len(rows),
+            "safety": "批量入口不会绕过逐笔风控、人工确认或全局 kill switch。",
+            "note": "真实批量下单不会绕过逐笔风控、白名单、确认队列和券商适配器。",
+        }
+
+    def sync_live_account_state(self, *, force: bool = False) -> dict[str, Any]:
+        result = self.sync_service.sync(session_id=self.session.session_id, force=force)
+        self.audit.record(
+            "live_broker_sync",
+            {
+                "ok": result.get("ok"),
+                "quality_status": result.get("quality_status"),
+                "positions": len(result.get("positions") or []),
+                "orders": len(result.get("orders") or []),
+                "trades": len(result.get("trades") or []),
+                "missing_reasons": result.get("missing_reasons") or [],
+                "fetched_at": result.get("fetched_at"),
+            },
+            mode="live",
+            session_id=self.session.session_id,
+        )
+        return result
+
+    def reconcile(self) -> dict[str, Any]:
+        self.sync_live_account_state(force=True)
+        result = self.reconciliation.daily_check(session_id=self.session.session_id)
+        self.audit.record("live_reconciliation", result, mode="live", session_id=self.session.session_id)
+        return result
+
     def approve_confirmation(self, confirm_id: str) -> dict[str, Any]:
         task_before = self.confirm_queue.tasks.get(confirm_id)
         if task_before is None:
@@ -192,6 +243,8 @@ class LiveTradingEngine:
     def _order_from_payload(self, payload: dict[str, Any]) -> UnifiedOrder:
         data = dict(payload or {})
         req = LiveOrderRequest(**{k: v for k, v in data.items() if k in LiveOrderRequest.__dataclass_fields__})
+        family = normalize_strategy_family(req.strategy_family or data.get("strategy") or "core_satellite")
+        profile = get_strategy_execution_profile(family)
         return UnifiedOrder(
             order_id=str(data.get("order_id") or f"live-{req.symbol}-{len(self.store.list('orders', mode='live', limit=9999))+1:06d}"),
             session_id=str(data.get("session_id") or self.session.session_id),
@@ -206,7 +259,10 @@ class LiveTradingEngine:
             provenance_id=req.provenance_id,
             risk_check_id=req.risk_check_id,
             source_page=req.source_page,
-            strategy_family=req.strategy_family,
+            strategy_family=family,
+            strategy_profile_hash=str(data.get("strategy_profile_hash") or profile.profile_hash),
+            policy_hash=str(data.get("policy_hash") or profile.policy_hash),
+            execution_profile_version=str(data.get("execution_profile_version") or profile.profile_version),
             status=str(data.get("status") or "signal_created"),
             status_reason=str(data.get("status_reason") or ""),
         )
@@ -232,3 +288,12 @@ def _now() -> str:
 def _stable_id(*parts: Any) -> str:
     raw = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
     return sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _unique_symbols(symbols: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in symbols or []:
+        symbol = "".join(ch for ch in str(value or "") if ch.isdigit()).zfill(6)[-6:]
+        if symbol and symbol not in out:
+            out.append(symbol)
+    return out

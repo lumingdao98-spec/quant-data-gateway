@@ -2,187 +2,82 @@ from __future__ import annotations
 
 
 def build_live_trading_ui() -> str:
-    return """<!doctype html>
+    return r'''<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>真实自动交易 V3.23</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>真实自动交易 V3.24</title><!-- 真实自动交易 V3.23 兼容入口 -->
 <style>
-:root{--bg:#07111f;--panel:#101a2c;--line:#263955;--text:#e6f0ff;--muted:#92a6c4;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",Arial,sans-serif}a{color:#cfe1ff;text-decoration:none}button,input,select,textarea{font:inherit}
-header{height:60px;display:flex;align-items:center;gap:10px;padding:0 18px;background:#0b1424;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}.brand{font-weight:1000;font-size:20px;color:#bfdbfe}.pill{border:1px solid #315077;background:#13233b;border-radius:999px;padding:5px 10px;color:#cfe1ff;font-size:12px;font-weight:900}.danger{border-color:#7f1d1d;background:#2a1116;color:#fecaca}.grow{flex:1}
-main{display:grid;grid-template-columns:360px minmax(0,1fr) 430px;gap:14px;padding:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}.h{min-height:46px;padding:0 12px;background:#121e33;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px;font-weight:1000}.b{padding:12px}.stack{display:grid;gap:14px}.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}.card{background:#0d1728;border:1px solid #2f4364;border-radius:12px;padding:11px}.card span{display:block;color:var(--muted);font-size:12px}.card b{display:block;font-size:22px;margin-top:7px;overflow-wrap:anywhere}.muted{color:var(--muted)}.warn{color:#fcd34d}.bad{color:#fecaca}.ok{color:#86efac}
-input,select,textarea{width:100%;background:#0d1728;color:#e5efff;border:1px solid #2f4364;border-radius:10px;padding:9px 10px;outline:none}textarea{min-height:92px;resize:vertical;line-height:1.45}.field{display:grid;gap:6px;margin-bottom:10px}.field label{font-size:12px;color:#9db4d4;font-weight:900}.btn,button{border:0;border-radius:10px;background:#253755;color:#e5efff;padding:9px 12px;font-weight:900;cursor:pointer}.btn.primary,button.primary{background:var(--blue);color:#fff}.btn.red,button.red{background:#991b1b;color:#fff}.btn.green,button.green{background:#16a34a;color:#fff}.notice{background:#0d1728;border:1px solid #2f4364;border-radius:12px;padding:10px;color:#c8d8ee;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}th,td{border-bottom:1px solid #243653;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#12213a;color:#9fd4ff}.table-wrap{overflow:auto;border:1px solid #2f4364;border-radius:12px;max-height:360px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1220;border:1px solid #2f4364;border-radius:12px;padding:10px;max-height:280px;overflow:auto;color:#b7c9e6}
-.strategy-list{display:grid;gap:7px;max-height:250px;overflow:auto}.strategy-chip{display:grid;grid-template-columns:auto 1fr;gap:8px;border:1px solid #2f4364;background:#0d1728;border-radius:10px;padding:8px;cursor:pointer}.strategy-chip input{width:auto;margin-top:3px}.strategy-chip b{display:block}.strategy-chip span{display:block;color:var(--muted);font-size:11px;line-height:1.35;margin-top:2px}.strategy-chip.on{border-color:#22d3ee;background:#092536}
-.scope-btn.active{background:#2563eb;color:#fff}.record-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}.record-toolbar .muted{margin-left:auto}.unavailable{border-color:#854d0e;background:#261c0b;color:#fde68a}
-@media(max-width:1200px){main{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){header{position:static}.grid,.cards{grid-template-columns:1fr}}
+:root{--bg:#08111f;--panel:#101a2c;--panel2:#0c1626;--line:#263955;--text:#e7f0ff;--muted:#91a6c5;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",Arial,sans-serif}a{color:#bfdbfe;text-decoration:none}button,input,select,textarea{font:inherit}
+header{height:58px;display:flex;align-items:center;gap:10px;padding:0 16px;background:#0b1424;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green)}.brand{font-weight:900;font-size:20px}.grow{flex:1}.pill{padding:5px 10px;border:1px solid #315077;border-radius:999px;background:#13233b;color:#cfe1ff;font-size:12px;font-weight:800}.pill.warn{border-color:#854d0e;background:#2a1e08;color:#fde68a}.pill.bad{border-color:#7f1d1d;background:#2a1116;color:#fecaca}
+main{display:grid;grid-template-columns:320px minmax(680px,1fr);gap:12px;padding:12px;min-height:calc(100vh - 58px)}.side,.workspace{display:grid;gap:12px;align-content:start}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}.head{min-height:44px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;background:#121e33;border-bottom:1px solid var(--line);font-weight:900}.body{padding:12px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.field{display:grid;gap:5px;margin-bottom:9px}.field label{font-size:12px;color:#9db4d4;font-weight:800}.field small{color:var(--muted);line-height:1.45}
+input,select,textarea{width:100%;padding:8px 9px;color:var(--text);background:#0d1728;border:1px solid #2f4364;border-radius:7px;outline:none}textarea{min-height:70px;resize:vertical;line-height:1.45}.btn,button{border:0;border-radius:7px;padding:8px 11px;background:#253755;color:var(--text);font-weight:800;cursor:pointer}.btn:hover,button:hover{filter:brightness(1.12)}button:disabled{opacity:.55;cursor:wait}.primary{background:var(--blue)!important}.green{background:#15803d!important}.red{background:#991b1b!important}.notice{padding:10px;border:1px solid #2f4364;border-radius:7px;background:#0d1728;color:#c9d9ef;font-size:13px;line-height:1.55;overflow-wrap:anywhere}.notice.danger{border-color:#7f1d1d;color:#fecaca}.muted{color:var(--muted)}.ok{color:#86efac}.bad{color:#fca5a5}.warn{color:#fcd34d}
+.metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}.metric{padding:10px;background:var(--panel2);border:1px solid #2b3e5e;border-radius:7px;min-width:0}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;margin-top:6px;font-size:19px;overflow-wrap:anywhere}
+.tabs{display:flex;gap:6px;overflow:auto;padding:8px 10px;background:#0d1728;border-bottom:1px solid var(--line)}.tab{white-space:nowrap;background:#1d2d48}.tab.active{background:var(--blue)}.tab-pane{display:none;padding:10px}.tab-pane.active{display:block}.table-wrap{max-width:100%;overflow:auto;border:1px solid #2b3e5e;border-radius:7px;max-height:460px}table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:900px;font-size:12px}th,td{padding:8px;border-bottom:1px solid #243653;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{position:sticky;top:0;background:#14223a;color:#9fd4ff;z-index:1}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{padding:5px 8px;font-size:12px}.strategy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:210px;overflow:auto}.strategy{display:grid;grid-template-columns:auto 1fr;gap:7px;padding:7px;border:1px solid #2f4364;border-radius:7px;background:#0d1728}.strategy input{width:auto;margin-top:3px}.strategy b,.strategy small{display:block}.strategy small{color:var(--muted);margin-top:2px}.output{max-height:190px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;background:#090f1b;border:1px solid #2b3e5e;border-radius:7px;padding:8px}.footer-note{font-size:12px;color:#8fa6c8;text-align:center;padding:4px 12px 12px}
+@media(max-width:1180px){main{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:720px){header{position:static;height:auto;min-height:58px;flex-wrap:wrap;padding:10px}main{padding:8px}.grid2,.strategy-grid{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
-<header><span class="dot"></span><div class="brand">真实自动交易 V3.23</div><span class="pill danger">默认禁用 · 必须人工确认</span><span class="pill">研究辅助，不构成投资建议</span><div class="grow"></div><a href="/auto-trading">总控台</a><a href="/realtime-paper">实时模拟</a><a href="/trading-records">交易记录</a><a href="/ui">行情</a></header>
+<header><span class="dot"></span><div class="brand">真实自动交易 V3.24</div><span id="brokerPill" class="pill warn">券商状态读取中</span><span class="pill bad">默认禁用 · 人工确认</span><div class="grow"></div><a href="/auto-trading">总控台</a><a href="/realtime-paper">实时模拟</a><a href="/trading-records">交易记录</a><a href="/data-center">数据中心</a></header>
 <main>
-  <section class="stack">
-    <div class="panel">
-      <div class="h"><span>多股票实盘观察池</span><button onclick="loadAutoConfig(true)">读取总控台</button></div>
-      <div class="b">
-        <div class="field"><label>监控标的（逗号/空格/换行分隔）</label><textarea id="symbols">300750, 600438, 510300</textarea></div>
-        <div class="grid">
-          <div class="field"><label>默认方向</label><select id="side"><option value="buy">买入预检查</option><option value="sell">卖出预检查</option></select></div>
-          <div class="field"><label>默认数量</label><input id="quantity" type="number" value="100"></div>
-          <div class="field"><label>限价（0=按预检查参考）</label><input id="limitPrice" type="number" value="0"></div>
-          <div class="field"><label>订单类型</label><select id="orderType"><option value="limit">限价</option><option value="best_effort">最优五档/尽力</option><option value="target_percent">目标仓位</option><option value="target_value">目标金额</option></select></div>
-        </div>
-        <div class="row"><button class="primary" onclick="batchPreview()">批量预检查</button><button onclick="previewFirst()">预检查首只</button><button class="red" onclick="kill()">Kill Switch</button></div>
-        <p class="notice">没有 QMT/PTrade SDK、账号授权、环境变量和人工确认时，所有真实下单都会被拒绝或进入确认队列，不会直接触达券商。</p>
-        <div class="table-wrap" style="margin-top:10px;max-height:220px"><table><thead><tr><th>代码</th><th>策略数</th><th>方向</th><th>数量</th><th>参考限价</th><th>状态</th></tr></thead><tbody id="watchRows"><tr><td colspan="6">等待加载观察池</td></tr></tbody></table></div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="h"><span>实盘策略目录</span><span id="strategyHint" class="muted">加载中...</span></div>
-      <div class="b">
-        <div class="field"><label>策略组合（与回测/实时模拟共用）</label><textarea id="strategyCombo">score_driven, low_position, ma_repair, macd_cross, volume_breakout, atr_risk, risk_control, event_driven, finance_quality, market_regime</textarea></div>
-        <div class="row" style="margin-bottom:10px"><button onclick="loadLiveIntradayPreset()">载入实盘分时策略</button><button onclick="selectAllAvailableStrategies()">使用全部可用策略</button><span class="pill" id="liveStrategyPreset">分时实盘预设会合并盘口、资金、宏观和风控策略</span></div>
-        <div id="strategyList" class="strategy-list"></div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="h"><span>风控参数</span><span class="muted">实盘仍需确认</span></div>
-      <div class="b grid">
-        <div class="field"><label>止损%</label><input id="stopLossPct" type="number" value="8"></div>
-        <div class="field"><label>止盈%</label><input id="takeProfitPct" type="number" value="18"></div>
-        <div class="field"><label>单票上限%</label><input id="maxSinglePositionPct" type="number" value="20"></div>
-        <div class="field"><label>最大回撤%</label><input id="maxDrawdownPct" type="number" value="18"></div>
-      </div>
-    </div>
+<aside class="side">
+  <section class="panel"><div class="head"><span>多股票实盘观察池</span><button onclick="loadWorkbenchConfig(this)">读取总控台</button></div><div class="body">
+    <div class="field"><label>交易标的与订单</label><textarea id="symbols">300750, 600438, 510300</textarea><small>支持逗号、空格或换行分隔；每只股票独立预检查和风控。</small></div>
+    <div class="grid2"><div class="field"><label>方向</label><select id="side"><option value="buy">买入</option><option value="sell">卖出</option></select></div><div class="field"><label>数量（股）</label><input id="quantity" type="number" min="100" step="100" value="100"></div><div class="field"><label>委托类型</label><select id="orderType"><option value="limit">限价</option><option value="best_effort">最优五档</option><option value="target_percent">目标仓位</option><option value="target_value">目标金额</option></select></div><div class="field"><label>限价（0=预检参考价）</label><input id="limitPrice" type="number" min="0" step="0.01" value="0"></div></div>
+    <div class="row"><button class="primary" onclick="batchPreview(this)">批量预检查</button><button class="green" onclick="submitConfirmation(this)">提交确认队列</button><button class="red" onclick="setKillSwitch(this)">实盘 Kill</button></div>
+    <div class="table-wrap" style="margin-top:9px;max-height:210px"><table><thead><tr><th>代码</th><th>策略数</th><th>方向</th><th>数量</th><th>参考限价</th><th>状态</th></tr></thead><tbody id="watchRows"><tr><td colspan="6">等待加载观察池</td></tr></tbody></table></div>
+  </div></section>
+  <section class="panel"><div class="head"><span>实盘策略目录</span><span id="strategyCount" class="muted">0 项</span></div><div class="body">
+    <div class="field"><label>策略族</label><select id="strategyFamily"><option value="short">短线</option><option value="swing" selected>波段</option><option value="position">长线持仓</option><option value="dca">定投</option><option value="core_satellite">核心-卫星</option><option value="event_driven">事件驱动</option><option value="avoid">风险回避</option></select></div>
+    <div class="row" style="margin-bottom:8px"><button onclick="loadLiveIntradayPreset()">载入实盘分时策略</button><button onclick="selectAllAvailableStrategies()">使用全部可用策略</button></div>
+    <div id="strategyList" class="strategy-grid"><span class="muted">正在读取策略目录...</span></div>
+  </div></section>
+  <section class="panel"><div class="head"><span>统一风控</span><span class="muted">下单前强制检查</span></div><div class="body grid2">
+    <div class="field"><label>止损 %</label><input id="stopLossPct" type="number" value="8"></div><div class="field"><label>止盈 %</label><input id="takeProfitPct" type="number" value="18"></div><div class="field"><label>单票仓位上限 %</label><input id="maxSinglePositionPct" type="number" value="20"></div><div class="field"><label>最大回撤 %</label><input id="maxDrawdownPct" type="number" value="18"></div>
+  </div></section>
+  <section class="panel"><div class="head"><span>券商安全状态</span><button onclick="connectBroker(this)">连接检查</button></div><div class="body"><div id="safety" class="notice">正在读取...</div><pre id="output" class="output">Ready.</pre></div></section>
+</aside>
+<section class="workspace">
+  <div id="metrics" class="metrics"></div>
+  <section class="panel"><div class="head"><span>账户与持仓</span><div class="row"><a href="/trading-records">打开统一记录</a><button onclick="loadAll(this)">刷新</button><button onclick="runReconciliation(this)">执行对账</button></div></div>
+    <div class="tabs"><button class="tab active" data-tab="account" onclick="openTab('account')">实盘账户</button><button class="tab" data-tab="orders" onclick="openTab('orders')">委托与确认</button><button class="tab" data-tab="fills" onclick="openTab('fills')">成交流水</button><button class="tab" data-tab="ledger" onclick="openTab('ledger')">统一账本</button><button class="tab" data-tab="reconcile" onclick="openTab('reconcile')">对账结果</button></div>
+    <div id="pane-account" class="tab-pane active"><div id="accountNotice" class="notice"></div><h3>当前持仓</h3><div class="table-wrap"><table><thead><tr><th>代码</th><th>名称</th><th>持仓</th><th>可用</th><th>平均成本</th><th>最新价</th><th>市值</th><th>浮盈亏</th><th>盈亏%</th><th>数据源</th></tr></thead><tbody id="positionRows"></tbody></table></div></div>
+    <div id="pane-orders" class="tab-pane"><div class="notice" style="margin-bottom:8px"><b>实盘委托与成交</b>：真实委托/成交、待人工确认、预检查/拦截分阶段保存；预检查不会计入这里的真实成交统计。</div><div class="table-wrap"><table><thead><tr><th>阶段</th><th>时间</th><th>代码</th><th>方向</th><th>价格</th><th>数量</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody id="orderRows"></tbody></table></div></div>
+    <div id="pane-fills" class="tab-pane"><div class="table-wrap"><table><thead><tr><th>成交时间</th><th>代码</th><th>方向</th><th>成交价</th><th>股数</th><th>成交额</th><th>费用</th><th>税费</th><th>滑点</th><th>成交来源</th></tr></thead><tbody id="fillRows"></tbody></table></div></div>
+    <div id="pane-ledger" class="tab-pane"><div class="notice">买入、卖出、佣金、税费、滑点和已实现盈亏分别记账；成交不会再被合并成一条不可追溯记录。</div><div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>发生时间</th><th>代码</th><th>账务类型</th><th>方向</th><th>股数</th><th>价格</th><th>金额</th><th>订单/成交</th><th>来源</th></tr></thead><tbody id="ledgerRows"></tbody></table></div></div>
+    <div id="pane-reconcile" class="tab-pane"><div id="reconcileSummary" class="notice">尚未执行对账。</div><pre id="reconcileOutput" class="output" style="max-height:430px">等待对账...</pre></div>
   </section>
-  <section class="stack">
-    <div class="cards" id="cards"></div>
-    <div class="panel">
-      <div class="h"><span>账户与持仓</span><button onclick="load()">刷新</button></div>
-      <div class="b"><div id="accountBox" class="notice">读取中...</div><div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>代码</th><th>名称</th><th>数量</th><th>可用</th><th>成本</th><th>市价</th><th>市值</th><th>浮盈亏</th><th>盈亏%</th><th>来源</th></tr></thead><tbody id="positionsRows"><tr><td colspan="10">读取中...</td></tr></tbody></table></div></div>
-    </div>
-    <div class="panel">
-      <div class="h"><span>预检查结果</span><span class="muted">不会真实下单</span></div>
-      <div class="b"><div class="table-wrap"><table><thead><tr><th>代码</th><th>方向</th><th>数量</th><th>状态</th><th>原因/风控</th></tr></thead><tbody id="previewRows"><tr><td colspan="5">等待预检查</td></tr></tbody></table></div></div>
-    </div>
-    <div class="panel">
-      <div class="h"><span>实盘委托与成交</span><div class="row"><a href="/trading-records">打开统一记录</a><button onclick="load()">刷新</button></div></div>
-      <div class="b"><div class="record-toolbar"><button class="scope-btn active" data-scope="actual" onclick="setRecordScope('actual')">真实委托/成交</button><button class="scope-btn" data-scope="pending" onclick="setRecordScope('pending')">待人工确认</button><button class="scope-btn" data-scope="precheck" onclick="setRecordScope('precheck')">预检查/拦截</button><button class="scope-btn" data-scope="all" onclick="setRecordScope('all')">全部</button><span id="recordSummary" class="muted">读取中...</span></div><div class="table-wrap"><table><thead><tr><th>阶段</th><th>代码</th><th>方向/状态</th><th>价格</th><th>数量</th><th>委托金额</th><th>收益率</th><th>成本</th><th>说明</th></tr></thead><tbody id="recordRows"><tr><td colspan="9">读取中...</td></tr></tbody></table></div></div>
-    </div>
-  </section>
-  <section class="stack">
-    <div class="panel">
-      <div class="h"><span>券商与安全状态</span><button onclick="connect()">连接检查</button></div>
-      <div class="b"><div id="safetyBox" class="notice">读取中...</div><pre id="out">Loading...</pre></div>
-    </div>
-    <div class="panel">
-      <div class="h"><span>确认队列</span><button onclick="loadQueue()">刷新</button></div>
-      <div class="b"><div class="table-wrap"><table><thead><tr><th>确认ID</th><th>代码</th><th>方向</th><th>状态</th><th>原因</th></tr></thead><tbody id="queueRows"><tr><td colspan="5">读取中...</td></tr></tbody></table></div></div>
-    </div>
-    <div class="panel">
-      <div class="h"><span>审计输出</span><span class="muted">原始返回</span></div>
-      <div class="b"><pre id="log">Ready.</pre></div>
-    </div>
-  </section>
+  <section class="panel"><div class="head"><span>批量预检查结果</span><span class="muted">预检查不会直接下单</span></div><div class="body"><div class="table-wrap"><table><thead><tr><th>代码</th><th>方向</th><th>数量</th><th>状态</th><th>风控与数据原因</th></tr></thead><tbody id="previewRows"><tr><td colspan="5">等待预检查</td></tr></tbody></table></div></div></section>
+</section>
 </main>
+<div class="footer-note">研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。</div>
 <script>
-const $=id=>document.getElementById(id);
-let autoConfig=null;
-let liveRecordScope='actual';
-let liveRecordCache=[];
-let liveRecordStageSummary={};
-const LIVE_INTRADAY_STRATEGIES=['score_driven','market_regime','main_money_est','fund_flow_watch','amount_active','vwap_reclaim','volume_breakout','orderbook_imbalance_watch','fake_order_cancel_watch','mfi_obv_resonance','rsi_kdj_resonance','macd_cross','macd_hist_turn','ma_repair','atr_risk','risk_control','avoid_chasing_high','news_sentiment','announcement_risk','global_commodity_map','sector_strength','source_reliability','event_driven'];
-async function api(url,opt){const r=await fetch(url,opt);try{return await r.json()}catch(e){return {ok:false,status:r.status,message:String(e)}}}
-function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function splitListText(v){return String(v||'').split(/[\s,，;；、]+/).map(s=>s.trim()).filter(Boolean)}
-function symbols(){return splitListText($('symbols').value)}
-function strategyCombo(){return splitListText($('strategyCombo').value)}
-function num(id,fallback){const n=Number($(id).value);return Number.isFinite(n)?n:fallback}
-function money(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('zh-CN',{maximumFractionDigits:2}):'--'}
-function pct(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(2)+'%':'--'}
-function cls(v){const n=Number(v);return n>0?'ok':n<0?'bad':''}
-function strategyLabel(key){
-  const map={};(autoConfig?.strategy_catalog||[]).forEach(x=>{if(x.key)map[x.key]=x.name||x.key});
-  return map[key]||{score_driven:'日常评分驱动',low_position:'低位修复',avoid_chasing_high:'高位追高过滤',ma_repair:'均线修复',macd_cross:'MACD 金叉/多头',volume_breakout:'温和放量',atr_risk:'ATR 风险过滤',risk_control:'风险扣分',event_driven:'事件驱动',finance_quality:'财务质量',market_regime:'大盘情绪过滤'}[key]||key;
-}
-function renderStrategies(){
-  const list=autoConfig?.strategy_catalog||[];
-  const selected=new Set(strategyCombo());
-  $('strategyHint').textContent=`已选 ${selected.size} 项 / 可用 ${list.length} 项`;
-  $('liveStrategyPreset').textContent=`实盘当前 ${selected.size} 项；目录 ${list.length} 项，与回测/实时模拟共用`;
-  $('strategyList').innerHTML=list.map(item=>{const key=String(item.key||'');const on=selected.has(key);return `<label class="strategy-chip ${on?'on':''}"><input type="checkbox" data-key="${esc(key)}" ${on?'checked':''} onchange="toggleStrategy(this)"><span><b>${esc(item.name||key)}</b><span>${esc(item.category||'策略')} · ${esc(item.beginner_note||item.description||'')}</span></span></label>`}).join('')||'<div class="notice">策略目录暂未返回，仍可手动输入策略 key。</div>';
-  renderWatchRows();
-}
-function toggleStrategy(el){const set=new Set(strategyCombo());if(el.checked)set.add(el.dataset.key);else set.delete(el.dataset.key);$('strategyCombo').value=[...set].join(', ');renderStrategies()}
-function loadLiveIntradayPreset(){const current=new Set(strategyCombo());LIVE_INTRADAY_STRATEGIES.forEach(x=>current.add(x));$('strategyCombo').value=[...current].join(', ');renderStrategies()}
-function selectAllAvailableStrategies(){const list=(autoConfig?.strategy_catalog||[]).map(x=>String(x.key||'')).filter(Boolean);$('strategyCombo').value=list.join(', ');renderStrategies()}
-function applyAutoConfig(cfg){
-  if(!cfg)return;autoConfig=cfg;
-  if((cfg.symbols||[]).length)$('symbols').value=cfg.symbols.join(', ');
-  if((cfg.strategy_combo||[]).length){
-    const merged=new Set(cfg.strategy_combo||[]);
-    if(merged.size<8)LIVE_INTRADAY_STRATEGIES.forEach(x=>merged.add(x));
-    $('strategyCombo').value=[...merged].join(', ');
-  }
-  const r=cfg.risk_controls||{};
-  if(r.stop_loss_pct!=null)$('stopLossPct').value=r.stop_loss_pct;
-  if(r.take_profit_pct!=null)$('takeProfitPct').value=r.take_profit_pct;
-  if(r.max_single_position_pct!=null)$('maxSinglePositionPct').value=r.max_single_position_pct;
-  if(r.max_drawdown_pct!=null)$('maxDrawdownPct').value=r.max_drawdown_pct;
-  renderStrategies();
-}
-async function loadAutoConfig(apply=false){
-  const js=await api('/api/auto-trading/config');
-  autoConfig=js.data||{};
-  if(!(autoConfig.strategy_catalog||[]).length){
-    const lib=await api('/api/strategy/library');
-    autoConfig.strategy_catalog=lib.data||[];
-    autoConfig.strategy_combo=autoConfig.strategy_combo||lib.default_keys||[];
-  }
-  if(apply)applyAutoConfig(autoConfig);else renderStrategies()
-}
-function orderPayload(symbol){return {symbol,side:$('side').value,quantity:num('quantity',100),limit_price:num('limitPrice',0)||null,order_type:$('orderType').value,selected_strategies:strategyCombo(),strategy_combo:strategyCombo(),strategy_parameters:autoConfig?.strategy_parameters||{},risk_controls:{stop_loss_pct:num('stopLossPct',8),take_profit_pct:num('takeProfitPct',18),max_single_position_pct:num('maxSinglePositionPct',20),max_drawdown_pct:num('maxDrawdownPct',18)},event_watch:autoConfig?.event_watch||{},source_page:'live-trading'}}
-async function previewSymbol(symbol){return await api('/api/live/orders/preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(orderPayload(symbol))})}
-async function previewFirst(){const sym=symbols()[0]||'300750';const js=await previewSymbol(sym);$('log').textContent=JSON.stringify(js,null,2);renderPreviewRows([{symbol:sym,response:js}])}
-async function batchPreview(){const js=await api('/api/live/orders/preview-batch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...orderPayload(symbols()[0]||'300750'),symbols:symbols()})});const rows=(js.data||[]).map(x=>({symbol:x.symbol,response:x.preview||x.result||x}));$('log').textContent=JSON.stringify(js,null,2);renderPreviewRows(rows)}
-function renderPreviewRows(rows){$('previewRows').innerHTML=rows.map(x=>{const r=x.response||{};const ok=r.ok||r.approved||r.status==='needs_confirmation';const risk=r.risk||r.data?.risk||{};return `<tr><td>${esc(x.symbol)}</td><td>${esc($('side').value)}</td><td>${esc($('quantity').value)}</td><td class="${ok?'ok':'bad'}">${esc(r.status||r.message||(ok?'通过/待确认':'未通过'))}</td><td>${esc(r.status_reason||risk.reason||r.reason||JSON.stringify(r).slice(0,180))}</td></tr>`}).join('')||'<tr><td colspan="5">暂无预检查结果</td></tr>';renderWatchRows(rows)}
-function renderWatchRows(preview=[]){
-  const previewMap={};(preview||[]).forEach(x=>previewMap[x.symbol]=x.response||{});
-  const selected=strategyCombo();
-  $('watchRows').innerHTML=symbols().map(sym=>{const r=previewMap[sym]||{};const ok=r.ok||r.approved||r.status==='needs_confirmation';const state=r.status||r.message||(Object.keys(r).length?(ok?'预检查通过/待确认':'预检查未通过'):'待预检查');return `<tr><td>${esc(sym)}</td><td>${selected.length}</td><td>${esc($('side').value)}</td><td>${esc($('quantity').value)}</td><td>${esc($('limitPrice').value||'0')}</td><td class="${Object.keys(r).length?(ok?'ok':'bad'):''}">${esc(state)}</td></tr>`}).join('')||'<tr><td colspan="6">请先输入监控标的</td></tr>';
-}
-async function connect(){const js=await api('/api/live-broker/connect',{method:'POST'});$('log').textContent=JSON.stringify(js,null,2);await load()}
-async function kill(){const js=await api('/api/live/kill-switch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:true})});$('log').textContent=JSON.stringify(js,null,2);await load()}
-function renderStatus(js){
-  const s=js.safety||{},b=js.broker||{};
-  $('cards').innerHTML=[['券商状态',b.status||js.status||'--'],['真实交易',s.LIVE_TRADING_ENABLED?'开启':'关闭'],['人工确认',s.ORDER_CONFIRM_REQUIRED?'必须':'关闭'],['Kill',s.LIVE_KILL_SWITCH?'开启':'关闭']].map(x=>`<div class="card"><span>${x[0]}</span><b>${esc(x[1])}</b></div>`).join('');
-  $('safetyBox').innerHTML=`券商：${esc(b.broker||js.config?.broker_type||'disabled')} / ${esc(b.status||'disabled')}<br>SDK/环境变量/账号未配置时只能显示 disabled/unsupported；真实订单必须先进入预检查和确认队列。`;
-  $('out').textContent=JSON.stringify(js,null,2);
-}
-function renderAccount(account){const d=account.data||{},source=account.source||{};if(account.data_available===false||d.data_available===false){$('accountBox').classList.add('unavailable');$('accountBox').innerHTML=`<b>未连接真实账户</b><br>${esc(account.missing_reason||d.missing_reason||source.message||'券商未连接或未授权')}<br>这里的 0 不是账户余额；完成 QMT/PTrade 本地配置、授权和连接后才显示真实资金与持仓。`;return}$('accountBox').classList.remove('unavailable');$('accountBox').innerHTML=`可用资金 ${money(d.cash?.available_cash??d.available_cash??d.cash)}；冻结资金 ${money(d.cash?.frozen_cash??d.frozen_cash)}；持仓市值 ${money(d.position_market_value)}；浮盈亏 ${money(d.unrealized_pnl)}；总资产 ${money(d.total_assets??d.total_value??d.equity)}；数据源 ${esc(source.status||d.source||'券商适配器')}`}
-function renderPositions(js){
-  const rows=Array.isArray(js.data)?js.data:[];
-  $('positionsRows').innerHTML=rows.map(p=>{const qty=Number(p.quantity??p.volume??0);const qtyText=Number.isFinite(qty)?qty:(p.quantity??p.volume??0);const cost=Number(p.cost_price??p.avg_price);const last=Number(p.last_price??p.price);const mv=Number(p.market_value??p.amount??(Number.isFinite(qty)&&Number.isFinite(last)?qty*last:NaN));const pnl=Number(p.pnl??p.unrealized_pnl??(Number.isFinite(qty)&&Number.isFinite(cost)&&Number.isFinite(last)?(last-cost)*qty:NaN));const pnlPct=Number(p.pnl_pct??p.unrealized_pnl_pct??(Number.isFinite(cost)&&cost?((last-cost)/cost*100):NaN));return `<tr><td>${esc(p.symbol)}</td><td>${esc(p.name||'--')}</td><td>${esc(qtyText)}</td><td>${esc(p.available_quantity??p.available??'--')}</td><td>${esc(Number.isFinite(cost)?cost.toFixed(3):(p.cost_price??p.avg_price??'--'))}</td><td>${esc(Number.isFinite(last)?last.toFixed(3):(p.last_price??p.price??'--'))}</td><td>${money(mv)}</td><td class="${cls(pnl)}">${money(pnl)}</td><td class="${cls(pnlPct)}">${pct(pnlPct)}</td><td>${esc(p.source||js.source?.broker||js.source?.status||'券商接口')}</td></tr>`}).join('')||'<tr><td colspan="10">暂无持仓；若券商未连接则显示接口不支持/未授权。</td></tr>';
-}
-function normalizeRecordRows(orders,trades){
-  const rows=[];
-  const amt=x=>{const direct=Number(x.amount??x.filled_amount);if(Number.isFinite(direct))return direct;const price=Number(x.price??x.limit_price),qty=Number(x.quantity);return Number.isFinite(price)&&Number.isFinite(qty)?price*qty:NaN};
-  (orders.data||[]).forEach(x=>rows.push({id:x.broker_order_id||x.order_id||x.id,stage:x.record_stage||'unknown',source:x.record_stage_cn||'委托',actual:!!x.is_actual_broker_order,symbol:x.symbol,side:x.side||x.status,price:x.limit_price??x.price,qty:x.quantity,amount:amt(x),pnl_pct:x.display_pnl_pct??x.pnl_pct,cost:x.display_cost_price??x.cost_price??x.avg_price,status:[x.status,x.status_reason].filter(Boolean).join(' · '),created_at:x.updated_at||x.created_at||''}));
-  (trades.data||[]).forEach(x=>rows.push({id:x.trade_id||x.fill_id||x.id,stage:'fill',source:x.record_stage_cn||'券商成交',actual:true,symbol:x.symbol,side:x.side,price:x.price,qty:x.quantity,amount:amt(x),pnl_pct:x.display_pnl_pct??x.pnl_pct,cost:x.display_cost_price??x.cost_price??x.avg_price,status:x.filled_at||x.source,created_at:x.filled_at||x.created_at||''}));
-  const seen=new Set();return rows.filter(x=>{const key=x.id||[x.stage,x.symbol,x.side,x.price,x.qty,x.created_at].join('|');if(seen.has(key))return false;seen.add(key);return true}).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,300);
-}
-function setRecordScope(scope){liveRecordScope=scope;document.querySelectorAll('.scope-btn').forEach(btn=>btn.classList.toggle('active',btn.dataset.scope===scope));renderRecords()}
-function renderRecords(){let rows=liveRecordCache;if(liveRecordScope==='actual')rows=rows.filter(x=>x.actual||x.stage==='fill');else if(liveRecordScope==='pending')rows=rows.filter(x=>x.stage==='confirmation');else if(liveRecordScope==='precheck')rows=rows.filter(x=>['precheck','risk_blocked'].includes(x.stage));const s=liveRecordStageSummary||{};$('recordSummary').textContent=`真实委托 ${s.actual_broker_orders||0} · 待确认 ${s.pending_confirmation||0} · 预检查/拦截 ${s.precheck_or_blocked||0}`;$('recordRows').innerHTML=rows.map(x=>`<tr><td>${esc(x.source)}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.side||'--')}</td><td>${esc(x.price??'--')}</td><td>${esc(x.qty??'--')}</td><td>${money(x.amount)}</td><td class="${cls(x.pnl_pct)}">${pct(x.pnl_pct)}</td><td>${esc(x.cost??'--')}</td><td>${esc(x.status||'--')}</td></tr>`).join('')||`<tr><td colspan="9">${liveRecordScope==='actual'?'暂无真实券商委托或成交；预检查不会计入这里。':'当前分类暂无记录。'}</td></tr>`}
-async function loadQueue(){const q=await api('/api/live/confirm-queue');$('queueRows').innerHTML=(q.data||[]).map(x=>`<tr><td>${esc(x.confirm_id||x.id)}</td><td>${esc(x.symbol||x.request?.symbol||'--')}</td><td>${esc(x.side||x.request?.side||'--')}</td><td>${esc(x.status||'--')}</td><td>${esc(x.reason||x.status_reason||'--')}</td></tr>`).join('')||'<tr><td colspan="5">暂无待确认订单</td></tr>';return q}
-async function load(){
-  const [status,account,positions,orders,trades,queue]=await Promise.all([api('/api/live-broker/status'),api('/api/live/account'),api('/api/live/positions'),api('/api/live/orders?scope=all&limit=500'),api('/api/live/trades'),loadQueue()]);
-  liveRecordCache=normalizeRecordRows(orders,trades);liveRecordStageSummary=orders.summary||{};
-  renderStatus(status);renderAccount(account);renderPositions(positions);renderRecords();
-  $('log').textContent='最后刷新 '+new Date().toLocaleTimeString()+'\\n'+JSON.stringify({queue_count:queue.count,status:status.safety},null,2);
-}
-loadAutoConfig(true).then(load);
+const $=id=>document.getElementById(id);let config={},catalog=[],selectedStrategies=new Set(),lastPreview=[];
+const LIVE_INTRADAY_STRATEGIES=['score_driven','vwap_strength','volume_breakout','fund_flow_watch','fake_order_cancel_watch','orderbook_imbalance_watch','global_commodity_map','market_regime','risk_control'];
+const LIVE_ORDER_PREVIEW_API='/api/live/orders/preview',LIVE_TRADES_API='/api/live/trades';
+const cn={buy:'买入',sell:'卖出',needs_confirmation:'待人工确认',risk_blocked:'风控拦截',prechecked:'预检查通过',submitted:'已提交',accepted:'已受理',partially_filled:'部分成交',filled:'已成交',cancel_requested:'撤单申请中',cancelled:'已撤单',canceled:'已撤单',rejected:'已拒单',failed:'失败',commission:'佣金',tax:'税费',slippage:'滑点',realized_pnl:'已实现盈亏'};
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}function label(v){return cn[v]||v||'--'}function num(id,f=0){const n=Number($(id).value);return Number.isFinite(n)?n:f}function money(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('zh-CN',{maximumFractionDigits:2}):'--'}function pct(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(2)+'%':'--'}function cls(v){const n=Number(v);return n>0?'ok':n<0?'bad':''}function split(v){return [...new Set(String(v||'').split(/[\s,，;；、]+/).map(x=>x.trim()).filter(Boolean))]}function symbols(){return split($('symbols').value)}async function api(url,opt){const r=await fetch(url,opt);let d={};try{d=await r.json()}catch(e){d={ok:false,message:'接口返回不是 JSON'}}if(!r.ok&&d.ok!==false)d.ok=false;return d}function busy(btn,text,fn){if(!btn)return fn();const old=btn.textContent;btn.disabled=true;btn.textContent=text;return Promise.resolve(fn()).finally(()=>{btn.disabled=false;btn.textContent=old})}
+function openTab(name){document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===name));document.querySelectorAll('.tab-pane').forEach(x=>x.classList.toggle('active',x.id==='pane-'+name))}
+function strategyPayload(){return [...selectedStrategies]}function orderPayload(){return {symbols:symbols(),symbol:symbols()[0]||'',side:$('side').value,quantity:num('quantity',100),order_type:$('orderType').value,limit_price:num('limitPrice',0)||null,strategy_family:$('strategyFamily').value,selected_strategies:strategyPayload(),strategy_combo:strategyPayload(),risk_controls:{stop_loss_pct:num('stopLossPct',8),take_profit_pct:num('takeProfitPct',18),max_single_position_pct:num('maxSinglePositionPct',20),max_drawdown_pct:num('maxDrawdownPct',18)},source_page:'live-trading'} }
+function renderStrategies(){const selected=selectedStrategies;$('strategyCount').textContent=selected.size+' 项';$('strategyList').innerHTML=catalog.map(x=>{const key=String(x.key||'');return `<label class="strategy"><input type="checkbox" data-key="${esc(key)}" ${selected.has(key)?'checked':''} onchange="toggleStrategy(this)"><span><b>${esc(x.name||key)}</b><small>${esc(x.beginner_note||x.description||x.category||'统一策略因子')}</small></span></label>`}).join('')||'<span class="muted">策略目录暂不可用；系统不会用虚假策略替代。</span>';renderWatchRows()}function toggleStrategy(el){el.checked?selectedStrategies.add(el.dataset.key):selectedStrategies.delete(el.dataset.key);renderStrategies()}
+function loadLiveIntradayPreset(){selectedStrategies=new Set(LIVE_INTRADAY_STRATEGIES);$('strategyFamily').value='short';renderStrategies()}
+function selectAllAvailableStrategies(){selectedStrategies=new Set(catalog.map(x=>String(x.key||'')).filter(Boolean));renderStrategies()}
+function renderWatchRows(preview=[]){const previewMap={};(preview.length?preview:lastPreview).forEach(x=>{const r=x.preview||x.result||x.response||x;previewMap[String(x.symbol||r.symbol||'')]=r});$('watchRows').innerHTML=symbols().map(sym=>{const r=previewMap[sym]||{},ok=!!(r.ok||r.approved||['prechecked','needs_confirmation'].includes(r.status)),state=r.status||r.message||(Object.keys(r).length?(ok?'预检查通过/待确认':'预检查未通过'):'待预检查');return `<tr><td>${esc(sym)}</td><td>${selectedStrategies.size}</td><td>${esc(label($('side').value))}</td><td>${esc($('quantity').value)}</td><td>${esc($('limitPrice').value||'0')}</td><td class="${Object.keys(r).length?(ok?'ok':'bad'):''}">${esc(label(state))}</td></tr>`}).join('')||'<tr><td colspan="6">请先输入监控标的</td></tr>'}
+async function loadWorkbenchConfig(btn){return busy(btn,'读取中...',async()=>{const [c,l]=await Promise.all([api('/api/auto-trading/config'),api('/api/strategy/library')]);config=c.data||{};catalog=config.strategy_catalog||l.data||[];const combo=config.strategy_combo||l.default_keys||[];selectedStrategies=new Set(combo.map(String));if((config.symbols||[]).length)$('symbols').value=config.symbols.join(', ');const risk=config.risk_controls||{};for(const [id,key] of [['stopLossPct','stop_loss_pct'],['takeProfitPct','take_profit_pct'],['maxSinglePositionPct','max_single_position_pct'],['maxDrawdownPct','max_drawdown_pct']])if(risk[key]!=null)$(id).value=risk[key];renderStrategies()})}
+function renderPreview(rows){lastPreview=rows||[];$('previewRows').innerHTML=lastPreview.map(x=>{const r=x.preview||x.result||x.response||x;const ok=!!(r.ok||r.approved||r.status==='needs_confirmation'||r.status==='prechecked');return `<tr><td>${esc(x.symbol||r.symbol)}</td><td>${label(r.side||$('side').value)}</td><td>${esc(r.quantity||$('quantity').value)}</td><td class="${ok?'ok':'bad'}">${esc(label(r.status||r.message||(ok?'通过':'未通过')))}</td><td>${esc(r.status_reason||r.reason||r.risk?.reason||r.message||'--')}</td></tr>`}).join('')||'<tr><td colspan="5">暂无结果</td></tr>';renderWatchRows(lastPreview)}
+async function batchPreview(btn){return busy(btn,'预检查中...',async()=>{const js=await api('/api/live/orders/preview-batch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(orderPayload())});renderPreview(js.data||[]);$('output').textContent=JSON.stringify(js,null,2);openTab('orders');return js})}
+async function submitConfirmation(btn){return busy(btn,'提交中...',async()=>{const js=await api('/api/live/orders/place-batch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...orderPayload(),confirmed:false})});renderPreview(js.data||[]);$('output').textContent=JSON.stringify(js,null,2);await loadOrders();openTab('orders')})}
+async function approve(id,btn){return busy(btn,'确认中...',async()=>{const js=await api('/api/live/orders/confirm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({confirm_id:id})});$('output').textContent=JSON.stringify(js,null,2);await loadAll()})}
+async function connectBroker(btn){return busy(btn,'检查中...',async()=>{const js=await api('/api/live-broker/connect',{method:'POST'});$('output').textContent=JSON.stringify(js,null,2);await loadAll()})}async function setKillSwitch(btn){if(!confirm('确认启用全局实盘 Kill Switch？启用后所有真实下单都会被阻断。'))return;return busy(btn,'启用中...',async()=>{const js=await api('/api/live/kill-switch',{method:'POST',headers:{'content-type':'application/json'},body:'{"enabled":true}'});$('output').textContent=JSON.stringify(js,null,2);await loadAll()})}
+function renderStatus(js){const b=js.broker||{},s=js.safety||{};$('brokerPill').textContent=`${b.broker||js.config?.broker_type||'disabled'} · ${label(b.status||js.status||'disabled')}`;$('brokerPill').className='pill '+(b.connected?'':'warn');$('safety').innerHTML=`<b>连接：</b>${b.connected?'已连接':'未连接'}　<b>实盘开关：</b>${s.LIVE_TRADING_ENABLED?'开启':'关闭'}<br><b>人工确认：</b>${s.ORDER_CONFIRM_REQUIRED?'必须':'未启用'}　<b>Kill Switch：</b>${s.LIVE_KILL_SWITCH?'已启用':'未启用'}<br><span class="muted">未安装 SDK、未配置环境变量、未授权账户时会显示 disabled/unsupported，绝不会伪造连接或成交。</span>`}
+function renderAccount(a,p){const d=a.data||a.account||{},rows=p.data||[];const cash=d.available_cash??d.cash?.available_cash,eq=d.total_equity??d.equity,mv=d.position_market_value??d.market_value,up=d.unrealized_pnl,rp=d.realized_pnl,day=d.daily_pnl;const available=a.data_available!==false&&d.authorized!==false;$('accountNotice').className='notice '+(available?'':'danger');$('accountNotice').innerHTML=available?`账户 ${esc(d.account_id||'--')} · 数据源 ${esc(d.source||a.source?.status||'券商适配器')} · 更新时间 ${esc(d.fetched_at||'--')}`:`<b>未连接真实账户</b><br>${esc(a.missing_reason||d.missing_reason||(a.missing_reasons||[]).join('；')||'券商未连接、未授权或接口不支持')}`;$('metrics').innerHTML=[['可用资金',money(cash),''],['总权益',money(eq),''],['持仓市值',money(mv),''],['浮盈亏',money(up),cls(up)],['已实现盈亏',money(rp),cls(rp)],['当日盈亏',money(day),cls(day)]].map(x=>`<div class="metric"><span>${x[0]}</span><b class="${x[2]}">${x[1]}</b></div>`).join('');$('positionRows').innerHTML=rows.map(x=>{const q=Number(x.quantity||0),cost=Number(x.display_cost_price??x.avg_cost??x.cost_price),price=Number(x.market_price??x.last_price),mv=Number(x.market_value??q*price),pnl=Number(x.unrealized_pnl??q*(price-cost)),pp=Number(x.display_pnl_pct??x.unrealized_pnl_pct??(cost?(price-cost)/cost*100:0));return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name||'--')}</td><td>${esc(q)}</td><td>${esc(x.available_quantity??'--')}</td><td>${money(cost)}</td><td>${money(price)}</td><td>${money(mv)}</td><td class="${cls(pnl)}">${money(pnl)}</td><td class="${cls(pp)}">${pct(pp)}</td><td>${esc(x.source||'--')}</td></tr>`}).join('')||'<tr><td colspan="10">暂无真实持仓；券商未连接时不会用 0 冒充账户数据。</td></tr>'}
+async function loadOrders(){const [o,q]=await Promise.all([api('/api/live/orders?scope=all&limit=500'),api('/api/live/confirm-queue')]);const rows=[];(q.data||[]).forEach(x=>rows.push({...x,stage:'人工确认',isConfirmation:true}));(o.data||[]).forEach(x=>rows.push({...x,stage:x.record_stage_cn||'委托'}));$('orderRows').innerHTML=rows.map(x=>{const id=x.confirm_id||x.id||'';const can=x.isConfirmation&&String(x.status||'pending')==='pending';return `<tr><td>${esc(x.stage)}</td><td>${esc(x.updated_at||x.created_at||'--')}</td><td>${esc(x.symbol||x.request?.symbol||'--')}</td><td>${esc(label(x.side||x.request?.side))}</td><td>${money(x.limit_price??x.price??x.request?.limit_price)}</td><td>${esc(x.quantity??x.request?.quantity??'--')}</td><td>${esc(label(x.status))}</td><td>${esc(x.status_reason||x.reason||x.message||'--')}</td><td class="actions">${can?`<button class="green" onclick="approve('${esc(id)}',this)">人工批准</button>`:'--'}</td></tr>`}).join('')||'<tr><td colspan="9">暂无委托或待确认订单。</td></tr>'}
+function renderFills(js){$('fillRows').innerHTML=(js.data||[]).map(x=>`<tr><td>${esc(x.filled_at||x.created_at||'--')}</td><td>${esc(x.symbol)}</td><td>${esc(label(x.side))}</td><td>${money(x.price)}</td><td>${esc(x.quantity??'--')}</td><td>${money(x.amount??Number(x.price)*Number(x.quantity))}</td><td>${money(x.fee)}</td><td>${money(x.tax)}</td><td>${money(x.slippage)}</td><td>${esc(x.source||x.broker||'--')}</td></tr>`).join('')||'<tr><td colspan="10">暂无真实成交。</td></tr>'}
+function renderLedger(js){$('ledgerRows').innerHTML=(js.data||[]).map(x=>`<tr><td>${esc(x.occurred_at||x.created_at||'--')}</td><td>${esc(x.symbol||'--')}</td><td>${esc(label(x.entry_type))}</td><td>${esc(label(x.side))}</td><td>${esc(x.quantity??'--')}</td><td>${money(x.price)}</td><td class="${cls(x.amount)}">${money(x.amount)}</td><td>${esc((x.order_id||'--')+' / '+(x.fill_id||'--'))}</td><td>${esc(x.source||'--')}</td></tr>`).join('')||'<tr><td colspan="9">暂无账本记录；只有真实成交回报才会写入。</td></tr>'}
+async function runReconciliation(btn){return busy(btn,'对账中...',async()=>{const js=await api('/api/live/reconciliation/run',{method:'POST'});$('reconcileOutput').textContent=JSON.stringify(js,null,2);const d=js.data||js;$('reconcileSummary').innerHTML=js.ok?`对账已完成。券商订单差异 ${esc((d.missing_orders||d.order_differences||[]).length||0)} 项，成交差异 ${esc((d.missing_trades||d.trade_differences||[]).length||0)} 项。`:`<span class="bad">对账未完成：${esc(js.message||js.reason||'券商不可用')}</span>`;openTab('reconcile')})}
+async function loadAll(btn){return busy(btn,'刷新中...',async()=>{const [s,a,p,f,l]=await Promise.all([api('/api/live-broker/status'),api('/api/live/account'),api('/api/live/positions'),api('/api/live/fills?limit=500'),api('/api/live/ledger?limit=1000')]);renderStatus(s);renderAccount(a,p);renderFills(f);renderLedger(l);await loadOrders()})}
+loadWorkbenchConfig().then(()=>loadAll()).catch(e=>{$('output').textContent=String(e)});
 </script>
-</body>
-</html>"""
+</body></html>'''

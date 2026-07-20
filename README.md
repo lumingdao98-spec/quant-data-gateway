@@ -1,5 +1,20 @@
 # Quant Data Gateway V3.18.3 / Stable Recovery
 
+## V3.24 Live Sync / PIT / Ledger
+
+V3.24 在 V3.23 自动交易核心上补齐多股票实盘批量预检查、QMT/PTrade 安全适配、账户/持仓/委托/成交同步、统一策略族、FIFO 持仓批次、跨模式账本与新闻/财报/IPO 的 point-in-time 事件查询。既有评分权重和映射逻辑不重写。
+
+关键增强：
+
+- `/auto-trading` 升级为 V3.24 总控台，继续用右侧 iframe 保留全部既有模块；
+- `/live-trading` 支持多股票观察池、实盘分时策略预设、批量预检查、逐单人工确认、账户/持仓/成交/账本/对账；
+- `/realtime-paper` 显示会话 ID、最后行情、最后决策、数据新鲜度、事件次数与待确认操作；
+- `/trading-records` 统一查询回测、模拟和实盘的订单成交、账本、FIFO 持仓批次与账户权益；
+- 新闻、财报、IPO 和事件回放严格执行 `available_at <= decision_time`，没有真实来源时明确返回缺失或拒绝；
+- QMT/PTrade SDK 或授权不存在时返回 `unsupported`，真实交易仍默认关闭。
+
+详细设计与接口见 `docs/V324_LIVE_SYNC_PIT_LEDGER.md`。
+
 ## V3.23 Full Auto Trading Core
 
 V3.23 把历史回测、实时模拟交易和真实券商自动交易拆成独立入口，同时共享统一的数据、评分、风控、订单、持仓、审计和图表标注内核。

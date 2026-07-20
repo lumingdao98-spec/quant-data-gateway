@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .strategy_family import normalize_strategy_family
+
 
 @dataclass(slots=True)
 class ExitSignal:
@@ -19,15 +21,17 @@ class ExitSignal:
 
 class ExitPolicyV323:
     def evaluate(self, position: dict[str, Any], market: dict[str, Any], *, strategy_family: str = "swing") -> ExitSignal:
+        family = normalize_strategy_family(strategy_family, default="swing")
         pnl = _num(position.get("unrealized_pct"))
         score = _num(market.get("score"), 50.0)
         flags = list(market.get("risk_flags") or [])
-        if "重大负面" in " ".join(flags):
+        joined_flags = " ".join(str(flag) for flag in flags)
+        if "重大负面" in joined_flags:
             return ExitSignal("sell", "major_negative_veto", "重大负面事件触发清仓建议", 0.9, risk_flags=flags)
-        if strategy_family in {"short_term", "swing"} and pnl <= -abs(_num(market.get("stop_loss_pct"), 0.08)):
+        if family in {"short", "swing"} and pnl <= -abs(_num(market.get("stop_loss_pct"), 0.08)):
             return ExitSignal("sell", "fixed_stop_loss", "触发止损", 0.82, risk_flags=flags)
-        if strategy_family == "long_term" and (score < 42 or "基本面恶化" in " ".join(flags)):
-            return ExitSignal("reduce", "thesis_break_exit", "长线持有逻辑破坏，建议减仓或退出", 0.78, risk_flags=flags)
+        if family == "position" and (score < 42 or "基本面恶化" in joined_flags):
+            return ExitSignal("reduce", "thesis_break_exit", "中长线持有逻辑破坏，建议减仓或退出", 0.78, risk_flags=flags)
         if _num(market.get("take_profit_pct")) and pnl >= _num(market.get("take_profit_pct")):
             return ExitSignal("reduce", "staged_take_profit", "达到分批止盈条件", 0.7, partial_ratio=0.5)
         if score < 45:
