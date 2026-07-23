@@ -27,6 +27,7 @@ class IpoSnapshot:
     subscription_date: str = ""
     sector: str = ""
     liquidity_shock_score: float | None = None
+    competitor_listing_pressure: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

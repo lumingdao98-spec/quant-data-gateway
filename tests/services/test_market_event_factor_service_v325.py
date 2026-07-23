@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from quant_data.data import EarningsSnapshot, IpoSnapshot, PITStore
 from quant_data.services.market_event_factor_service import MarketEventFactorService
 
 
@@ -156,3 +157,79 @@ def test_competitor_listing_pressure_requires_explicit_symbol_mapping():
 
     assert "competitor_listing_pressure" not in {row["factor_key"] for row in unrelated["factors"]}
     assert "competitor_listing_pressure" in {row["factor_key"] for row in related["factors"]}
+
+
+def test_pit_structured_snapshots_automatically_enter_realtime_event_scores(tmp_path):
+    store = PITStore(tmp_path / "pit.sqlite")
+    earnings = EarningsSnapshot(
+        symbol="688146",
+        report_period="2026H1",
+        announced_at="2026-07-17T18:00:00",
+        available_at="2026-07-17T18:00:00",
+        net_profit=3.48,
+        consensus_profit=2.90,
+        guidance_low=3.2,
+        guidance_high=3.7,
+        surprise=20.0,
+        source_id="cninfo",
+        source_name="巨潮资讯公告",
+        source_url="https://www.cninfo.com.cn/example",
+    )
+    for record in earnings.to_event().to_pit_records():
+        store.put(record)
+    ipo = IpoSnapshot(
+        issuer_symbol="688999",
+        issuer_name="长鑫科技",
+        exchange="上交所",
+        announced_at="2026-07-16T18:00:00",
+        available_at="2026-07-16T18:00:00",
+        liquidity_shock_score=72,
+        competitor_listing_pressure=45,
+        competitors=["688146"],
+        sectors=["半导体材料"],
+        source_id="sse_ipo",
+        source_name="上海证券交易所",
+        source_url="https://www.sse.com.cn/example",
+    )
+    for record in ipo.to_event().to_pit_records():
+        store.put(record)
+
+    context = MarketEventFactorService(pit_store=store).build_context(
+        symbol="688146",
+        name="中船特气",
+        profile={"industry": "半导体材料", "main_business": "电子特种气体"},
+        global_items=[],
+        now=NOW,
+    )
+
+    keys = {row["factor_key"] for row in context["factors"]}
+    assert {"earnings_surprise", "ipo_liquidity_shock", "competitor_listing_pressure"} <= keys
+    assert context["information_adjustment"] != 0
+    assert context["market_adjustment"] < 0
+    assert context["pit_input_status"]["datasets"]["earnings"]["status"] == "available"
+    assert context["pit_input_status"]["datasets"]["ipo"]["symbol_relevance"] == "direct"
+
+
+def test_pit_loader_never_uses_future_structured_snapshot(tmp_path):
+    store = PITStore(tmp_path / "pit.sqlite")
+    future = EarningsSnapshot(
+        symbol="688146",
+        report_period="2026H1",
+        announced_at="2026-07-21T18:00:00",
+        available_at="2026-07-21T18:00:00",
+        surprise=80.0,
+        source_id="cninfo",
+        source_name="巨潮资讯公告",
+        source_url="https://www.cninfo.com.cn/future",
+    )
+    for record in future.to_event().to_pit_records():
+        store.put(record)
+
+    context = MarketEventFactorService(pit_store=store).build_context(
+        symbol="688146",
+        global_items=[],
+        now=NOW,
+    )
+
+    assert "earnings_surprise" not in {row["factor_key"] for row in context["factors"]}
+    assert context["pit_input_status"]["datasets"]["earnings"]["status"] == "missing"

@@ -63,3 +63,66 @@ def test_connected_market_agent_brief_uses_real_stream_shape_and_safety(monkeypa
     assert "LIVE_TRADING_ENABLED=false" in "；".join(brief["risk_flags"])
     assert "不能直接下单" in brief["llm_status"]
     assert "不构成投资建议" in brief["disclaimer"]
+
+
+def test_connected_market_agent_exposes_traceable_theme_trends(monkeypatch):
+    monkeypatch.setattr(api, "_read_global_news_stream", lambda limit=80, force=False, live=True: ({"items": []}, {"status": "miss"}))
+    monkeypatch.setattr(api.score_history_service, "latest", lambda limit=1000, score_date=None: [])
+    monkeypatch.setattr(
+        api.sector_mainline_service,
+        "snapshot",
+        lambda **kwargs: {
+            "ok": True,
+            "items": [
+                {
+                    "board_code": "BK1036",
+                    "board_name": "半导体",
+                    "board_type_name": "行业板块",
+                    "stage": "强势",
+                    "mainline_score": 78.5,
+                    "strength_score": 81.0,
+                    "net_inflow": 1_260_000_000,
+                    "interval_flow_15m": 160_000_000,
+                    "interval_flow_30m": 280_000_000,
+                    "interval_flow_60m": 410_000_000,
+                    "recent_flow_5d_sum": 3_080_000_000,
+                    "flow_state": "加速流入",
+                    "flow_state_reason": "近15和30分钟累计净流均为正",
+                    "published_at": "2026-07-20T10:30:00",
+                    "source_name": "东方财富公开板块资金",
+                    "source_ref": "https://push2.eastmoney.com/api/qt/clist/get",
+                    "source_url": "https://data.eastmoney.com/bkzj/",
+                },
+                {
+                    "board_code": "BK0000",
+                    "board_name": "样本不足板块",
+                    "stage": "观察",
+                    "mainline_score": 66,
+                    "flow_state": "等待日内快照",
+                    "source_name": "",
+                    "source_ref": "",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        api.live_trading_engine_v323,
+        "status",
+        lambda: {
+            "broker": {"connected": False, "status": "disabled"},
+            "safety": {"LIVE_TRADING_ENABLED": False, "ORDER_CONFIRM_REQUIRED": True, "LIVE_KILL_SWITCH": False},
+        },
+    )
+
+    brief = TestClient(api.app).get("/api/agent/market-brief?symbols=300750").json()["data"]
+
+    trends = {row["theme"]: row for row in brief["theme_trends"]}
+    semiconductor = trends["半导体"]
+    assert semiconductor["trend"] == "增强"
+    assert semiconductor["support_evidence"]
+    assert semiconductor["source_ref"].startswith("https://push2.eastmoney.com/")
+    assert semiconductor["truth_boundary"].startswith("板块资金为公开累计净流字段")
+    missing = trends["样本不足板块"]
+    assert missing["trend"] == "等待数据"
+    assert "缺少可追溯板块资金来源" in missing["missing_data"]
+    assert brief["ai_analysis"]["status"] == "not_requested"

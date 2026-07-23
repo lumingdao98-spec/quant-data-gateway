@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from quant_data.data.earnings_snapshot import EarningsSnapshot
+from quant_data.data.pit_store import PITStore
 from quant_data.models import AssetType, Bar, IntradayPoint, Quote
+from quant_data.services.market_event_factor_service import MarketEventFactorService
 from quant_data.services.market_regime_service import MarketRegimeService
 from quant_data.services.realtime_decision_service import RealtimeDecisionService
+from quant_data.trading.signal_fusion import SignalFusionEngine
 
 
 class _Cache:
@@ -182,3 +186,56 @@ def test_missing_orderbook_is_explicit_and_never_fabricated():
     assert result["orderbook_snapshot"]["status"] == "missing"
     assert result["orderbook_snapshot"]["bid1"] is None
     assert "orderbook_missing" in result["missing_data"]
+
+
+def test_traceable_pit_earnings_changes_realtime_information_and_trade_score(tmp_path):
+    store = PITStore(tmp_path / "decision-pit.sqlite")
+    available_at = datetime.now() - timedelta(hours=2)
+    snapshot = EarningsSnapshot(
+        symbol="600438",
+        report_period="2026H1",
+        announced_at=available_at.isoformat(timespec="seconds"),
+        available_at=available_at.isoformat(timespec="seconds"),
+        surprise=45.0,
+        source_id="cninfo",
+        source_name="巨潮资讯公告",
+        source_url="https://www.cninfo.com.cn/traceable-earnings",
+    )
+    for record in snapshot.to_event().to_pit_records():
+        store.put(record)
+
+    base = _service().hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60, "fundamental_score": 60, "fund_flow_score": 55, "market_score": 50},
+    )
+    market_data = _Cache(bars=_bars(), points=_points(12.0), quotes={"600438": _quote()})
+    event_service = MarketEventFactorService(pit_store=store)
+    enriched_service = RealtimeDecisionService(
+        SimpleNamespace(cache=market_data),
+        _InfoCache(),
+        MarketRegimeService(),
+        event_service,
+    )
+    enriched = enriched_service.hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60, "fundamental_score": 60, "fund_flow_score": 55, "market_score": 50},
+    )
+
+    def trade_score(row):
+        return SignalFusionEngine().fuse(
+            symbol="600438",
+            screening_score=row.get("screening_score"),
+            fundamental_score=row.get("fundamental_score"),
+            technical_score=row.get("technical_score"),
+            information_score=row.get("information_score"),
+            fund_flow_score=row.get("fund_flow_score"),
+            market_score=row.get("market_score"),
+        ).final_score
+
+    assert enriched["information_score"] > base["information_score"]
+    assert trade_score(enriched) > trade_score(base)
+    assert enriched["market_event_context"]["pit_input_status"]["datasets"]["earnings"]["status"] == "available"
+    assert any(
+        row["factor_key"] == "earnings_surprise"
+        for row in enriched["score_breakdown"]["event_factors"]
+    )

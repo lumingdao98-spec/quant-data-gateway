@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, time
 from typing import Any
 
+from quant_data.backtest.market_rules import MarketRuleEngine
+
 from .anomaly_guard import AnomalyGuard
 from .audit_log import AuditLog
 from .data_freshness import DataFreshnessGuard
@@ -35,6 +37,7 @@ class RealtimePaperEngine:
         self.anomaly_guard = anomaly_guard or AnomalyGuard()
         self.freshness_guard = freshness_guard or DataFreshnessGuard()
         self.human_confirm_queue = human_confirm_queue or HumanConfirmQueue()
+        self.market_rules = MarketRuleEngine.default()
         self.state = RealtimePaperState()
         self.signals: list[UnifiedSignal] = []
         self.signal_meta: list[dict[str, Any]] = []
@@ -56,6 +59,8 @@ class RealtimePaperEngine:
             strategy=str(payload.get("strategy") or "three_dimension_score"),
             fee_rate=float(payload.get("fee_rate") or 0.0003),
             slippage_rate=float(payload.get("slippage_rate") or 0.0005),
+            min_commission=max(0.0, float(payload.get("min_commission", 5.0))),
+            sell_tax_rate=max(0.0, float(payload.get("sell_tax_rate", 0.0005))),
         )
         self.state.start(config)
         self.audit_log.record("realtime_paper_start", {"config": config.to_dict(), "paper_only": True})
@@ -121,6 +126,9 @@ class RealtimePaperEngine:
         if not symbol or price <= 0:
             return {"ok": False, "message": "订单代码或价格缺失，不能模拟成交", "data": task.to_dict()}
         task = self.human_confirm_queue.approve(task_id, operator=operator)
+        now = cn_market_now()
+        rule = self.market_rules.resolve_profile(symbol, asof=now)
+        self.account.settle_t_plus_one(now)
         order = self.order_manager.build_order(
             symbol=symbol,
             target_weight=float(source_order.get("target_weight") or signal.get("target_weight") or 0.0),
@@ -128,12 +136,17 @@ class RealtimePaperEngine:
             price=price,
             order_type=str(source_order.get("order_type") or "market"),
             reason=f"人工确认 {task_id}：{task.reason}",
+            lot_size=rule.lot_size_buy,
         )
         self.order_manager.simulate_fill(
             order,
             fill_price=price,
             fee_rate=self.state.config.fee_rate,
             slippage_rate=self.state.config.slippage_rate,
+            min_commission=self.state.config.min_commission,
+            tax_rate=self.state.config.sell_tax_rate if rule.security_type == "stock" else 0.0,
+            filled_at=now.isoformat(timespec="seconds"),
+            t_plus_one=rule.t_plus_one,
         )
         self.account.mark_to_market({symbol: price})
         self.audit_log.record(
@@ -167,6 +180,12 @@ class RealtimePaperEngine:
         if "intraday_ts" not in payload:
             payload["intraday_ts"] = payload.get("ts") or now.isoformat(timespec="seconds")
         is_trading = bool(payload.get("is_trading_session", self._is_trading_time(now)))
+        rule = self.market_rules.resolve_profile(
+            symbol,
+            asof=now,
+            security_master=payload.get("security_master") if isinstance(payload.get("security_master"), dict) else None,
+        )
+        self.account.settle_t_plus_one(now)
         self.state.is_trading_session = is_trading
         self.state.last_tick_at = now.isoformat(timespec="seconds")
         self.state.tick_count += 1
@@ -248,6 +267,7 @@ class RealtimePaperEngine:
                 "paper_only": True,
                 "strategy_controls": strategy_controls,
                 "event_watch_context": event_context,
+                "market_rule": rule.to_dict(),
             }
         )
         self.signal_meta.append(signal_row)
@@ -260,6 +280,7 @@ class RealtimePaperEngine:
                 target_weight=signal.target_weight,
                 side=signal.action,
                 price=price,
+                lot_size=rule.lot_size_buy,
             )
             if int(sizing.get("quantity") or 0) <= 0:
                 execution_diagnostic = sizing
@@ -276,6 +297,7 @@ class RealtimePaperEngine:
                     price=price,
                     order_type=str(payload.get("order_type") or "market"),
                     reason=signal.reason,
+                    lot_size=rule.lot_size_buy,
                 )
                 risk = self.risk_gateway.evaluate_order(
                     order.to_dict(),
@@ -289,7 +311,17 @@ class RealtimePaperEngine:
                 )
                 confirm_task = None
                 if risk["approved"] and risk["decision"] == "allow":
-                    self.order_manager.simulate_fill(order, fill_price=price, fee_rate=self.state.config.fee_rate, slippage_rate=self.state.config.slippage_rate)
+                    execution_price = self._execution_price(quote, signal.action, price)
+                    self.order_manager.simulate_fill(
+                        order,
+                        fill_price=execution_price,
+                        fee_rate=self.state.config.fee_rate,
+                        slippage_rate=self.state.config.slippage_rate,
+                        min_commission=self.state.config.min_commission,
+                        tax_rate=self.state.config.sell_tax_rate if rule.security_type == "stock" else 0.0,
+                        filled_at=now.isoformat(timespec="seconds"),
+                        t_plus_one=rule.t_plus_one,
+                    )
                     self.audit_log.record("fill_arrived", {"order": order.to_dict(), "paper_only": True})
                 else:
                     self.order_manager.reject(order, "；".join(risk.get("risk_reasons") or risk.get("warnings") or ["风控未通过"]))
@@ -361,6 +393,11 @@ class RealtimePaperEngine:
             except (TypeError, ValueError):
                 return None
         return None
+
+    def _execution_price(self, quote: dict[str, Any], action: str, fallback: float) -> float:
+        side = "ask" if action in {"buy", "add"} else "bid"
+        price = self._best_price(quote, side) or fallback
+        return round(max(float(price or fallback), 0.0), 4)
 
     def replay(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}

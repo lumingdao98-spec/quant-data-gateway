@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any, Iterable
 
+from quant_data.data.pit_store import PITRecord, PITStore
 from quant_data.scoring.extension_factors import V324ExtensionFactorEngine
 
 from .global_industry_mapper import GlobalIndustryMapper
@@ -70,9 +71,15 @@ class MarketEventFactorService:
     mapping. Stable score policy modules remain untouched.
     """
 
-    def __init__(self, cache_state: Any | None = None, mapper: GlobalIndustryMapper | None = None) -> None:
+    def __init__(
+        self,
+        cache_state: Any | None = None,
+        mapper: GlobalIndustryMapper | None = None,
+        pit_store: PITStore | None = None,
+    ) -> None:
         self.cache_state = cache_state
         self.mapper = mapper or GlobalIndustryMapper()
+        self.pit_store = pit_store
         self.extension_engine = V324ExtensionFactorEngine()
 
     def build_context(
@@ -133,10 +140,22 @@ class MarketEventFactorService:
         resolved_sector = sector_snapshot if sector_snapshot is not None else self._cached_sector_snapshot()
         sector_factor = self._sector_factor(exposure, resolved_sector)
         self._keep_strongest(factors, sector_factor)
+        pit_inputs, pit_input_status = self._pit_structured_inputs(
+            symbol=symbol,
+            current=current,
+            exposure=exposure,
+        )
+        supplied_inputs = {
+            key: dict(value)
+            for key, value in dict(structured_inputs or {}).items()
+            if isinstance(value, dict) and value
+        }
+        merged_inputs = {**pit_inputs, **supplied_inputs}
+        merged_inputs["sector"] = dict(supplied_inputs.get("sector") or pit_inputs.get("sector") or resolved_sector)
         extension_rows, extension_missing = self._structured_factor_rows(
             symbol=symbol,
             current=current,
-            structured_inputs={**dict(structured_inputs or {}), "sector": dict((structured_inputs or {}).get("sector") or resolved_sector)},
+            structured_inputs=merged_inputs,
         )
         for factor in extension_rows:
             self._keep_strongest(factors, factor)
@@ -171,6 +190,7 @@ class MarketEventFactorService:
             "excluded_future": future_excluded,
             "excluded_undated": undated_excluded,
             "cache_status": cache_status,
+            "pit_input_status": pit_input_status,
             "company_exposure": exposure,
             "truth_boundary": "事件调整是有来源证据的模型解释，不等于事实收益或自动交易指令。",
         }
@@ -215,6 +235,245 @@ class MarketEventFactorService:
             if cached.data and cached.data.get("items"):
                 return dict(cached.data)
         return {}
+
+    def _pit_structured_inputs(
+        self,
+        *,
+        symbol: str,
+        current: datetime,
+        exposure: dict[str, Any],
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+        """Load canonical structured factors as-of the decision time.
+
+        Text news remains useful for explaining transmission chains, while PIT
+        records are the only automatic source for numeric earnings, IPO, macro
+        and northbound-flow factors. This keeps historical replay and realtime
+        decisions on the same no-look-ahead contract.
+        """
+
+        status: dict[str, Any] = {
+            "enabled": self.pit_store is not None,
+            "decision_time": current.isoformat(timespec="seconds"),
+            "datasets": {},
+            "rule": "仅使用 available_at 不晚于决策时点且带可追溯来源的快照。",
+        }
+        if self.pit_store is None:
+            status["message"] = "PIT 存储未接入；结构化事件因子保持缺失。"
+            return {}, status
+
+        output: dict[str, dict[str, Any]] = {}
+        specs = {
+            "earnings": {"symbol": symbol, "max_age_days": 550, "limit": 12},
+            "macro": {"symbol": "", "max_age_days": 7, "limit": 80},
+            "fund_flow": {"symbol": symbol, "max_age_days": 5, "limit": 40},
+            "sector": {"symbol": symbol, "max_age_days": 5, "limit": 40},
+        }
+        for section, spec in specs.items():
+            records = self._query_pit_records(
+                dataset=section,
+                symbol=str(spec["symbol"]),
+                current=current,
+                limit=int(spec["limit"]),
+            )
+            selected, section_status = self._select_pit_input(
+                records,
+                section=section,
+                current=current,
+                max_age_days=int(spec["max_age_days"]),
+            )
+            status["datasets"][section] = section_status
+            if selected:
+                output[section] = selected
+
+        ipo_records = self._query_pit_records(
+            dataset="ipo",
+            symbol="",
+            current=current,
+            limit=120,
+        )
+        ipo_selected, ipo_status = self._select_ipo_input(
+            ipo_records,
+            symbol=symbol,
+            exposure=exposure,
+            current=current,
+        )
+        status["datasets"]["ipo"] = ipo_status
+        if ipo_selected:
+            output["ipo"] = ipo_selected
+
+        status["available_sections"] = sorted(output)
+        status["missing_sections"] = sorted(set(("earnings", "macro", "fund_flow", "sector", "ipo")) - set(output))
+        return output, status
+
+    def _query_pit_records(
+        self,
+        *,
+        dataset: str,
+        symbol: str,
+        current: datetime,
+        limit: int,
+    ) -> list[PITRecord]:
+        if self.pit_store is None:
+            return []
+        try:
+            return list(
+                self.pit_store.query_asof(
+                    decision_time=current.isoformat(timespec="seconds"),
+                    dataset=dataset,
+                    symbol=symbol,
+                    limit=limit,
+                )
+            )
+        except Exception:
+            return []
+
+    def _select_pit_input(
+        self,
+        records: list[PITRecord],
+        *,
+        section: str,
+        current: datetime,
+        max_age_days: int,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not records:
+            return {}, {"status": "missing", "reason": f"没有 {section} PIT 快照"}
+        rejected = 0
+        for record in records:
+            available_at = _parse_time(record.available_at)
+            if available_at is None or available_at > current + timedelta(minutes=2):
+                rejected += 1
+                continue
+            age_days = max(0.0, (current - available_at).total_seconds() / 86400.0)
+            if age_days > max_age_days:
+                rejected += 1
+                continue
+            data = self._pit_record_payload(record)
+            if not self._has_traceable_source(data):
+                rejected += 1
+                continue
+            return data, {
+                "status": "available",
+                "record_id": record.record_id,
+                "available_at": record.available_at,
+                "source": data.get("source"),
+                "source_ref": data.get("source_ref"),
+                "age_days": round(age_days, 3),
+                "rejected": rejected,
+            }
+        return {}, {
+            "status": "excluded",
+            "reason": "快照过期、晚于决策时点或缺少可追溯来源",
+            "rejected": rejected,
+        }
+
+    def _select_ipo_input(
+        self,
+        records: list[PITRecord],
+        *,
+        symbol: str,
+        exposure: dict[str, Any],
+        current: datetime,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not records:
+            return {}, {"status": "missing", "reason": "没有 IPO PIT 快照"}
+        exposure_words = set(
+            str(value).strip()
+            for value in (
+                list(exposure.get("industries") or [])
+                + list(exposure.get("concepts") or [])
+                + list(exposure.get("chain_position") or [])
+            )
+            if str(value).strip()
+        )
+        candidates: list[tuple[float, float, PITRecord, dict[str, Any]]] = []
+        rejected = 0
+        for record in records:
+            available_at = _parse_time(record.available_at)
+            if available_at is None or available_at > current + timedelta(minutes=2):
+                rejected += 1
+                continue
+            age_days = max(0.0, (current - available_at).total_seconds() / 86400.0)
+            if age_days > 180:
+                rejected += 1
+                continue
+            data = self._pit_record_payload(record)
+            if not self._has_traceable_source(data):
+                rejected += 1
+                continue
+            competitors = {
+                str(value).strip()
+                for value in (data.get("competitor_symbols") or data.get("competitors") or [])
+                if str(value).strip()
+            }
+            sectors = {
+                str(value).strip()
+                for value in (data.get("sectors") or ([data.get("sector")] if data.get("sector") else []))
+                if str(value).strip()
+            }
+            issuer = str(data.get("issuer_symbol") or data.get("symbol") or "").strip()
+            symbol_related = symbol in competitors or symbol == issuer or bool(exposure_words.intersection(sectors))
+            data["competitor_symbols"] = sorted(competitors)
+            data["symbol_relevance"] = "direct" if symbol_related else "market_only"
+            shock = abs(
+                _number(
+                    data.get("liquidity_shock_score")
+                    or data.get("ipo_shock_score")
+                    or data.get("fund_diversion_score")
+                )
+                or 0.0
+            )
+            candidates.append((1.0 if symbol_related else 0.0, shock, record, data))
+        if not candidates:
+            return {}, {
+                "status": "excluded",
+                "reason": "IPO 快照过期、晚于决策时点或缺少可追溯来源",
+                "rejected": rejected,
+            }
+        _, _, record, selected = max(
+            candidates,
+            key=lambda row: (row[0], row[1], str(row[2].available_at)),
+        )
+        available_at = _parse_time(record.available_at) or current
+        return selected, {
+            "status": "available",
+            "record_id": record.record_id,
+            "available_at": record.available_at,
+            "source": selected.get("source"),
+            "source_ref": selected.get("source_ref"),
+            "symbol_relevance": selected.get("symbol_relevance"),
+            "age_days": round(max(0.0, (current - available_at).total_seconds() / 86400.0), 3),
+            "rejected": rejected,
+        }
+
+    @staticmethod
+    def _pit_record_payload(record: PITRecord) -> dict[str, Any]:
+        outer = dict(record.payload or {})
+        nested = dict(outer.get("payload") or {}) if isinstance(outer.get("payload"), dict) else {}
+        data = {**outer, **nested}
+        data["available_at"] = str(record.available_at or data.get("available_at") or "")
+        data["source"] = str(
+            outer.get("source_name")
+            or nested.get("source_name")
+            or outer.get("source_id")
+            or nested.get("source_id")
+            or record.source_id
+            or ""
+        )
+        data["source_ref"] = str(
+            outer.get("source_ref")
+            or outer.get("source_url")
+            or nested.get("source_ref")
+            or nested.get("source_url")
+            or ""
+        )
+        data["pit_record_id"] = record.record_id
+        if "competitor_symbols" not in data and isinstance(data.get("competitors"), list):
+            data["competitor_symbols"] = list(data["competitors"])
+        return data
+
+    @staticmethod
+    def _has_traceable_source(data: dict[str, Any]) -> bool:
+        return bool(str(data.get("source") or "").strip() and str(data.get("source_ref") or "").strip())
 
     def _global_technology_factor(self, text: str, mapped: dict[str, Any], published: datetime, source: str, source_ref: str) -> dict[str, Any] | None:
         technology = any(word.lower() in text.lower() for word in ("纳斯达克", "科技股", "芯片股", "半导体", "AI交易", "人工智能"))

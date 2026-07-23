@@ -163,8 +163,10 @@ class RiskGateway:
         current_value = sum(self._num(p.get("market_value"), self._num(p.get("quantity"), 0) * self._num(p.get("market_price") or p.get("avg_cost"), 0)) for p in current_positions.values() if isinstance(p, dict))
         current_symbol_value = 0.0
         pos = current_positions.get(symbol) if isinstance(current_positions, dict) else None
+        available_quantity = 0
         if isinstance(pos, dict):
             current_symbol_value = self._num(pos.get("market_value"), self._num(pos.get("quantity"), 0) * self._num(pos.get("market_price") or pos.get("avg_cost"), 0))
+            available_quantity = int(self._num(pos.get("available_quantity"), self._num(pos.get("quantity"), 0)))
         reasons: list[str] = []
         warnings: list[str] = []
         now = cn_market_time(now) or cn_market_now()
@@ -191,6 +193,8 @@ class RiskGateway:
             reasons.append("成交额过低，流动性不足")
         if side in {"buy", "add"} and order_amount > cash:
             reasons.append("现金不足")
+        if side in {"sell", "reduce"} and quantity > available_quantity:
+            reasons.append("可卖数量不足或受 T+1 限制")
         new_total = current_value + (order_amount if side in {"buy", "add"} else 0.0)
         new_symbol = current_symbol_value + (order_amount if side in {"buy", "add"} else -min(order_amount, current_symbol_value))
         if equity > 0 and new_total / equity > cfg.max_total_exposure_pct:
@@ -235,6 +239,7 @@ class RiskGateway:
                 "current_exposure": round(current_value / max(equity, 1.0), 6),
                 "new_exposure": round(new_total / max(equity, 1.0), 6),
                 "single_position_pct": round(new_symbol / max(equity, 1.0), 6),
+                "available_quantity": available_quantity,
                 "paper_only": True,
                 "real_broker_connected": False,
             },

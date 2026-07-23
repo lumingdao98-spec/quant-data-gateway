@@ -230,7 +230,7 @@ def build_auto_trading_workbench_ui() -> str:
           </div>
           <div class="panel">
             <div class="panel-h"><span>模拟账户/持仓</span><div class="row"><button class="btn" onclick="runDuePositionReviews(this)">检查每日复核</button><button class="btn" onclick="reviewPaperPositions(this)">复核全部持仓</button><button class="btn" onclick="openModule('realtime')">详情</button></div></div>
-            <div class="panel-b"><div id="reviewScheduleStatus" class="notice">正在读取每日持仓复核计划...</div><div id="sessionSnapshot" class="notice" style="margin-top:8px">暂无 active session</div><div id="paperPositionReviews" class="position-review-list"><span class="muted">有持仓后可执行每日复核；复核不会绕过实时模拟内核创建订单。</span></div><table class="mini-table" style="margin-top:10px"><tbody id="sessionRows"><tr><td>等待 session...</td></tr></tbody></table></div>
+            <div class="panel-b"><div id="paperSchedulerStatus" class="notice">正在读取服务端自动复评状态...</div><div id="reviewScheduleStatus" class="notice" style="margin-top:8px">正在读取每日持仓复核计划...</div><div id="sessionSnapshot" class="notice" style="margin-top:8px">暂无 active session</div><div id="paperPositionReviews" class="position-review-list"><span class="muted">有持仓后可执行每日复核；复核不会绕过实时模拟内核创建订单。</span></div><table class="mini-table" style="margin-top:10px"><tbody id="sessionRows"><tr><td>等待 session...</td></tr></tbody></table></div>
           </div>
           <div class="panel">
             <div class="panel-h"><span>实盘安全</span><div class="row"><button class="btn" onclick="reviewLivePositions(this)">只读持仓复核</button><button class="btn red" onclick="killLive(this)">Kill</button></div></div>
@@ -314,7 +314,7 @@ async function withAction(btn,pending,done,task){
   finally{if(btn){btn.disabled=false;btn.textContent=old}}
 }
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function splitListText(v){return String(v||'').split(/[\s,，;；、]+/).map(s=>s.trim()).filter(Boolean)}
+function splitListText(v){return String(v||'').split(/[\\s,，;；、]+/).map(s=>s.trim()).filter(Boolean)}
 function symbols(){return splitListText($('symbols')?.value)}
 function strategyCombo(){return splitListText($('strategyCombo')?.value)}
 function primarySymbol(){return (symbols()[0]||$('liveSymbol')?.value||'300750').trim()||'300750'}
@@ -325,7 +325,7 @@ function pct(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(2)+'%':'--
 function pnlClass(v){const n=Number(v);return n>0?'ok':n<0?'bad':''}
 function cnEnum(v){
   const raw=String(v??'').trim();
-  const map={macro:'宏观市场',global:'全球市场',market:'市场环境',company_event:'公司事件',market_macro:'宏观市场',news:'新闻资讯',announcement:'公司公告',policy:'政策信息',research:'研究信息',positive:'偏利好',negative:'偏利空',neutral:'中性',no_direct_mapping:'暂无直接映射',mapping_error:'映射失败',connected:'已连接',disconnected:'未连接',disabled:'已关闭',unsupported:'不支持',blocked:'已阻断',qmt:'迅投 QMT',ptrade:'PTrade',http_bridge:'本地 HTTP 券商桥',simulator:'本地模拟器',running:'运行中',paused:'已暂停',stopped:'已停止',buy:'买入',sell:'卖出',hold:'观察',add:'加仓',reduce:'减仓',avoid:'回避',needs_confirmation:'待人工确认',score_weighted:'评分加权',atr_risk:'波动风险仓位',volatility_target:'波动率目标',fixed_weight:'固定权重',core_satellite:'核心-卫星',cash_first_defensive:'现金优先防守',equal_risk_contribution:'等风险分配',hybrid:'综合评分',etf_momentum_rotation:'ETF动量轮动',score_reversal:'评分拐点修复',event_driven:'事件驱动'};
+  const map={macro:'宏观市场',fund_flow:'资金流',sector:'板块强度',earnings:'财报业绩',ipo:'IPO上市',global:'全球市场',market:'市场环境',company_event:'公司事件',market_macro:'宏观市场',news:'新闻资讯',announcement:'公司公告',policy:'政策信息',research:'研究信息',positive:'偏利好',negative:'偏利空',neutral:'中性',no_direct_mapping:'暂无直接映射',mapping_error:'映射失败',connected:'已连接',disconnected:'未连接',disabled:'已关闭',unsupported:'不支持',blocked:'已阻断',qmt:'迅投 QMT',ptrade:'PTrade',http_bridge:'本地 HTTP 券商桥',simulator:'本地模拟器',running:'运行中',paused:'已暂停',stopped:'已停止',buy:'买入',sell:'卖出',hold:'观察',add:'加仓',reduce:'减仓',avoid:'回避',needs_confirmation:'待人工确认',score_weighted:'评分加权',atr_risk:'波动风险仓位',volatility_target:'波动率目标',fixed_weight:'固定权重',core_satellite:'核心-卫星',cash_first_defensive:'现金优先防守',equal_risk_contribution:'等风险分配',hybrid:'综合评分',etf_momentum_rotation:'ETF动量轮动',score_reversal:'评分拐点修复',event_driven:'事件驱动'};
   return map[raw]||raw;
 }
 function cnAction(v){return cnEnum(v)||'观察'}
@@ -523,7 +523,7 @@ function renderPortfolioOverview(liveAccount,livePositions,records,paperPortfoli
     `浮动 ${money(recordSummary.unrealized_pnl)}${recordSummary.position_unrealized_pnl_pct!=null?' / '+pct(recordSummary.position_unrealized_pnl_pct):''}`
   ].join('；');
   const paperText=paper.session_id
-    ? `<b>当前模拟账户</b> ${esc(paperSession.status||'--')}｜现金 ${money(paperSummary.cash)}｜总资产 ${money(paperSummary.equity)}｜持仓成本 ${money(paperSummary.position_cost_value)}｜持仓市值 ${money(paperSummary.position_market_value)}<br><b>模拟盈亏/成交</b> 已实现 <span class="${pnlClass(paperSummary.realized_pnl)}">${money(paperSummary.realized_pnl)}</span>；浮动 <span class="${pnlClass(paperSummary.unrealized_pnl)}">${money(paperSummary.unrealized_pnl)}</span>；收益率 <span class="${pnlClass(paperSummary.total_return_pct)}">${pct(paperSummary.total_return_pct)}</span>；买入 ${money(paperSummary.buy_amount)}；卖出 ${money(paperSummary.sell_amount)}；总成交 ${money(paperSummary.turnover_amount)}<br><b>模拟持仓明细</b><br>${paperPositionText}`
+    ? `<b>当前模拟账户</b> ${esc(paperSession.status||'--')}｜现金 ${money(paperSummary.cash)}｜总资产 ${money(paperSummary.equity)}｜持仓成本 ${money(paperSummary.position_cost_value)}｜持仓市值 ${money(paperSummary.position_market_value)}<br><b>模拟盈亏/成交</b> 已实现 <span class="${pnlClass(paperSummary.realized_pnl)}">${money(paperSummary.realized_pnl)}</span>；浮动 <span class="${pnlClass(paperSummary.unrealized_pnl)}">${money(paperSummary.unrealized_pnl)}</span>；收益率 <span class="${pnlClass(paperSummary.total_return_pct)}">${pct(paperSummary.total_return_pct)}</span>；买入 ${money(paperSummary.buy_amount)}；卖出 ${money(paperSummary.sell_amount)}；总成交 ${money(paperSummary.turnover_amount)}；交易成本 ${money(paperSummary.total_trading_cost)}（佣金 ${money(paperSummary.commission)} / 卖出税 ${money(paperSummary.sell_tax)} / 滑点 ${money(paperSummary.slippage_cost)}）<br><b>模拟持仓明细</b><br>${paperPositionText}`
     : '<b>当前模拟账户</b> 暂无会话；启动实时模拟后会在这里显示现金、成本、市值、盈亏和逐股持仓。';
   $('portfolioOverview').innerHTML=`${paperText}<hr style="border:0;border-top:1px solid var(--line);margin:10px 0"><b>真实账户（安全隔离）</b> 可用资金 ${money(cash)}；总资产 ${money(total)}；持仓 ${esc(liveRows.length)} 只；浮盈亏 <span class="${pnlClass(livePnl)}">${money(livePnl)}</span>${livePnlPct!=null?' / '+pct(livePnlPct):''}<br><b>实盘持仓</b> ${positionsText}<br><b>券商状态</b> ${esc(liveStatus)}${missing?'；'+esc(missing):''}<hr style="border:0;border-top:1px solid var(--line);margin:10px 0"><b>统一流水</b> ${recordText}`;
   $('recordOverviewRows').innerHTML=recRows.map(x=>{
@@ -548,9 +548,15 @@ async function loadSessionDetails(session){
   const account=positions.data?.snapshot||{};
   const posRows=positions.data?.positions||[];
   const summary=positions.summary||{};
+  const pendingSettlement=account.pending_settlement||{};
+  const pendingBySymbol={};
+  for(const [symbol,batches] of Object.entries(pendingSettlement)){
+    pendingBySymbol[symbol]=(Array.isArray(batches)?batches:[]).reduce((sum,row)=>sum+Number(row?.quantity||0),0);
+  }
+  const pendingQty=Object.values(pendingBySymbol).reduce((sum,qty)=>sum+Number(qty||0),0);
   const rejected=(orders.data||[]).filter(x=>['rejected','risk_blocked','failed'].includes(String(x.status||''))).length;
   const zeroQty=(orders.data||[]).filter(x=>Number(x.quantity||0)<=0).length;
-  $('sessionSnapshot').innerHTML=`<b>${esc((sess.symbols||[]).join(', ')||'模拟股票池')}</b>｜状态 ${esc(sess.status||'--')}<br>本金 ${money(summary.initial_cash??account.initial_cash)}｜现金 ${money(summary.cash??account.cash??account.available_cash)}｜总资产 ${money(summary.equity??account.equity??account.total_value)}<br>成本 ${money(summary.position_cost_value)}｜市值 ${money(summary.position_market_value)}｜已实现 <span class="${pnlClass(summary.realized_pnl)}">${money(summary.realized_pnl)}</span>｜浮盈亏 <span class="${pnlClass(summary.unrealized_pnl)}">${money(summary.unrealized_pnl)}</span>｜收益率 <span class="${pnlClass(summary.total_return_pct)}">${pct(summary.total_return_pct)}</span><br>买入额 ${money(summary.buy_amount)}｜卖出额 ${money(summary.sell_amount)}｜总成交额 ${money(summary.turnover_amount)}｜拒单/拦截 ${rejected}${zeroQty?'｜零数量旧单 '+zeroQty:''}<br>${posRows.length?posRows.slice(0,8).map(p=>`${esc(p.symbol)}：${esc(p.quantity??p.qty??0)}股，可卖 ${esc(p.available_quantity??p.quantity??0)}，成本 ${money(p.avg_cost??p.cost_price)}，现价 ${money(p.market_price??p.last_price)}，市值 ${money(p.market_value)}，浮盈亏 <span class="${pnlClass(p.unrealized_pnl)}">${money(p.unrealized_pnl)}${p.unrealized_pnl_pct!=null?' / '+pct(p.unrealized_pnl_pct):''}</span>`).join('<br>'):'暂无持仓；系统不会为凑成交而伪造订单。'}`;
+  $('sessionSnapshot').innerHTML=`<b>${esc((sess.symbols||[]).join(', ')||'模拟股票池')}</b>｜状态 ${esc(sess.status||'--')}<br>本金 ${money(summary.initial_cash??account.initial_cash)}｜现金 ${money(summary.cash??account.cash??account.available_cash)}｜总资产 ${money(summary.equity??account.equity??account.total_value)}｜T+1待交收 ${esc(pendingQty)}股<br>成本 ${money(summary.position_cost_value)}｜市值 ${money(summary.position_market_value)}｜已实现 <span class="${pnlClass(summary.realized_pnl)}">${money(summary.realized_pnl)}</span>｜浮盈亏 <span class="${pnlClass(summary.unrealized_pnl)}">${money(summary.unrealized_pnl)}</span>｜收益率 <span class="${pnlClass(summary.total_return_pct)}">${pct(summary.total_return_pct)}</span><br>买入额 ${money(summary.buy_amount)}｜卖出额 ${money(summary.sell_amount)}｜总成交额 ${money(summary.turnover_amount)}｜交易成本 ${money(summary.total_trading_cost)}｜拒单/拦截 ${rejected}${zeroQty?'｜零数量旧单 '+zeroQty:''}<br>${posRows.length?posRows.slice(0,8).map(p=>`${esc(p.symbol)}：持仓 ${esc(p.quantity??p.qty??0)}股｜可卖 ${esc(p.available_quantity??p.quantity??0)}股｜待交收 ${esc(pendingBySymbol[p.symbol]||0)}股｜成本 ${money(p.avg_cost??p.cost_price)}｜现价 ${money(p.market_price??p.last_price)}｜市值 ${money(p.market_value)}｜浮盈亏 <span class="${pnlClass(p.unrealized_pnl)}">${money(p.unrealized_pnl)}${p.unrealized_pnl_pct!=null?' / '+pct(p.unrealized_pnl_pct):''}</span>`).join('<br>'):'暂无持仓；系统不会为凑成交而伪造订单。'}`;
   latestPaperPortfolio={session_id:activeSessionId,session:sess,summary,positions:posRows};
   renderPortfolioOverview(latestPortfolioInputs.liveAccount,latestPortfolioInputs.livePositions,latestPortfolioInputs.records,latestPaperPortfolio);
   renderPositionReviews(reviews.data||[],'paperPositionReviews','尚无持仓复核记录；点击“复核全部持仓”会按当前真实缓存重新评分。');
@@ -593,6 +599,22 @@ function renderReviewSchedule(js){
   const state=row.due?'已到期':(row.reason||'等待计划');
   $('reviewScheduleStatus').innerHTML=`<b>每日持仓复核：</b>${esc(state)}｜上次 ${esc(last.review_date||'尚未运行')}｜下次 ${esc(row.next_run_at||'待计算')}<br><span class="muted">收盘后每日一次；只更新持仓评分和建议，不创建订单。</span>`;
 }
+function renderPaperScheduler(js){
+  const running=!!js?.running,enabled=!!js?.enabled;
+  const session=js?.market_session||{};
+  const state=!enabled?'已关闭':running?'运行中':'未启动';
+  const market=session.state_cn||session.status_cn||session.state||session.status||'交易时段待确认';
+  const error=js?.last_error?`<br><span class="bad">最近错误：${esc(js.last_error)}</span>`:'';
+  const sessions=(js?.sessions||[]).slice(0,4);
+  const detail=sessions.length?'<div class="agent-evidence-list">'+sessions.map(x=>{
+    const sid=String(x.session_id||'未命名').slice(0,12);
+    const next=x.next_due_at?String(x.next_due_at).replace('T',' '):'等待下个交易时段';
+    const reason=x.blocked_reason||((x.due?'已到复评时间':'等待频率到期'));
+    return `<div class="agent-evidence"><time>${esc(cnEnum(x.status||'--'))} · ${Number(x.symbol_count||0)}只</time><strong>${esc(sid)} · ${esc(reason)}</strong><small>股票池 ${esc((x.symbols||[]).join(', ')||'缺失')}；最后复评 ${esc(x.last_tick_at||'尚无')}；下次 ${esc(next)}</small></div>`;
+  }).join('')+'</div>':'';
+  $('paperSchedulerStatus').innerHTML=`<b>服务端自动复评：</b>${esc(state)}｜活跃会话 ${Number(js?.active_sessions||0)}｜待执行 ${Number(js?.due_sessions||0)}｜${esc(market)}<br><span class="muted">${esc(js?.policy||'开盘按会话频率逐只复评；页面关闭后仍保存会话，休市和午休不下单。')}</span>${detail}${error}`;
+  if(!activeSessionId)$('activeSessionText').textContent=`后台复评 ${state}`;
+}
 async function runDuePositionReviews(btn=null){
   return withAction(btn,'检查中','每日持仓复核检查完成',async()=>{
     const js=await api('/api/position-reviews/scheduler/run-due',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({force:false})});
@@ -618,7 +640,7 @@ function mergeGlobalStreams(jin10,global){
   for(const item of [...streamItemsOf(jin10),...streamItemsOf(global)]){
     const title=String(item.title||item.summary||'').trim();
     if(!title)continue;
-    const key=(String(item.source||'')+':'+title).replace(/\W+/g,'').slice(0,140);
+    const key=(String(item.source||'')+':'+title).replace(/\\W+/g,'').slice(0,140);
     if(seen.has(key))continue;
     seen.add(key);
     items.push({...item,rank:items.length+1});
@@ -672,7 +694,7 @@ function startGlobalStreamLoop(){
 // this one makes source, link, affected target and symbol mapping explicit.
 function textList(v){
   if(Array.isArray(v))return v.map(x=>String(x||'').trim()).filter(Boolean);
-  return String(v||'').split(/[\s,，、;；|/]+/).map(x=>x.trim()).filter(Boolean);
+  return String(v||'').split(/[\\s,，、;；|/]+/).map(x=>x.trim()).filter(Boolean);
 }
 function uniqueList(arr,limit=10){
   const out=[];
@@ -748,6 +770,7 @@ function renderAgentDecision(js){
   const ai=d.ai_analysis||{};
   const aiView=ai.analysis||{};
   const decisions=(d.symbol_decisions||[]).slice(0,6);
+  const themeTrends=(d.theme_trends||[]).slice(0,10);
   const risks=(d.risk_flags||[]).slice(0,5);
   const evidence=(d.evidence||[]).slice(0,5);
   const symbolImpacts=(d.symbol_global_impacts||[]).slice(0,8);
@@ -763,6 +786,16 @@ function renderAgentDecision(js){
   }
   if(decisions.length){
     chunks.push('<ul>'+decisions.map(x=>`<li>${esc(x.symbol)} ${esc(x.name||'')}：${esc(cnAction(x.action||'观察'))}${x.score!=null?' · 评分 '+esc(x.score):''}；${esc(x.reason||'')}</li>`).join('')+'</ul>');
+  }
+  if(themeTrends.length){
+    chunks.push('<div class="agent-evidence-list"><div class="source-note">题材趋势：由公开板块净流、15/30/60分钟快照差、近5日累计和主线强度确定性计算；“等待数据”不会被补成趋势。</div>'+themeTrends.map(x=>{
+      const support=(x.support_evidence||[]).slice(0,4).join('；');
+      const counter=(x.counter_evidence||[]).slice(0,4).join('；');
+      const missing=(x.missing_data||[]).slice(0,4).join('；');
+      const detail=[support?'支持：'+support:'',counter?'反证：'+counter:'',missing?'缺失：'+missing:''].filter(Boolean).join('；');
+      const link=x.source_ref||x.source_url;
+      return `<div class="agent-evidence"><time>${esc(x.published_at||x.flow_state||'快照时间缺失')}</time><strong>${esc(x.theme)} · ${esc(x.trend)} · 置信度 ${esc(Math.round(Number(x.confidence||0)*100))}%</strong><small>${esc(detail||'当前没有足够真实资金快照形成判断。')}</small><div class="impact-row"><span class="impact-tag">${esc(x.stage||'观察')}</span><span class="impact-tag">${esc(x.flow_state||'等待快照')}</span><span class="impact-tag">主线分 ${x.mainline_score==null?'缺失':esc(Number(x.mainline_score).toFixed(1))}</span></div>${link?`<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">查看 ${esc(x.source_name||'板块资金来源')}</a>`:'<span class="muted">来源链接缺失</span>'}<div class="source-note">${esc(x.truth_boundary||'公开板块资金不是逐笔或 Level-2 主力账户识别。')}</div></div>`;
+    }).join('')+'</div>');
   }
   if(symbolImpacts.length){
     chunks.push('<div class="agent-evidence-list"><div class="source-note">个股影响映射：下面逐只说明全球要闻是否命中当前股票池，以及命中的依据。</div>'+symbolImpacts.map(s=>{
@@ -832,11 +865,16 @@ function renderScoreExplain(row){
   const eventFactors=Array.isArray(b.event_factors)?b.event_factors:(eventContext.factors||[]);
   const marketAdj=Number(b.market_event_adjustment??eventContext.market_adjustment??0);
   const infoAdj=Number(b.information_event_adjustment??eventContext.information_adjustment??0);
+  const pit=eventContext.pit_input_status||{};
+  const coverage=Array.isArray(eventContext.standard_factor_coverage)?eventContext.standard_factor_coverage:[];
+  const pitDatasets=pit.datasets||{};
+  const pitHits=Object.entries(pitDatasets).filter(([,x])=>x?.status==='available');
+  const pitHtml=`<div class="event-factor-list"><div class="event-factor"><div><b>结构化事件覆盖</b><span>${eventContext.standard_factor_available??0} / ${eventContext.standard_factor_total??8} 项</span></div><small>${esc(pit.rule||'只使用不晚于决策时点、来源可追溯的快照。')}</small>${pitHits.length?pitHits.map(([key,x])=>`<small>${esc(cnEnum(key))}：${esc(x.source||'来源缺失')}｜${esc(x.available_at||'时间缺失')}｜记录 ${esc(x.record_id||'--')}</small>`).join(''):'<small>当前没有命中的结构化 PIT 快照，文字快讯仅用于有限事件解释。</small>'}</div>${coverage.length?`<details><summary>查看八项因子缺失原因</summary>${coverage.map(x=>`<div class="score-contribution"><b>${esc(x.factor_name_cn||cnEnum(x.factor_key))}</b><small>${x.status==='available'?'已进入本轮事件调整':esc(x.missing_reason||'近期没有可追溯证据')}</small></div>`).join('')}</details>`:''}</div>`;
   const factorHtml=eventFactors.length?`<div class="event-factor-list">${eventFactors.slice(0,8).map(x=>{
     const adj=Number(x.adjustment||0);const cls=adj>0?'factor-up':adj<0?'factor-down':'';const chain=(x.mapped_chain||[]).join(' → ');
     return `<div class="event-factor"><div><b>${esc(x.factor_name_cn||cnEnum(x.factor_key)||'市场事件')}</b><span class="${cls}">${adj>=0?'+':''}${adj.toFixed(2)} 分 · ${esc(x.scope||'影响范围缺失')}</span></div><small>${esc(x.explanation||'说明缺失')}</small>${chain?`<small>传导链：${esc(chain)}</small>`:''}<small>来源：${esc(x.source||'来源缺失')}｜${esc(x.published_at||'时间缺失')}｜置信度 ${Number.isFinite(Number(x.confidence))?(Number(x.confidence)*100).toFixed(0)+'%':'缺失'}</small>${x.source_ref?`<a href="${esc(x.source_ref)}" target="_blank" rel="noopener noreferrer">查看来源</a>`:''}</div>`;
   }).join('')}</div>`:'<div class="muted">近期没有进入评分的可追溯市场事件；全球快讯不会自动等同于个股利好或利空。</div>';
-  $('scoreExplain').innerHTML=`<div class="mini">${esc(b.formula||'综合交易分 = 各可用维度按实际权重汇总 - 异常风险扣分')}</div><div class="mini">${esc(timing)}</div>${lines||'<span class="muted">尚无可解释的评分维度。</span>'}<div class="score-total"><b>风险前 ${Number.isFinite(before)?before.toFixed(2):'--'} 分 - 异常扣分 ${Number.isFinite(deduct)?deduct.toFixed(2):'0.00'} = 最终 ${Number.isFinite(final)?final.toFixed(2):'--'} 分</b></div><details><summary>市场事件调整：大盘 ${marketAdj>=0?'+':''}${marketAdj.toFixed(2)} 分 / 个股信息 ${infoAdj>=0?'+':''}${infoAdj.toFixed(2)} 分</summary>${factorHtml}</details>${missing.length?`<div class="warn">本轮缺失：${esc(missing.join('、'))}；缺失维度不会被伪造，剩余权重重新归一化。</div>`:''}`;
+  $('scoreExplain').innerHTML=`<div class="mini">${esc(b.formula||'综合交易分 = 各可用维度按实际权重汇总 - 异常风险扣分')}</div><div class="mini">${esc(timing)}</div>${lines||'<span class="muted">尚无可解释的评分维度。</span>'}<div class="score-total"><b>风险前 ${Number.isFinite(before)?before.toFixed(2):'--'} 分 - 异常扣分 ${Number.isFinite(deduct)?deduct.toFixed(2):'0.00'} = 最终 ${Number.isFinite(final)?final.toFixed(2):'--'} 分</b></div><details><summary>市场事件调整：大盘 ${marketAdj>=0?'+':''}${marketAdj.toFixed(2)} 分 / 个股信息 ${infoAdj>=0?'+':''}${infoAdj.toFixed(2)} 分</summary>${pitHtml}${factorHtml}</details>${missing.length?`<div class="warn">本轮缺失：${esc(missing.join('、'))}；缺失维度不会被伪造，剩余权重重新归一化。</div>`:''}`;
 }
 function sectorMoney(v){
   const n=Number(v);if(!Number.isFinite(n))return'字段缺失';
@@ -878,14 +916,15 @@ async function refreshAll(btn=null){return withAction(btn,'刷新中','总控台
     renderModuleCards();
     setText('scoreTime','正在更新核心状态…');
     const extraPromise=Promise.allSettled([api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),loadGlobalStream(false),api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80'),api('/api/market/sectors/mainline?limit=50&include_concept=true'),api('/api/realtime-paper/signals?limit=100'),api('/api/market/event-factors/'+encodeURIComponent(primarySymbol()))]);
-    const core=await Promise.allSettled([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/live/position-reviews?limit=50'),api('/api/position-reviews/scheduler/status')]);
+    const core=await Promise.allSettled([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/live/position-reviews?limit=50'),api('/api/position-reviews/scheduler/status'),api('/api/realtime-paper/scheduler/status')]);
     const value=(idx,fallback={})=>core[idx].status==='fulfilled'?core[idx].value:fallback;
-    const broker=value(0),sessions=value(1,{data:[]}),records=value(2,{data:[],summary:{}}),data=value(3),queue=value(4,{data:[],count:0}),liveAccount=value(5),livePositions=value(6,{data:[]}),autoConfig=value(7,{data:{}}),readiness=value(8,{gates:{}}),liveReviews=value(9,{data:[]}),reviewSchedule=value(10,{data:{}});
+    const broker=value(0),sessions=value(1,{data:[]}),records=value(2,{data:[],summary:{}}),data=value(3),queue=value(4,{data:[],count:0}),liveAccount=value(5),livePositions=value(6,{data:[]}),autoConfig=value(7,{data:{}}),readiness=value(8,{gates:{}}),liveReviews=value(9,{data:[]}),reviewSchedule=value(10,{data:{}}),paperSchedule=value(11,{});
     applyAutoConfig(autoConfig.data);
     renderConfigSummary(autoConfig.data,readiness);
     renderPortfolioOverview(liveAccount,livePositions,records);
     renderPositionReviews(liveReviews.data||[],'livePositionReviews','当前没有真实持仓复核记录。');
     renderReviewSchedule(reviewSchedule);
+    renderPaperScheduler(paperSchedule);
     const brokerName=broker.broker?.broker||broker.config?.broker_type||'disabled';
     const brokerStatus=broker.broker?.status||broker.status||'disabled';
     $('brokerBadge').textContent=cnEnum(brokerName)+' / '+cnEnum(brokerStatus);
@@ -916,7 +955,7 @@ async function refreshAll(btn=null){return withAction(btn,'刷新中','总控台
     setScore('tech',latest.technical_score);setScore('fund',latest.fundamental_score);setScore('info',latest.information_score);setScore('market',latest.market_regime_score??latest.market_score);
     renderScoreExplain(latest);
     const failed=[...core,...extra].filter(x=>x.status==='rejected');
-    $('auditLog').textContent='最后刷新 '+new Date().toLocaleTimeString()+(failed.length?'；部分模块失败 '+failed.length+' 项':'；全部模块完成')+'\\n'+JSON.stringify({broker:broker.safety,readiness:readiness.gates,active_session:activeSessionId,records:(records.data||[]).length},null,2);
+    $('auditLog').textContent='最后刷新 '+new Date().toLocaleTimeString()+(failed.length?'；部分模块失败 '+failed.length+' 项':'；全部模块完成')+'\\n'+JSON.stringify({broker:broker.safety,readiness:readiness.gates,paper_scheduler:{enabled:paperSchedule.enabled,running:paperSchedule.running,active_sessions:paperSchedule.active_sessions,market_session:paperSchedule.market_session},active_session:activeSessionId,records:(records.data||[]).length},null,2);
     return {ok:true,failed:failed.length};
   }catch(e){$('auditLog').textContent='刷新失败：'+e;throw e}
 })}

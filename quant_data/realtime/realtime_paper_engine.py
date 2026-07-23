@@ -633,6 +633,10 @@ def _session_config(payload: dict[str, Any]) -> dict[str, Any]:
         "symbols_source",
         "source_page",
         "initial_cash",
+        "fee_rate",
+        "slippage_rate",
+        "min_commission",
+        "sell_tax_rate",
         "reset_account",
     }
     return {key: payload.get(key) for key in keys if key in payload}

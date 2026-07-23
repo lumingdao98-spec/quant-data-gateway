@@ -16,6 +16,8 @@ class RealtimePaperConfig:
     paper_only: bool = True
     fee_rate: float = 0.0003
     slippage_rate: float = 0.0005
+    min_commission: float = 5.0
+    sell_tax_rate: float = 0.0005
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

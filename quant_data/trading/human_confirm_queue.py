@@ -38,6 +38,13 @@ class HumanConfirmQueue:
         risk_flags: list[str] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> HumanConfirmTask:
+        for existing in self.tasks.values():
+            if (
+                existing.status == "pending"
+                and existing.symbol == str(symbol)
+                and existing.action == str(action)
+            ):
+                return existing
         task = HumanConfirmTask(
             task_id=f"hc-{uuid4().hex[:12]}",
             symbol=str(symbol),

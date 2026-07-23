@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 from dataclasses import fields, replace
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from statistics import mean
 from threading import Event, Lock, Thread
@@ -71,6 +71,8 @@ from quant_data.data_center_ui import build_data_center_ui
 from quant_data.auto_trading_workbench_ui import build_auto_trading_workbench_ui
 from quant_data.chart import ChartAnnotationService
 from quant_data.data import (
+    EarningsSnapshot,
+    IpoSnapshot,
     PITStore,
     build_event_snapshot,
     build_fundamentals_snapshot,
@@ -148,6 +150,7 @@ realtime_paper_engine_v321 = RealtimePaperEngine(
 trading_store_v323 = TradingStore()
 ledger_service_v324 = LedgerService(trading_store_v323)
 pit_store_v323 = PITStore()
+realtime_decision_service.market_event_factors.pit_store = pit_store_v323
 event_bus_v324 = EventBus(pit_store_v323)
 event_trigger_engine_v324 = EventTriggerEngine()
 chart_annotation_service_v323 = ChartAnnotationService()
@@ -165,6 +168,12 @@ _background_jobs_lock = Lock()
 _position_review_run_lock = Lock()
 _position_review_scheduler_stop = Event()
 _position_review_scheduler_thread: Thread | None = None
+_realtime_paper_scheduler_stop = Event()
+_realtime_paper_scheduler_thread: Thread | None = None
+_realtime_paper_scheduler_lock = Lock()
+_realtime_paper_scheduler_last_error = ""
+_pit_news_sync_seen: set[str] = set()
+_pit_news_sync_lock = Lock()
 
 
 def _submit_background_job(key: str, callback) -> bool:
@@ -216,9 +225,11 @@ FALLBACK_STRATEGIES = [
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
     _start_position_review_scheduler()
+    _start_realtime_paper_scheduler()
     try:
         yield
     finally:
+        _stop_realtime_paper_scheduler()
         _stop_position_review_scheduler()
 
 
@@ -308,7 +319,12 @@ def _render_chinese_api_docs() -> str:
                 ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
                 ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
+                ("GET", "/api/realtime-paper/scheduler/status", "查看服务端自动复评循环、活跃会话和交易时段；页面关闭后会话仍可运行，休市和午休不生成信号、订单或成交。"),
                 ("GET", "/api/market/event-factors/{symbol}", "读取可追溯市场事件因子，分别返回大盘环境与个股信息调整、来源链接、时间和传导链。"),
+                ("POST", "/api/earnings/ingest", "写入带公告时点与来源链接的业绩快照；用于当前和历史 PIT 评分，禁止回填未来数据。"),
+                ("POST", "/api/ipo/ingest", "写入带上市时点、募资冲击和明确竞品映射的 IPO 快照；未明确关联时只影响市场环境。"),
+                ("POST", "/api/market-factors/ingest", "写入宏观、公开资金流或板块结构化快照；必须包含 available_at、source 和 source_ref。"),
+                ("GET", "/api/market-factors/asof", "按决策时点读取业绩、IPO、宏观、资金和板块快照，展示哪些数据实际参与评分。"),
                 ("POST", "/api/realtime-paper/sessions/{session_id}/review-positions", "按最新真实缓存复核模拟持仓；保存持有/减仓/退出建议，但接口本身不创建订单。"),
                 ("GET", "/api/realtime-paper/sessions/{session_id}/position-reviews", "读取模拟持仓每日复核记录、评分变化、成本、盈亏和数据缺失原因。"),
                 ("POST", "/api/live/review-positions", "只读复核真实券商持仓；不会调用券商下单，减仓/退出仍需风控和人工确认。"),
@@ -4310,6 +4326,210 @@ def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
     return result
 
 
+def _scheduler_datetime(value: Any) -> datetime | None:
+    raw = str(value or "").strip().replace("Z", "+00:00")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+        return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
+        return None
+
+
+def _run_realtime_paper_sessions_due(*, now: datetime | None = None) -> dict:
+    """Execute due paper sessions server-side, independent of browser pages."""
+
+    if not _realtime_paper_scheduler_lock.acquire(blocking=False):
+        return {"ok": False, "status": "busy", "message": "实时模拟调度器正在执行"}
+    try:
+        current = (now or _now_cn()).replace(tzinfo=None)
+        market_session = _market_session("CN")
+        if not market_session.get("can_refresh"):
+            return {
+                "ok": True,
+                "status": "market_closed",
+                "message": "休市/午休待机，不生成信号、订单或成交",
+                "market_session": market_session,
+                "sessions_checked": 0,
+                "ticks": 0,
+            }
+
+        sessions_checked = 0
+        ticks = 0
+        orders = 0
+        errors: list[dict[str, str]] = []
+        details: list[dict[str, Any]] = []
+        for session in realtime_paper_engine_v323.list_sessions():
+            if str(session.get("status") or "") != "running" or session.get("paused") or session.get("kill_switch"):
+                continue
+            session_id = str(session.get("session_id") or "")
+            symbols = [normalize_symbol(value) for value in (session.get("symbols") or []) if normalize_symbol(value)]
+            if not session_id or not symbols:
+                continue
+            sessions_checked += 1
+            interval = max(5, min(60, int(session.get("interval_seconds") or 15)))
+            last_tick = _scheduler_datetime(session.get("last_tick_at"))
+            if last_tick is not None and (current - last_tick).total_seconds() < interval:
+                details.append({"session_id": session_id, "status": "not_due", "symbols": len(symbols)})
+                continue
+
+            session_ticks = 0
+            session_orders = 0
+            for symbol in symbols:
+                try:
+                    result = realtime_paper_tick(
+                        {
+                            "session_id": session_id,
+                            "symbol": symbol,
+                            "quote_hydrate_request": True,
+                            "scheduler_source": "server_realtime_paper_scheduler",
+                        }
+                    )
+                    if result.get("skipped"):
+                        continue
+                    session_ticks += 1
+                    session_orders += len(result.get("orders") or [])
+                except Exception as exc:
+                    errors.append({"session_id": session_id, "symbol": symbol, "error": str(exc)[:220]})
+            ticks += session_ticks
+            orders += session_orders
+            details.append(
+                {
+                    "session_id": session_id,
+                    "status": "complete" if session_ticks else "no_tick",
+                    "symbols": len(symbols),
+                    "ticks": session_ticks,
+                    "orders": session_orders,
+                }
+            )
+        return {
+            "ok": not errors,
+            "status": "partial" if errors else "complete",
+            "checked_at": current.isoformat(timespec="seconds"),
+            "market_session": market_session,
+            "sessions_checked": sessions_checked,
+            "ticks": ticks,
+            "orders": orders,
+            "details": details,
+            "errors": errors,
+        }
+    finally:
+        _realtime_paper_scheduler_lock.release()
+
+
+def _realtime_paper_scheduler_loop() -> None:
+    global _realtime_paper_scheduler_last_error
+    while not _realtime_paper_scheduler_stop.wait(1):
+        try:
+            _run_realtime_paper_sessions_due()
+            _realtime_paper_scheduler_last_error = ""
+        except Exception as exc:
+            message = str(exc)[:240]
+            if message != _realtime_paper_scheduler_last_error:
+                _realtime_paper_scheduler_last_error = message
+                try:
+                    trading_store_v323.put(
+                        "audit_events",
+                        {
+                            "event_type": "realtime_paper_scheduler_error",
+                            "error": message,
+                            "created_at": datetime.now().isoformat(timespec="seconds"),
+                        },
+                        mode="scheduler",
+                    )
+                except Exception:
+                    pass
+
+
+def _start_realtime_paper_scheduler() -> None:
+    global _realtime_paper_scheduler_thread
+    enabled = str(os.getenv("REALTIME_PAPER_SCHEDULER_ENABLED", "true")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if not enabled or (_realtime_paper_scheduler_thread and _realtime_paper_scheduler_thread.is_alive()):
+        return
+    _realtime_paper_scheduler_stop.clear()
+    _realtime_paper_scheduler_thread = Thread(
+        target=_realtime_paper_scheduler_loop,
+        name="realtime-paper-scheduler",
+        daemon=True,
+    )
+    _realtime_paper_scheduler_thread.start()
+
+
+def _stop_realtime_paper_scheduler() -> None:
+    _realtime_paper_scheduler_stop.set()
+    if _realtime_paper_scheduler_thread and _realtime_paper_scheduler_thread.is_alive():
+        _realtime_paper_scheduler_thread.join(timeout=2)
+
+
+@app.get("/api/realtime-paper/scheduler/status")
+def realtime_paper_scheduler_status() -> dict:
+    enabled = str(os.getenv("REALTIME_PAPER_SCHEDULER_ENABLED", "true")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    current = datetime.now()
+    market_session = _market_session("CN")
+    market_open = bool(market_session.get("can_refresh"))
+    session_rows: list[dict[str, Any]] = []
+    for row in realtime_paper_engine_v323.list_sessions():
+        status = str(row.get("status") or "")
+        if status not in {"running", "paused", "killed"}:
+            continue
+        interval = max(5, min(60, int(row.get("interval_seconds") or 15)))
+        last_tick = _scheduler_datetime(row.get("last_tick_at"))
+        next_due = last_tick + timedelta(seconds=interval) if last_tick is not None else current
+        blocked_reason = ""
+        if not enabled:
+            blocked_reason = "服务端自动复评已关闭"
+        elif not market_open:
+            blocked_reason = "休市或午休待机"
+        elif status == "paused" or row.get("paused"):
+            blocked_reason = "会话已暂停"
+        elif status == "killed" or row.get("kill_switch"):
+            blocked_reason = "会话 Kill Switch 已开启"
+        due = not blocked_reason and current >= next_due
+        session_rows.append(
+            {
+                "session_id": row.get("session_id"),
+                "status": status,
+                "symbols": list(row.get("symbols") or []),
+                "symbol_count": len(row.get("symbols") or []),
+                "interval_seconds": interval,
+                "last_tick_at": row.get("last_tick_at"),
+                "last_decision_at": row.get("last_decision_at"),
+                "next_due_at": next_due.isoformat(timespec="seconds") if not blocked_reason else None,
+                "due": due,
+                "blocked_reason": blocked_reason,
+                "freshness_status": row.get("freshness_status"),
+            }
+        )
+    active_sessions = [row for row in session_rows if row.get("status") == "running" and not row.get("blocked_reason")]
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "running": bool(_realtime_paper_scheduler_thread and _realtime_paper_scheduler_thread.is_alive()),
+        "market_session": market_session,
+        "active_sessions": len(active_sessions),
+        "sessions": session_rows,
+        "due_sessions": sum(1 for row in session_rows if row.get("due")),
+        "last_error": _realtime_paper_scheduler_last_error,
+        "policy": "开盘时按会话频率服务端逐只复评；休市和午休不生成信号、订单或成交。",
+    }
+
+
+@app.post("/api/realtime-paper/scheduler/run-due")
+def realtime_paper_scheduler_run_due() -> dict:
+    return _run_realtime_paper_sessions_due()
+
+
 @app.post("/api/realtime-paper/replay")
 def realtime_paper_replay(payload: dict = Body(default_factory=dict)) -> dict:
     return realtime_paper_engine_v323.replay(payload)
@@ -4507,6 +4727,9 @@ def realtime_paper_session_positions(session_id: str) -> dict:
         for row in fill_rows
         if str(row.get("side") or "").lower() == "sell"
     )
+    commission = sum(abs(_as_float(row.get("fee"), 0.0)) for row in fill_rows)
+    sell_tax = sum(abs(_as_float(row.get("tax"), 0.0)) for row in fill_rows)
+    slippage_cost = sum(abs(_as_float(row.get("slippage"), 0.0)) for row in fill_rows)
     summary = {
         "initial_cash": round(_as_float(snapshot.get("initial_cash"), 0.0), 4),
         "cash": round(_as_float(snapshot.get("cash") or snapshot.get("available_cash"), 0.0), 4),
@@ -4521,6 +4744,10 @@ def realtime_paper_session_positions(session_id: str) -> dict:
         "buy_amount": round(buy_amount, 4),
         "sell_amount": round(sell_amount, 4),
         "turnover_amount": round(buy_amount + sell_amount, 4),
+        "commission": round(commission, 4),
+        "sell_tax": round(sell_tax, 4),
+        "slippage_cost": round(slippage_cost, 4),
+        "total_trading_cost": round(commission + sell_tax + slippage_cost, 4),
     }
     return {
         "ok": True,
@@ -4739,7 +4966,18 @@ def _enrich_trading_record_row(table: str, item: dict) -> dict:
     else:
         amount_default = _as_float(_first_present(row.get("target_value"), row.get("filled_amount")), amount_default)
     amount = _as_float(row.get("amount"), amount_default)
-    fee = _as_float(_first_present(row.get("fee"), row.get("tax"), row.get("commission")), 0.0)
+    if table == "fills":
+        commission = abs(_as_float(_first_present(row.get("fee"), row.get("commission")), 0.0))
+        tax = abs(_as_float(_first_present(row.get("tax"), row.get("stamp_tax")), 0.0))
+        slippage = abs(_as_float(_first_present(row.get("slippage"), row.get("slippage_cost")), 0.0))
+        fee = commission + tax + slippage
+        row["display_cost_breakdown"] = {
+            "commission": round(commission, 4),
+            "tax": round(tax, 4),
+            "slippage": round(slippage, 4),
+        }
+    else:
+        fee = _as_float(_first_present(row.get("fee"), row.get("tax"), row.get("commission")), 0.0)
     pnl = _as_float(_first_present(row.get("realized_pnl"), row.get("unrealized_pnl"), row.get("pnl")), 0.0)
     pnl_pct = _as_float(_first_present(row.get("realized_pnl_pct"), row.get("unrealized_pnl_pct"), row.get("pnl_pct")), 0.0)
     if table == "fills":
@@ -4866,6 +5104,106 @@ def event_ingest(payload: dict = Body(default_factory=dict)) -> dict:
     return {"ok": True, "data": event.to_dict(), "records": len(event.symbols or [""])}
 
 
+def _publish_structured_event(event, *, section_cn: str) -> dict:
+    validation = source_registry_v323.validate(event.source_id, event.source_url, event.source_ref)
+    if not validation.get("accepted"):
+        return {
+            "ok": False,
+            "message": f"{section_cn}数据源未注册、未启用或不符合真实性规则",
+            "validation": validation,
+            "data": event.to_dict(),
+        }
+    if not str(event.available_at or "").strip():
+        return {"ok": False, "message": f"{section_cn}缺少 available_at，不能进入 PIT 评分"}
+    event_bus_v324.publish(event)
+    return {
+        "ok": True,
+        "message": f"{section_cn}已写入 PIT；只会在 available_at 之后参与决策。",
+        "data": event.to_dict(),
+        "records": len(event.symbols or [""]),
+    }
+
+
+def _dataclass_payload(model_type, payload: dict) -> dict:
+    allowed = {item.name for item in fields(model_type)}
+    return {key: value for key, value in dict(payload or {}).items() if key in allowed}
+
+
+@app.post("/api/earnings/ingest")
+def earnings_ingest(payload: dict = Body(default_factory=dict)) -> dict:
+    data = dict(payload or {})
+    required = ("symbol", "report_period", "announced_at", "available_at", "source_id")
+    missing = [key for key in required if not str(data.get(key) or "").strip()]
+    if missing:
+        return {"ok": False, "message": f"财报快照缺少字段：{', '.join(missing)}"}
+    data["symbol"] = normalize_symbol(str(data["symbol"]))
+    data["source_url"] = str(data.get("source_url") or data.get("source_ref") or "")
+    snapshot = EarningsSnapshot(**_dataclass_payload(EarningsSnapshot, data))
+    return _publish_structured_event(snapshot.to_event(), section_cn="财报快照")
+
+
+@app.post("/api/ipo/ingest")
+def ipo_ingest(payload: dict = Body(default_factory=dict)) -> dict:
+    data = dict(payload or {})
+    data["issuer_symbol"] = normalize_symbol(str(data.get("issuer_symbol") or data.get("symbol") or ""))
+    data["issuer_name"] = str(data.get("issuer_name") or data.get("ipo_name") or data["issuer_symbol"])
+    data["exchange"] = str(data.get("exchange") or data.get("market") or "")
+    data["source_url"] = str(data.get("source_url") or data.get("source_ref") or "")
+    data["competitors"] = [normalize_symbol(value) for value in _auto_list(data.get("competitors"))]
+    data["sectors"] = _auto_list(data.get("sectors") or data.get("sector"))
+    required = ("issuer_symbol", "issuer_name", "exchange", "announced_at", "available_at", "source_id")
+    missing = [key for key in required if not str(data.get(key) or "").strip()]
+    if missing:
+        return {"ok": False, "message": f"IPO 快照缺少字段：{', '.join(missing)}"}
+    snapshot = IpoSnapshot(**_dataclass_payload(IpoSnapshot, data))
+    return _publish_structured_event(snapshot.to_event(), section_cn="IPO 快照")
+
+
+@app.post("/api/market-factors/ingest")
+def market_factor_ingest(payload: dict = Body(default_factory=dict)) -> dict:
+    data = dict(payload or {})
+    section = str(data.get("section") or data.get("dataset") or "").strip().lower()
+    if section not in {"macro", "fund_flow", "sector"}:
+        return {"ok": False, "message": "section 仅支持 macro、fund_flow、sector"}
+    available_at = str(data.get("available_at") or "").strip()
+    source_id = str(data.get("source_id") or "").strip()
+    source_url = str(data.get("source_url") or data.get("source_ref") or "").strip()
+    if not available_at or not source_id or not source_url:
+        return {"ok": False, "message": "结构化因子必须提供 available_at、source_id 和 source_url/source_ref"}
+    symbol = normalize_symbol(str(data.get("symbol") or "")) if data.get("symbol") else ""
+    factor_payload = dict(data.get("payload") or data.get("values") or {})
+    reserved = {
+        "section", "dataset", "symbol", "title", "summary", "source_id", "source_name",
+        "source_url", "source_ref", "published_at", "available_at", "fetched_at",
+        "confidence", "quality_status",
+    }
+    for key, value in data.items():
+        if key not in reserved and key not in factor_payload:
+            factor_payload[key] = value
+    event = build_event_snapshot(
+        {
+            "event_type": f"structured_{section}",
+            "dataset": section,
+            "title": str(data.get("title") or f"{section} 结构化因子快照"),
+            "summary": str(data.get("summary") or "结构化因子仅在来源可追溯且满足 PIT 时点规则时进入评分。"),
+            "source_id": source_id,
+            "source_name": str(data.get("source_name") or source_id),
+            "source_url": source_url,
+            "source_ref": str(data.get("source_ref") or source_url),
+            "published_at": str(data.get("published_at") or available_at),
+            "available_at": available_at,
+            "fetched_at": str(data.get("fetched_at") or datetime.now().isoformat(timespec="seconds")),
+            "symbols": [symbol] if symbol else [],
+            "payload": factor_payload,
+            "confidence": _as_float(data.get("confidence"), 0.75),
+            "quality_status": str(data.get("quality_status") or "ok"),
+            "tags": ["结构化因子", section],
+        }
+    )
+    labels = {"macro": "宏观因子", "fund_flow": "资金流因子", "sector": "板块因子"}
+    return _publish_structured_event(event, section_cn=labels[section])
+
+
 @app.get("/api/events/as-of")
 def events_as_of(decision_time: str, symbol: str = "", event_type: str = "", limit: int = 200) -> dict:
     rows = [record.to_dict() for record in pit_store_v323.query_asof(
@@ -4922,6 +5260,16 @@ def earnings_asof(decision_time: str, symbol: str = "", limit: int = 200) -> dic
 @app.get("/api/ipo/asof")
 def ipo_asof(decision_time: str, symbol: str = "", limit: int = 200) -> dict:
     return _dataset_asof_response("ipo", decision_time, symbol, limit)
+
+
+@app.get("/api/market-factors/asof")
+def market_factors_asof(
+    decision_time: str,
+    section: str = Query(default="macro", pattern="^(macro|fund_flow|sector)$"),
+    symbol: str = "",
+    limit: int = 200,
+) -> dict:
+    return _dataset_asof_response(section, decision_time, symbol, limit)
 
 
 @app.post("/api/events/trigger/evaluate")
@@ -6949,6 +7297,106 @@ def _dedupe_stream_items(items: list[dict], limit: int) -> list[dict]:
     return out
 
 
+def _stream_source_id(item: dict) -> str:
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ("source", "source_name", "source_ref", "source_page", "source_api")
+    ).lower()
+    if "金十" in text or "jin10" in text:
+        return "jin10"
+    if "东方财富" in text or "eastmoney" in text:
+        return "eastmoney"
+    if "华尔街见闻" in text or "wallstreetcn" in text:
+        return "wallstreetcn"
+    if "财联社" in text or "cls.cn" in text:
+        return "cls"
+    if "新浪" in text or "sina.com" in text:
+        return "sina_news"
+    return ""
+
+
+def _sync_global_news_items_to_pit(items: list[dict]) -> dict:
+    """Persist only source-traceable stream items for PIT replay.
+
+    The in-memory set prevents a 20/45-second stream refresh from repeatedly
+    writing the same event. SQLite remains authoritative across restarts via a
+    deterministic event id and INSERT OR REPLACE in PITStore.
+    """
+
+    stored = 0
+    skipped = 0
+    for raw in items or []:
+        item = dict(raw or {})
+        title = str(item.get("title") or "").strip()
+        published_at = str(item.get("published_at") or item.get("published_at_norm") or "").strip()
+        source_ref = str(
+            item.get("source_ref")
+            or item.get("source_url")
+            or item.get("source_page")
+            or item.get("source_api")
+            or ""
+        ).strip()
+        source_id = _stream_source_id(item)
+        if not title or not published_at or not source_ref or not source_id:
+            skipped += 1
+            continue
+        symbols = [
+            normalize_symbol(str(value))
+            for value in (item.get("mapped_symbols") or [])
+            if re.fullmatch(r"\d{6}", normalize_symbol(str(value)))
+        ]
+        event = build_event_snapshot(
+            {
+                "event_type": "news",
+                "dataset": "news",
+                "title": title,
+                "summary": str(item.get("summary") or title),
+                "source_id": source_id,
+                "source_name": str(item.get("source") or item.get("source_name") or source_id),
+                "source_url": source_ref,
+                "source_ref": source_ref,
+                "published_at": published_at,
+                "available_at": str(item.get("available_at") or published_at),
+                "symbols": symbols,
+                "sectors": list(item.get("affected_sectors") or []),
+                "markets": list(item.get("affected_assets") or []),
+                "impact_direction": str(item.get("sentiment_label") or "neutral"),
+                "impact_score": _as_float(item.get("impact_score"), 0.0),
+                "confidence": 0.72,
+                "quality_status": str(item.get("quality_status") or "ok"),
+                "payload": {
+                    "category": item.get("category"),
+                    "message_dimension": item.get("message_dimension"),
+                    "impact_scope": item.get("impact_scope"),
+                    "impact_targets": item.get("impact_targets") or [],
+                    "impact_note": item.get("impact_note") or "",
+                    "impact_evidence": item.get("impact_evidence") or [],
+                    "source_api": item.get("source_api") or "",
+                    "source_page": item.get("source_page") or "",
+                },
+                "tags": [
+                    str(value)
+                    for value in (item.get("affected_sectors") or item.get("industry_tags") or [])
+                    if str(value)
+                ][:12],
+            }
+        )
+        validation = source_registry_v323.validate(event.source_id, event.source_url, event.source_ref)
+        if not validation.get("accepted"):
+            skipped += 1
+            continue
+        with _pit_news_sync_lock:
+            if event.event_id in _pit_news_sync_seen:
+                skipped += 1
+                continue
+            if len(_pit_news_sync_seen) >= 20000:
+                _pit_news_sync_seen.clear()
+            _pit_news_sync_seen.add(event.event_id)
+        event_bus_v324.publish(event)
+        stored += 1
+    return {"stored": stored, "skipped": skipped}
+
+
 def _read_jin10_realtime_stream(limit: int = 80, *, force: bool = False) -> tuple[dict, dict]:
     """Read Jin10/Jin10 Futures flash as a first-class realtime stream.
 
@@ -7030,6 +7478,7 @@ def _read_jin10_realtime_stream(limit: int = 80, *, force: bool = False) -> tupl
             "source_candidates": ["https://flash-api.jin10.com/get_flash_list", "https://qihuo.jin10.com/", "https://xnews.jin10.com/"],
         }
         status = cache_state_service.put("global_news_cache", key, payload, ttl_seconds=ttl_seconds, source="jin10_realtime")
+        payload["pit_sync"] = _sync_global_news_items_to_pit(items)
         return payload, status
     except Exception as exc:
         latest = cache_state_service.get("global_news_cache", key, allow_stale=True)
@@ -7188,6 +7637,7 @@ def _read_global_news_stream(limit: int = 80, *, force: bool = False, live: bool
             "source_candidates": ["金十/金十期货快讯", "东方财富快讯", "华尔街见闻快讯", "财联社电报", "新浪财经7x24"],
         }
         status = cache_state_service.put("global_news_cache", key, payload, ttl_seconds=45, source="news_global_stream")
+        payload["pit_sync"] = _sync_global_news_items_to_pit(items)
         return _slice_global_stream_payload(payload, limit), status
     except Exception as exc:
         return {
@@ -7447,6 +7897,120 @@ def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], s
     return out
 
 
+def _agent_theme_trends(sector_items: list[dict]) -> list[dict]:
+    """Translate traceable sector-flow snapshots into bounded trend labels."""
+
+    def optional_number(value: Any) -> float | None:
+        if value in (None, "", "-"):
+            return None
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if result == result and result not in {float("inf"), float("-inf")} else None
+
+    def money_text(value: float | None) -> str:
+        if value is None:
+            return "缺失"
+        unit = "亿" if abs(value) >= 100_000_000 else "万"
+        scaled = value / (100_000_000 if unit == "亿" else 10_000)
+        return f"{scaled:+.2f}{unit}"
+
+    rows: list[dict] = []
+    for item in sector_items[:20]:
+        board_name = str(item.get("board_name") or "").strip()
+        source_name = str(item.get("source_name") or "").strip()
+        source_ref = str(item.get("source_ref") or item.get("source_url") or "").strip()
+        state = str(item.get("flow_state") or "").strip()
+        stage = str(item.get("stage") or "观察").strip()
+        score = optional_number(item.get("mainline_score"))
+        strength = optional_number(item.get("strength_score"))
+        net_flow = optional_number(item.get("net_inflow"))
+        flow_15m = optional_number(item.get("interval_flow_15m"))
+        flow_30m = optional_number(item.get("interval_flow_30m"))
+        flow_60m = optional_number(item.get("interval_flow_60m"))
+        recent_5d = optional_number(item.get("recent_flow_5d_sum"))
+        available_flow = [value for value in (net_flow, flow_15m, flow_30m, flow_60m, recent_5d) if value is not None]
+        missing: list[str] = []
+        if not source_name or not source_ref:
+            missing.append("缺少可追溯板块资金来源")
+        if not available_flow:
+            missing.append("板块资金字段缺失")
+        if flow_15m is None or flow_30m is None:
+            missing.append("日内真实快照不足，无法确认短周期方向")
+        if recent_5d is None:
+            missing.append("近5日资金样本不足")
+
+        support: list[str] = []
+        counter: list[str] = []
+        trend = "等待数据"
+        if source_name and source_ref and available_flow:
+            positive_short = sum(1 for value in (flow_15m, flow_30m, flow_60m) if value is not None and value > 0)
+            negative_short = sum(1 for value in (flow_15m, flow_30m, flow_60m) if value is not None and value < 0)
+            if state in {"加速流入", "持续流入", "资金回流"} and positive_short >= 1:
+                trend = "增强"
+            elif state in {"持续流出", "高位分歧", "流入放缓"} and negative_short >= 1:
+                trend = "走弱" if state == "持续流出" or (net_flow or 0) <= 0 else "分歧"
+            elif net_flow is not None and flow_15m is not None and net_flow * flow_15m < 0:
+                trend = "分歧"
+            elif recent_5d is not None and net_flow is not None and recent_5d * net_flow < 0:
+                trend = "分歧"
+            elif positive_short >= 2 and (net_flow or 0) > 0:
+                trend = "增强"
+            elif negative_short >= 2 and (net_flow or 0) < 0:
+                trend = "走弱"
+            elif state in {"区间震荡", "等待日内快照"}:
+                trend = "分歧" if flow_15m is not None else "等待数据"
+
+        if net_flow is not None:
+            (support if net_flow > 0 else counter).append(f"当日公开净流 {money_text(net_flow)}")
+        for label, value in (("近15分钟", flow_15m), ("近30分钟", flow_30m), ("近60分钟", flow_60m)):
+            if value is not None:
+                (support if value > 0 else counter).append(f"{label}变化 {money_text(value)}")
+        if recent_5d is not None:
+            (support if recent_5d > 0 else counter).append(f"近5日累计 {money_text(recent_5d)}")
+        if score is not None:
+            (support if score >= 60 else counter).append(f"主线分 {score:.1f}")
+
+        evidence_count = len(support) + len(counter)
+        confidence = min(0.9, 0.28 + evidence_count * 0.09)
+        if trend == "等待数据":
+            confidence = min(confidence, 0.35)
+        if missing:
+            confidence = max(0.1, confidence - min(0.24, len(missing) * 0.06))
+        rows.append(
+            {
+                "theme": board_name or str(item.get("board_code") or "未命名板块"),
+                "board_code": item.get("board_code"),
+                "board_type_name": item.get("board_type_name") or "板块",
+                "trend": trend,
+                "stage": stage,
+                "confidence": round(confidence, 2),
+                "mainline_score": score,
+                "strength_score": strength,
+                "flow_state": state or "等待日内快照",
+                "flow_state_reason": item.get("flow_state_reason"),
+                "support_evidence": support,
+                "counter_evidence": counter,
+                "missing_data": list(dict.fromkeys(missing)),
+                "source_name": source_name or "来源缺失",
+                "source_ref": source_ref,
+                "source_url": item.get("source_url") or source_ref,
+                "published_at": item.get("published_at"),
+                "truth_boundary": item.get("flow_truth_boundary")
+                or "板块资金为公开累计净流字段及其快照差值，不代表逐笔或 Level-2 主力账户。",
+            }
+        )
+    order = {"增强": 0, "分歧": 1, "走弱": 2, "等待数据": 3}
+    rows.sort(
+        key=lambda row: (
+            order.get(str(row.get("trend")), 4),
+            -(float(row.get("mainline_score")) if row.get("mainline_score") is not None else -1.0),
+        )
+    )
+    return rows
+
+
 @app.get("/api/agent/status")
 def agent_market_status() -> dict:
     return {
@@ -7488,6 +8052,7 @@ def agent_market_brief(
         session_date=str(cn_session.get("date") or ""),
     )
     sector_items = [x for x in (sector_snapshot.get("items") or []) if isinstance(x, dict)]
+    theme_trends = _agent_theme_trends(sector_items)
     evidence = []
     for item in stream_items[:8]:
         evidence.append(
@@ -7586,6 +8151,7 @@ def agent_market_brief(
                     }
                     for x in sector_items[:8]
                 ],
+                "theme_trends": theme_trends[:10],
             },
             force=force,
         )
@@ -7617,6 +8183,7 @@ def agent_market_brief(
             "global_flash_count": len(stream_items),
             "global_stream_mode": stream_data.get("stream_mode"),
             "sector_mainline": sector_snapshot,
+            "theme_trends": theme_trends,
             "agent_roles": {
                 "market_analyst": "读取大盘环境、板块强度、公开资金净流与涨跌家数宽度。",
                 "news_analyst": "读取可追溯全球/国内信息面并映射影响对象。",

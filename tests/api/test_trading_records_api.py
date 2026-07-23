@@ -79,6 +79,9 @@ def test_trading_records_api_returns_summary_for_cost_and_pnl():
             "side": "sell",
             "quantity": 100,
             "price": 11,
+            "fee": 5,
+            "tax": 0.55,
+            "slippage": 1.1,
             "realized_pnl": 100,
             "mode": "unit_summary",
         },
@@ -98,6 +101,7 @@ def test_trading_records_api_returns_summary_for_cost_and_pnl():
     assert summary["position_cost_value"] >= 1000
     assert summary["realized_pnl"] >= 100
     assert summary["unrealized_pnl"] >= 200
+    assert summary["total_fee"] >= 6.65
     assert summary["symbol_counts"]["990001"] >= 2
 
 

@@ -96,7 +96,18 @@ class OrderManager:
         px = max(float(price or 0.0), 0.0001)
         lot = max(1, int(lot_size or 1))
         raw_quantity = int(max(0.0, raw_value) / px)
-        quantity = int(raw_quantity // lot) * lot
+        if side in {"sell", "reduce"}:
+            available = max(0, int(current.available_quantity if current else 0))
+            raw_quantity = min(raw_quantity, available)
+            if side == "sell":
+                quantity = available
+            elif 0 < available < lot and raw_quantity >= available:
+                quantity = available
+            else:
+                quantity = int(raw_quantity // lot) * lot
+        else:
+            available = 0
+            quantity = int(raw_quantity // lot) * lot
         minimum_lot_value = px * lot
         weight = max(0.0, float(target_weight or 0.0))
         minimum_account_equity = minimum_lot_value / weight if side in {"buy", "add"} and weight > 0 else 0.0
@@ -114,6 +125,7 @@ class OrderManager:
             "requested_value": round(max(0.0, raw_value), 6),
             "raw_quantity": raw_quantity,
             "quantity": quantity,
+            "available_quantity": available,
             "lot_size": lot,
             "minimum_lot_value": round(minimum_lot_value, 6),
             "minimum_account_equity": round(minimum_account_equity, 6),
@@ -142,6 +154,10 @@ class OrderManager:
         fill_ratio: float = 1.0,
         fee_rate: float = 0.0003,
         slippage_rate: float = 0.0005,
+        min_commission: float = 5.0,
+        tax_rate: float = 0.0005,
+        filled_at: str = "",
+        t_plus_one: bool = True,
     ) -> ManagedOrder:
         if order.status in {"rejected", "cancelled", "expired"}:
             return order
@@ -158,10 +174,17 @@ class OrderManager:
             quantity=qty,
             price=price,
             amount=amount,
-            fee=amount * fee_rate,
+            fee=max(amount * fee_rate, min_commission) if amount > 0 and fee_rate > 0 else 0.0,
+            tax=amount * tax_rate if order.side == "sell" else 0.0,
             slippage=amount * slippage_rate,
+            created_at=filled_at or datetime.now().isoformat(timespec="seconds"),
+            trade_date=str(filled_at or "")[:10],
+            t_plus_one=t_plus_one,
         )
         self.account.apply_fill(fill)
+        qty = int(fill.quantity)
+        if qty <= 0:
+            return self.reject(order, "可卖数量不足或受 T+1 限制")
         order.filled_quantity = qty
         order.avg_fill_price = price
         order.status = "filled" if qty >= order.quantity else "partial"

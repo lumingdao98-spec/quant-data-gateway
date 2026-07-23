@@ -30,9 +30,12 @@ class PaperFill:
     price: float
     amount: float
     fee: float = 0.0
+    tax: float = 0.0
     slippage: float = 0.0
     realized_pnl: float = 0.0
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    trade_date: str = ""
+    t_plus_one: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -53,6 +56,8 @@ class PaperAccount:
         self.account_mode = account_mode
         self.equity_high = float(initial_cash)
         self.fills: list[PaperFill] = []
+        self.pending_settlement: dict[str, list[dict[str, Any]]] = {}
+        self.last_trading_date = ""
 
     @classmethod
     def from_snapshot(
@@ -80,6 +85,16 @@ class PaperAccount:
         account.max_drawdown = _float(data.get("max_drawdown"), 0.0)
         account.trade_count_today = int(_float(data.get("trade_count_today"), 0.0))
         account.win_loss_streak = int(_float(data.get("win_loss_streak"), 0.0))
+        account.pending_settlement = {
+            str(symbol): [
+                {"trade_date": str(item.get("trade_date") or ""), "quantity": int(_float(item.get("quantity"), 0.0))}
+                for item in rows
+                if isinstance(item, dict) and int(_float(item.get("quantity"), 0.0)) > 0
+            ]
+            for symbol, rows in (data.get("pending_settlement") or {}).items()
+            if isinstance(rows, list)
+        }
+        account.last_trading_date = str(data.get("last_trading_date") or "")
         positions = data.get("positions") if isinstance(data.get("positions"), dict) else {}
         for symbol, raw in positions.items():
             item = dict(raw or {})
@@ -110,9 +125,12 @@ class PaperAccount:
                         price=_float(item.get("price"), 0.0),
                         amount=_float(item.get("amount"), 0.0),
                         fee=_float(item.get("fee"), 0.0),
+                        tax=_float(item.get("tax"), 0.0),
                         slippage=_float(item.get("slippage"), 0.0),
                         realized_pnl=_float(item.get("realized_pnl"), 0.0),
                         created_at=str(item.get("created_at") or item.get("filled_at") or datetime.now().isoformat(timespec="seconds")),
+                        trade_date=str(item.get("trade_date") or ""),
+                        t_plus_one=bool(item.get("t_plus_one", True)),
                     )
                 )
             except (TypeError, ValueError):
@@ -149,6 +167,8 @@ class PaperAccount:
             "account_mode": self.account_mode,
             "positions": {k: v.to_dict() for k, v in self.positions.items()},
             "available_quantity": {k: v.available_quantity for k, v in self.positions.items()},
+            "pending_settlement": {k: list(v) for k, v in self.pending_settlement.items() if v},
+            "last_trading_date": self.last_trading_date,
             "total_return_pct": round((self.equity / self.initial_cash - 1.0) * 100 if self.initial_cash else 0.0, 6),
         }
 
@@ -167,30 +187,67 @@ class PaperAccount:
             self.max_drawdown = min(self.max_drawdown, self.equity / self.equity_high - 1.0)
         return self.snapshot()
 
+    def settle_t_plus_one(self, trading_date: str | datetime) -> dict[str, Any]:
+        date_text = trading_date.date().isoformat() if isinstance(trading_date, datetime) else str(trading_date)[:10]
+        if not date_text:
+            return self.snapshot()
+        if self.last_trading_date and date_text != self.last_trading_date:
+            self.trade_count_today = 0
+            self.daily_pnl = 0.0
+        self.last_trading_date = date_text
+        for symbol, rows in list(self.pending_settlement.items()):
+            remaining: list[dict[str, Any]] = []
+            released = 0
+            for row in rows:
+                trade_date = str(row.get("trade_date") or "")
+                quantity = int(_float(row.get("quantity"), 0.0))
+                if trade_date and trade_date < date_text:
+                    released += quantity
+                else:
+                    remaining.append(row)
+            position = self.positions.get(symbol)
+            if position and released > 0:
+                position.available_quantity = min(position.quantity, position.available_quantity + released)
+            if remaining:
+                self.pending_settlement[symbol] = remaining
+            else:
+                self.pending_settlement.pop(symbol, None)
+        return self.snapshot()
+
     def apply_fill(self, fill: PaperFill) -> dict[str, Any]:
         if fill.quantity <= 0:
             return self.snapshot()
+        trade_date = str(fill.trade_date or fill.created_at or datetime.now().isoformat(timespec="seconds"))[:10]
+        if trade_date:
+            self.settle_t_plus_one(trade_date)
         pos = self.positions.get(fill.symbol, PaperAccountPosition(symbol=fill.symbol))
         if fill.side == "buy":
-            total_cost = pos.avg_cost * pos.quantity + fill.amount + fill.fee + fill.slippage
+            total_cost = pos.avg_cost * pos.quantity + fill.amount + fill.fee + fill.tax + fill.slippage
             pos.quantity += fill.quantity
-            pos.available_quantity += fill.quantity
+            if fill.t_plus_one:
+                self.pending_settlement.setdefault(fill.symbol, []).append(
+                    {"trade_date": trade_date, "quantity": fill.quantity}
+                )
+            else:
+                pos.available_quantity += fill.quantity
             pos.avg_cost = total_cost / max(1, pos.quantity)
             pos.market_price = fill.price
             pos.market_value = pos.quantity * fill.price
-            self.cash -= fill.amount + fill.fee + fill.slippage
+            self.cash -= fill.amount + fill.fee + fill.tax + fill.slippage
         else:
-            qty = min(fill.quantity, pos.quantity)
+            qty = min(fill.quantity, pos.quantity, pos.available_quantity)
             fill.quantity = qty
             fill.amount = qty * fill.price
-            fill.realized_pnl = (fill.price - pos.avg_cost) * qty - fill.fee - fill.slippage
+            if qty <= 0:
+                return self.snapshot()
+            fill.realized_pnl = (fill.price - pos.avg_cost) * qty - fill.fee - fill.tax - fill.slippage
             pos.quantity -= qty
             pos.available_quantity = max(0, pos.available_quantity - qty)
             pos.market_price = fill.price
             pos.market_value = pos.quantity * fill.price
             pos.realized_pnl += fill.realized_pnl
             self.realized_pnl += fill.realized_pnl
-            self.cash += fill.amount - fill.fee - fill.slippage
+            self.cash += fill.amount - fill.fee - fill.tax - fill.slippage
             self.win_loss_streak = self.win_loss_streak + 1 if fill.realized_pnl >= 0 else self.win_loss_streak - 1
         if pos.quantity <= 0:
             self.positions.pop(fill.symbol, None)

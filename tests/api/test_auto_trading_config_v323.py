@@ -297,6 +297,18 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick(monkeypatch)
 
 
 def test_realtime_paper_applies_strategy_position_and_stop_controls(monkeypatch):
+    market_clock = {"now": "2026-06-01T10:00:00"}
+    monkeypatch.setattr(
+        api,
+        "_market_session",
+        lambda market="CN": {
+            "market": market,
+            "now": market_clock["now"],
+            "can_refresh": True,
+            "is_trading_session": True,
+            "label": "交易时段",
+        },
+    )
     monkeypatch.setattr(
         api.realtime_decision_service,
         "hydrate",
@@ -352,6 +364,7 @@ def test_realtime_paper_applies_strategy_position_and_stop_controls(monkeypatch)
     assert first["signal"]["strategy_controls"]["max_single_position_pct"] == 5.0
     assert first["orders"] and first["orders"][0]["quantity"] == 500
 
+    market_clock["now"] = "2026-06-02T10:00:00"
     second = client.post(
         "/api/realtime-paper/tick",
         json={
