@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import time as time_module
 from concurrent.futures import ThreadPoolExecutor
+import os
 import re
 from dataclasses import fields, replace
 from datetime import datetime, time
 from pathlib import Path
 from statistics import mean
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Any
 
@@ -74,6 +76,7 @@ from quant_data.data import (
     build_fundamentals_snapshot,
     build_news_snapshot,
     build_quote_snapshot,
+    check_data_freshness,
     default_source_registry,
     market_session_status,
 )
@@ -93,6 +96,7 @@ from quant_data.trading import (
     AnomalyGuard,
     DataFreshnessGuard,
     PaperTradingGateway,
+    PositionReviewScheduler,
     PositionReviewService,
     RealtimePaperEngine,
     SignalFusionEngine,
@@ -154,9 +158,13 @@ strategy_suitability_v323 = StrategySuitabilityV323()
 live_trading_engine_v323 = LiveTradingEngine(store=trading_store_v323)
 realtime_paper_engine_v323 = RealtimePaperEngineV323(realtime_paper_engine_v321, trading_store_v323)
 position_review_service_v325 = PositionReviewService(trading_store_v323)
+position_review_scheduler_v325 = PositionReviewScheduler(market_calendar)
 score_provenance_memory_v323: dict[str, dict] = {}
 _background_jobs: set[str] = set()
 _background_jobs_lock = Lock()
+_position_review_run_lock = Lock()
+_position_review_scheduler_stop = Event()
+_position_review_scheduler_thread: Thread | None = None
 
 
 def _submit_background_job(key: str, callback) -> bool:
@@ -203,7 +211,25 @@ FALLBACK_STRATEGIES = [
     {"key": "atr_risk", "name": "ATR波动过滤", "category": "回测/风控/执行", "description": "ATR 与近期振幅过高时降低优先级。", "enabled": True, "default_weight": 1.0, "tags": ["atr"]},
     {"key": "position_stop", "name": "仓位与止损", "category": "回测/风控/执行", "description": "结合支撑、ATR 与等级输出仓位/止损建议。", "enabled": True, "default_weight": 1.0, "tags": ["position"]},
 ]
-app = FastAPI(title="量化数据网关 API", version=__version__, description="A股/ETF 实时行情、筛选、回测、评分溯源与纸面交易系统。", docs_url=None, redoc_url=None)
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    _start_position_review_scheduler()
+    try:
+        yield
+    finally:
+        _stop_position_review_scheduler()
+
+
+app = FastAPI(
+    title="量化数据网关 API",
+    version=__version__,
+    description="A股/ETF 实时行情、筛选、回测、评分溯源与纸面交易系统。",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=_app_lifespan,
+)
 
 def _make_snapshot_id(symbol: str | None = None, limit: int | None = None) -> str:
     core = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -4505,8 +4531,7 @@ def realtime_paper_session_positions(session_id: str) -> dict:
     }
 
 
-@app.post("/api/realtime-paper/sessions/{session_id}/review-positions")
-def realtime_paper_review_positions(session_id: str) -> dict:
+def _review_realtime_paper_positions(session_id: str) -> dict:
     session = realtime_paper_engine_v323.get_session(session_id)
     if not session:
         return {"ok": False, "message": "实时模拟会话不存在", "data": []}
@@ -4543,6 +4568,11 @@ def realtime_paper_review_positions(session_id: str) -> dict:
         "session_id": session_id,
         "message": f"已复核 {len(rows)}/{len(positions)} 只模拟持仓；该接口本身不创建订单。",
     }
+
+
+@app.post("/api/realtime-paper/sessions/{session_id}/review-positions")
+def realtime_paper_review_positions(session_id: str) -> dict:
+    return _review_realtime_paper_positions(session_id)
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/position-reviews")
@@ -5001,8 +5031,7 @@ def live_positions() -> dict:
     }
 
 
-@app.post("/api/live/review-positions")
-def live_review_positions() -> dict:
+def _review_live_positions() -> dict:
     synced = live_trading_engine_v323.sync_live_account_state()
     positions = [_normalize_live_position(x) for x in synced.get("positions") or []]
     config_read = cache_state_service.get("auto_trading_config", "default", allow_stale=True)
@@ -5041,6 +5070,171 @@ def live_review_positions() -> dict:
         "message": f"已复核 {len(rows)}/{len(positions)} 只真实持仓；复核结果不会直接下单，减仓/退出仍需风控和人工确认。",
         "missing_reason": "" if positions else "券商未连接/未授权或账户暂无持仓。",
     }
+
+
+@app.post("/api/live/review-positions")
+def live_review_positions() -> dict:
+    return _review_live_positions()
+
+
+def _latest_position_review_run() -> dict:
+    rows = trading_store_v323.list("position_review_runs", mode="scheduler", limit=1)
+    return dict(rows[0]) if rows else {}
+
+
+def _run_due_position_reviews(*, force: bool = False, now: datetime | None = None) -> dict:
+    if not _position_review_run_lock.acquire(blocking=False):
+        return {"ok": False, "status": "busy", "message": "持仓复核任务正在运行"}
+    try:
+        latest = _latest_position_review_run()
+        schedule = position_review_scheduler_v325.decide(
+            now=now,
+            last_run_date=str(latest.get("review_date") or ""),
+            force=force,
+        )
+        if not schedule.due:
+            return {
+                "ok": True,
+                "status": "skipped",
+                "message": schedule.reason,
+                "schedule": schedule.to_dict(),
+                "last_run": latest,
+            }
+
+        paper_runs: list[dict] = []
+        errors: list[dict] = []
+        for session in realtime_paper_engine_v323.list_sessions():
+            if str(session.get("status") or "") not in {"running", "paused"}:
+                continue
+            session_id = str(session.get("session_id") or "")
+            if not session_id:
+                continue
+            try:
+                result = _review_realtime_paper_positions(session_id)
+                paper_runs.append(
+                    {
+                        "session_id": session_id,
+                        "status": session.get("status"),
+                        "held_count": result.get("held_count", 0),
+                        "reviewed_count": result.get("count", 0),
+                    }
+                )
+            except Exception as exc:
+                errors.append({"mode": "realtime_paper", "session_id": session_id, "error": str(exc)[:240]})
+
+        live_status = live_trading_engine_v323.status()
+        broker = dict(live_status.get("broker") or {})
+        live_run: dict[str, Any] = {
+            "connected": bool(broker.get("connected")),
+            "broker": broker.get("broker") or "disabled",
+            "held_count": 0,
+            "reviewed_count": 0,
+            "skipped_reason": "券商未连接/未授权，不读取或猜测真实持仓",
+        }
+        if broker.get("connected"):
+            try:
+                result = _review_live_positions()
+                live_run.update(
+                    {
+                        "held_count": result.get("held_count", 0),
+                        "reviewed_count": result.get("count", 0),
+                        "session_id": result.get("session_id"),
+                        "skipped_reason": result.get("missing_reason") or "",
+                    }
+                )
+            except Exception as exc:
+                errors.append({"mode": "live", "error": str(exc)[:240]})
+
+        created_at = schedule.checked_at
+        run = {
+            "run_id": f"position-review-run-{schedule.review_date}",
+            "review_date": schedule.review_date,
+            "created_at": created_at,
+            "completed_at": datetime.now().isoformat(timespec="seconds"),
+            "status": "partial" if errors else "complete",
+            "forced": force,
+            "paper_sessions": paper_runs,
+            "paper_reviewed_count": sum(int(row.get("reviewed_count") or 0) for row in paper_runs),
+            "live": live_run,
+            "live_reviewed_count": int(live_run.get("reviewed_count") or 0),
+            "errors": errors,
+            "broker_submitted": False,
+            "truth_boundary": "每日持仓复核只重算评分并保存建议，不创建模拟订单或真实券商订单。",
+        }
+        trading_store_v323.put(
+            "position_review_runs",
+            run,
+            mode="scheduler",
+            session_id=schedule.review_date,
+            record_id=run["run_id"],
+        )
+        trading_store_v323.put(
+            "audit_events",
+            {"event_type": "daily_position_review_run", **run},
+            mode="scheduler",
+            session_id=schedule.review_date,
+            record_id=f"audit-{run['run_id']}",
+        )
+        return {"ok": not errors, "status": run["status"], "message": "每日持仓复核完成", "data": run, "schedule": schedule.to_dict()}
+    finally:
+        _position_review_run_lock.release()
+
+
+@app.get("/api/position-reviews/scheduler/status")
+def position_review_scheduler_status() -> dict:
+    latest = _latest_position_review_run()
+    schedule = position_review_scheduler_v325.decide(last_run_date=str(latest.get("review_date") or ""))
+    return {
+        "ok": True,
+        "data": schedule.to_dict(),
+        "last_run": latest,
+        "scheduler_enabled": str(os.getenv("POSITION_REVIEW_SCHEDULER_ENABLED", "true")).strip().lower() not in {"0", "false", "no", "off"},
+        "order_execution": False,
+    }
+
+
+@app.post("/api/position-reviews/scheduler/run-due")
+def position_review_scheduler_run_due(payload: dict = Body(default_factory=dict)) -> dict:
+    return _run_due_position_reviews(force=bool(payload.get("force", False)))
+
+
+def _position_review_scheduler_loop() -> None:
+    while not _position_review_scheduler_stop.wait(60):
+        try:
+            _run_due_position_reviews(force=False)
+        except Exception as exc:
+            try:
+                trading_store_v323.put(
+                    "audit_events",
+                    {
+                        "event_type": "daily_position_review_scheduler_error",
+                        "error": str(exc)[:240],
+                        "created_at": datetime.now().isoformat(timespec="seconds"),
+                    },
+                    mode="scheduler",
+                )
+            except Exception:
+                pass
+
+
+def _start_position_review_scheduler() -> None:
+    global _position_review_scheduler_thread
+    enabled = str(os.getenv("POSITION_REVIEW_SCHEDULER_ENABLED", "true")).strip().lower() not in {"0", "false", "no", "off"}
+    if not enabled or (_position_review_scheduler_thread and _position_review_scheduler_thread.is_alive()):
+        return
+    _position_review_scheduler_stop.clear()
+    _position_review_scheduler_thread = Thread(
+        target=_position_review_scheduler_loop,
+        name="position-review-scheduler",
+        daemon=True,
+    )
+    _position_review_scheduler_thread.start()
+
+
+def _stop_position_review_scheduler() -> None:
+    _position_review_scheduler_stop.set()
+    if _position_review_scheduler_thread and _position_review_scheduler_thread.is_alive():
+        _position_review_scheduler_thread.join(timeout=2)
 
 
 @app.get("/api/live/position-reviews")
@@ -5182,9 +5376,126 @@ def live_reconciliation_run() -> dict:
     return live_trading_engine_v323.reconcile()
 
 
+def _latest_score_provenance_for_live(symbol: str) -> dict[str, Any]:
+    rows = [
+        dict(row)
+        for row in list(score_provenance_memory_v323.values())
+        + trading_store_v323.list("score_provenance", symbol=symbol, limit=500)
+        if str(row.get("symbol") or "") == symbol
+    ]
+    rows.sort(
+        key=lambda row: str(row.get("decision_time") or row.get("created_at") or ""),
+        reverse=True,
+    )
+    return rows[0] if rows else {}
+
+
+def _prepare_live_order_payload(payload: dict | None) -> dict[str, Any]:
+    """Attach server-side quote, provenance and risk evidence to a live intent.
+
+    The helper never fabricates missing data and never treats browser booleans as
+    proof. Missing or stale evidence remains visible and is blocked by the live
+    engine for QMT, PTrade and HTTP bridge submissions.
+    """
+
+    out = dict(payload or {})
+    symbol = normalize_symbol(str(out.get("symbol") or ""))
+    out["symbol"] = symbol
+    quote: dict[str, Any] = {}
+    try:
+        quote_obj = service.cache.get_quote(symbol, max_age_seconds=None) if symbol else None
+        if quote_obj is not None:
+            quote = quote_obj.to_dict() if hasattr(quote_obj, "to_dict") else dict(quote_obj.__dict__)
+    except Exception as exc:
+        out["quote_error"] = str(exc)[:180]
+    if isinstance(out.get("quote"), dict):
+        out["client_quote_ignored"] = True
+    out["quote"] = quote
+    quote_at = str(quote.get("fetched_at") or quote.get("ts") or "")
+    out["quote_fetched_at"] = quote_at
+    out["data_freshness"] = check_data_freshness(
+        quote_at or None,
+        policy={"ttl_seconds": 30, "stale_blocks_buy": True, "allow_hold_reduce_on_stale": True},
+    ).to_dict()
+
+    provenance = _latest_score_provenance_for_live(symbol) if symbol else {}
+    if provenance and not out.get("provenance_id"):
+        out["provenance_id"] = str(provenance.get("provenance_id") or "")
+    out["signal_score"] = _safe_float(
+        out.get("signal_score"),
+        _safe_float(provenance.get("final_score"), 0.0),
+    )
+    if provenance:
+        out["info_negative_veto"] = bool(
+            out.get("info_negative_veto")
+            or provenance.get("info_negative_veto")
+            or any(
+                str(gate.get("gate_key") or "") in {"major_negative_event", "major_negative_news"}
+                and not bool(gate.get("passed", True))
+                for gate in (provenance.get("gates") or [])
+                if isinstance(gate, dict)
+            )
+        )
+
+    if not out.get("risk_check_id"):
+        account: dict[str, Any] = {}
+        positions: dict[str, dict[str, Any]] = {}
+        try:
+            health = live_trading_engine_v323.broker.health_check()
+            if health.connected:
+                account_obj = live_trading_engine_v323.broker.get_account()
+                account = account_obj.to_dict()
+                positions = {row.symbol: row.to_dict() for row in account_obj.positions}
+        except Exception as exc:
+            out["broker_snapshot_error"] = str(exc)[:180]
+        cash_data = account.get("cash") if isinstance(account.get("cash"), dict) else {}
+        cash = _safe_float(cash_data.get("available_cash"), 0.0)
+        market_value = sum(_safe_float(row.get("market_value"), 0.0) for row in positions.values())
+        order_for_risk = {
+            "symbol": symbol,
+            "side": str(out.get("side") or "").lower(),
+            "quantity": int(_safe_float(out.get("quantity"), 0.0)),
+            "price": _safe_float(out.get("limit_price") or quote.get("last") or quote.get("price"), 0.0),
+            "mode": "live",
+        }
+        risk_result = paper_trading_gateway_v320.risk_gateway.evaluate_order(
+            order_for_risk,
+            portfolio={
+                "cash": cash,
+                "equity": cash + market_value,
+                "positions": positions,
+                "trade_count_today": live_trading_engine_v323._daily_live_order_count(),
+            },
+            signal={
+                "symbol": symbol,
+                "action": order_for_risk["side"],
+                "final_score": out.get("signal_score"),
+                "info_negative_veto": bool(out.get("info_negative_veto")),
+            },
+            quote=quote,
+            freshness=out["data_freshness"],
+            now=_now_cn(),
+            manual_replay=False,
+        )
+        risk_result.update(
+            {
+                "symbol": symbol,
+                "mode": "live",
+                "order": order_for_risk,
+                "provenance_id": str(out.get("provenance_id") or ""),
+                "quote_fetched_at": quote_at,
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+        risk_id = trading_store_v323.put("risk_checks", risk_result, mode="live", symbol=symbol)
+        out["risk_check_id"] = risk_id
+        out["risk_approved"] = bool(risk_result.get("approved", risk_result.get("allowed")))
+    return out
+
+
 @app.post("/api/live/orders/preview")
 def live_order_preview(payload: dict = Body(default_factory=dict)) -> dict:
-    return live_trading_engine_v323.preview_order(payload)
+    return live_trading_engine_v323.preview_order(_prepare_live_order_payload(payload))
 
 
 @app.post("/api/live/orders/preview-batch")
@@ -5192,7 +5503,11 @@ def live_order_preview_batch(payload: dict = Body(default_factory=dict)) -> dict
     symbols = _symbols_from_payload(payload)
     if not symbols:
         return {"ok": False, "message": "symbols required", "data": []}
-    return live_trading_engine_v323.preview_orders_batch(payload, symbols)
+    rows = [
+        {"symbol": symbol, "preview": live_trading_engine_v323.preview_order(_prepare_live_order_payload({**payload, "symbol": symbol}))}
+        for symbol in symbols[:50]
+    ]
+    return {"ok": bool(rows), "data": rows, "count": len(rows), "note": "每只标的独立生成服务端行情、评分溯源和风控预检查。"}
 
 
 @app.post("/api/live/orders/place-batch")
@@ -5200,7 +5515,11 @@ def live_order_place_batch(payload: dict = Body(default_factory=dict)) -> dict:
     symbols = _symbols_from_payload(payload)
     if not symbols:
         return {"ok": False, "message": "symbols required", "data": []}
-    return live_trading_engine_v323.place_orders_batch(payload, symbols, confirmed=bool(payload.get("confirmed")))
+    rows = [
+        {"symbol": symbol, "result": live_trading_engine_v323.place_order(_prepare_live_order_payload({**payload, "symbol": symbol}), confirmed=False)}
+        for symbol in symbols[:50]
+    ]
+    return {"ok": bool(rows), "data": rows, "count": len(rows), "requires_confirmation": True}
 
 
 @app.post("/api/live/orders/confirm")
@@ -5213,7 +5532,7 @@ def live_order_confirm(payload: dict = Body(default_factory=dict)) -> dict:
 
 @app.post("/api/live/orders/place")
 def live_order_place(payload: dict = Body(default_factory=dict)) -> dict:
-    return live_trading_engine_v323.place_order(payload, confirmed=bool(payload.get("confirmed")))
+    return live_trading_engine_v323.place_order(_prepare_live_order_payload(payload), confirmed=False)
 
 
 @app.post("/api/live/orders/{order_id}/cancel")

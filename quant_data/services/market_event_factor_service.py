@@ -6,7 +6,21 @@ import json
 import re
 from typing import Any, Iterable
 
+from quant_data.scoring.extension_factors import V324ExtensionFactorEngine
+
 from .global_industry_mapper import GlobalIndustryMapper
+
+
+STANDARD_FACTOR_NAMES_CN = {
+    "macro_liquidity_stress": "宏观流动性压力",
+    "global_semis_drawdown": "全球半导体回撤",
+    "ipo_liquidity_shock": "IPO资金分流冲击",
+    "earnings_surprise": "业绩超预期幅度",
+    "guidance_delta": "业绩指引变化",
+    "northbound_flow_regime": "北向资金状态",
+    "sector_sentiment_velocity": "板块情绪变化速度",
+    "competitor_listing_pressure": "竞品上市压力",
+}
 
 
 def _number(value: Any) -> float | None:
@@ -59,6 +73,7 @@ class MarketEventFactorService:
     def __init__(self, cache_state: Any | None = None, mapper: GlobalIndustryMapper | None = None) -> None:
         self.cache_state = cache_state
         self.mapper = mapper or GlobalIndustryMapper()
+        self.extension_engine = V324ExtensionFactorEngine()
 
     def build_context(
         self,
@@ -68,6 +83,7 @@ class MarketEventFactorService:
         profile: dict[str, Any] | None = None,
         global_items: Iterable[dict[str, Any]] | None = None,
         sector_snapshot: dict[str, Any] | None = None,
+        structured_inputs: dict[str, dict[str, Any]] | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         current = (now or datetime.now()).replace(tzinfo=None)
@@ -114,8 +130,16 @@ class MarketEventFactorService:
                 factor = self._mapped_industry_factor(text, mapped, published, source, source_ref)
                 self._keep_strongest(factors, factor)
 
-        sector_factor = self._sector_factor(exposure, sector_snapshot if sector_snapshot is not None else self._cached_sector_snapshot())
+        resolved_sector = sector_snapshot if sector_snapshot is not None else self._cached_sector_snapshot()
+        sector_factor = self._sector_factor(exposure, resolved_sector)
         self._keep_strongest(factors, sector_factor)
+        extension_rows, extension_missing = self._structured_factor_rows(
+            symbol=symbol,
+            current=current,
+            structured_inputs={**dict(structured_inputs or {}), "sector": dict((structured_inputs or {}).get("sector") or resolved_sector)},
+        )
+        for factor in extension_rows:
+            self._keep_strongest(factors, factor)
         rows = sorted(factors.values(), key=lambda row: (row.get("scope") != "市场环境", -abs(float(row.get("adjustment") or 0))))
         market_adjustment = _clamp(sum(float(row["adjustment"]) for row in rows if row.get("scope") == "市场环境"), -18.0, 12.0)
         information_adjustment = _clamp(sum(float(row["adjustment"]) for row in rows if row.get("scope") == "个股信息"), -10.0, 10.0)
@@ -127,6 +151,7 @@ class MarketEventFactorService:
             missing.append("近期没有可映射且可追溯的市场事件")
         if any(row.get("factor_key") == "ipo_liquidity_watch" and row.get("adjustment") == 0 for row in rows):
             missing.append("IPO发行规模缺失，未量化资金分流")
+        standard_coverage = self._standard_coverage(rows, extension_missing)
         return {
             "symbol": symbol,
             "name": name or profile.get("name") or symbol,
@@ -139,6 +164,9 @@ class MarketEventFactorService:
             "evidence": [str(row.get("explanation") or "") for row in rows if row.get("explanation")],
             "data_sources": list(dict.fromkeys(str(row.get("source") or "") for row in rows if row.get("source"))),
             "missing_data": missing,
+            "standard_factor_coverage": standard_coverage,
+            "standard_factor_available": sum(1 for row in standard_coverage if row["status"] == "available"),
+            "standard_factor_total": len(STANDARD_FACTOR_NAMES_CN),
             "excluded_expired": excluded,
             "excluded_future": future_excluded,
             "excluded_undated": undated_excluded,
@@ -190,18 +218,22 @@ class MarketEventFactorService:
 
     def _global_technology_factor(self, text: str, mapped: dict[str, Any], published: datetime, source: str, source_ref: str) -> dict[str, Any] | None:
         technology = any(word.lower() in text.lower() for word in ("纳斯达克", "科技股", "芯片股", "半导体", "AI交易", "人工智能"))
+        semiconductors = any(word.lower() in text.lower() for word in ("芯片股", "半导体", "费城半导体", "SOX"))
         risk = any(word in text for word in ("抛售", "下跌", "重挫", "暴跌", "回调", "承压", "泡沫", "去杠杆", "估值过高"))
         if not (technology and risk):
             return None
+        key = "global_semis_drawdown" if semiconductors else "global_technology_risk"
+        raw_value = self._parse_signed_percent(text) if semiconductors else None
         return self._factor(
-            "global_technology_risk",
+            key,
             "市场环境",
             -7.0,
-            "海外科技风险偏好走弱，经成长估值和情绪链路压低大盘环境分。",
+            "海外半导体板块回撤经风险偏好和成长估值链路压低大盘环境分。" if semiconductors else "海外科技风险偏好走弱，经成长估值和情绪链路压低大盘环境分。",
             published,
             source,
             source_ref,
             mapped,
+            raw_value=raw_value,
         )
 
     def _global_liquidity_factor(self, text: str, mapped: dict[str, Any], published: datetime, source: str, source_ref: str) -> dict[str, Any] | None:
@@ -212,7 +244,7 @@ class MarketEventFactorService:
             return None
         adjustment = -4.5 if tightening and not easing else 3.0 if easing and not tightening else 0.0
         return self._factor(
-            "global_liquidity",
+            "macro_liquidity_stress",
             "市场环境",
             adjustment,
             "海外利率/流动性证据经估值折现和汇率风险传导至A股市场环境。",
@@ -221,6 +253,117 @@ class MarketEventFactorService:
             source_ref,
             mapped,
         )
+
+    def _structured_factor_rows(
+        self,
+        *,
+        symbol: str,
+        current: datetime,
+        structured_inputs: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        valid: dict[str, dict[str, Any]] = {}
+        missing: dict[str, str] = {}
+        factor_sections = {
+            "macro_liquidity_stress": "macro",
+            "global_semis_drawdown": "sector",
+            "ipo_liquidity_shock": "ipo",
+            "earnings_surprise": "earnings",
+            "guidance_delta": "earnings",
+            "northbound_flow_regime": "fund_flow",
+            "sector_sentiment_velocity": "sector",
+            "competitor_listing_pressure": "ipo",
+        }
+        for section in set(factor_sections.values()):
+            data = dict(structured_inputs.get(section) or {})
+            if not data:
+                continue
+            available_at = _parse_time(data.get("available_at") or data.get("updated_at") or data.get("fetched_at"))
+            source = str(data.get("source") or data.get("source_name") or "").strip()
+            source_ref = str(data.get("source_ref") or data.get("source_url") or data.get("url") or "").strip()
+            if available_at is None:
+                for key, owner in factor_sections.items():
+                    if owner == section:
+                        missing[key] = "快照缺少 available_at，未进入评分"
+                continue
+            if available_at > current + timedelta(minutes=2):
+                for key, owner in factor_sections.items():
+                    if owner == section:
+                        missing[key] = "快照在决策时点之后才可用，已按 PIT 规则排除"
+                continue
+            if not source or not source_ref:
+                for key, owner in factor_sections.items():
+                    if owner == section:
+                        missing[key] = "快照缺少可追溯来源，未进入评分"
+                continue
+            valid[section] = data
+
+        computed = self.extension_engine.compute(
+            macro=valid.get("macro"),
+            sector=valid.get("sector"),
+            earnings=valid.get("earnings"),
+            ipo=valid.get("ipo"),
+            fund_flow=valid.get("fund_flow"),
+        )
+        rows: list[dict[str, Any]] = []
+        for key, raw_value in computed.values.items():
+            section = factor_sections[key]
+            data = valid[section]
+            if key == "competitor_listing_pressure":
+                competitors = {str(value).strip() for value in data.get("competitor_symbols", []) if str(value).strip()}
+                if not competitors or symbol not in competitors:
+                    missing[key] = "未提供包含当前标的的 competitor_symbols，未计竞品上市压力"
+                    continue
+            adjustment, scope = self._extension_adjustment(key, raw_value)
+            available_at = _parse_time(data.get("available_at") or data.get("updated_at") or data.get("fetched_at")) or current
+            rows.append(
+                self._factor(
+                    key,
+                    scope,
+                    adjustment,
+                    f"{STANDARD_FACTOR_NAMES_CN[key]}来自带时点与来源的结构化快照；原始值 {raw_value:.4f}，按有限权重进入事件调整。",
+                    available_at,
+                    str(data.get("source") or data.get("source_name")),
+                    str(data.get("source_ref") or data.get("source_url") or data.get("url")),
+                    {"relevance_score": data.get("confidence", 75) if _number(data.get("confidence")) is not None else 75},
+                    raw_value=raw_value,
+                )
+            )
+        for key in STANDARD_FACTOR_NAMES_CN:
+            if key not in computed.values and key not in missing:
+                missing[key] = "当前快照没有该字段，保持缺失而不是按 0 分处理"
+        return rows, missing
+
+    @staticmethod
+    def _extension_adjustment(key: str, raw_value: float) -> tuple[float, str]:
+        value = float(raw_value)
+        if key == "macro_liquidity_stress":
+            return -_clamp(abs(value) * 0.08, 0.0, 8.0), "市场环境"
+        if key == "global_semis_drawdown":
+            return -_clamp(abs(value) * 0.5, 0.0, 8.0), "市场环境"
+        if key == "ipo_liquidity_shock":
+            return -_clamp(abs(value) * 0.08, 0.0, 8.0), "市场环境"
+        if key == "earnings_surprise":
+            return _clamp(value * 0.12, -8.0, 8.0), "个股信息"
+        if key == "guidance_delta":
+            return _clamp(value * 0.10, -6.0, 6.0), "个股信息"
+        if key == "northbound_flow_regime":
+            return _clamp(value * 0.06, -6.0, 6.0), "市场环境"
+        if key == "sector_sentiment_velocity":
+            return _clamp(value * 0.08, -5.0, 5.0), "个股信息"
+        return -_clamp(abs(value) * 0.05, 0.0, 5.0), "个股信息"
+
+    @staticmethod
+    def _standard_coverage(rows: list[dict[str, Any]], missing: dict[str, str]) -> list[dict[str, str]]:
+        available = {str(row.get("factor_key") or "") for row in rows}
+        return [
+            {
+                "factor_key": key,
+                "factor_name_cn": name,
+                "status": "available" if key in available else "missing",
+                "missing_reason": "" if key in available else missing.get(key, "近期没有可追溯证据"),
+            }
+            for key, name in STANDARD_FACTOR_NAMES_CN.items()
+        ]
 
     def _ipo_factors(self, text: str, item: dict[str, Any], mapped: dict[str, Any], published: datetime, source: str, source_ref: str) -> list[dict[str, Any]]:
         if not self._is_ipo(text):
@@ -330,7 +473,8 @@ class MarketEventFactorService:
             "factor_key": key,
             "factor_name_cn": {
                 "global_technology_risk": "全球科技风险",
-                "global_liquidity": "海外流动性",
+                "global_semis_drawdown": "全球半导体回撤",
+                "macro_liquidity_stress": "宏观流动性压力",
                 "ipo_liquidity_shock": "IPO资金分流",
                 "ipo_liquidity_watch": "IPO资金分流观察",
                 "dram_supply_chain_catalyst": "国产DRAM产业催化",
@@ -377,3 +521,8 @@ class MarketEventFactorService:
         unit = match.group(2)
         multiplier = {"万亿": 1_000_000_000_000, "亿元": 100_000_000, "亿": 100_000_000, "万元": 10_000, "万": 10_000, "元": 1}.get(unit, 1)
         return value * multiplier
+
+    @staticmethod
+    def _parse_signed_percent(text: str) -> float | None:
+        match = re.search(r"(?:下跌|回撤|重挫|暴跌|跌幅|跌逾|跌超)\s*([0-9]+(?:\.[0-9]+)?)\s*%", text, flags=re.IGNORECASE)
+        return -float(match.group(1)) if match else None

@@ -9,7 +9,7 @@ def test_live_order_needs_flags_before_confirmation():
     result = engine.place_order({"symbol": "300750", "side": "buy", "quantity": 100, "limit_price": 100})
 
     assert result["ok"] is False
-    assert "未开启" in result["reason"]
+    assert result["data"]["precheck"]["reason_code"] == "live_flags"
 
 
 def test_pending_confirmations_do_not_count_as_submitted_live_orders(tmp_path):

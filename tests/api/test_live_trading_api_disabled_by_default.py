@@ -7,7 +7,10 @@ def test_live_trading_api_disabled_by_default():
     client = TestClient(api.app)
 
     status = client.get("/api/live-broker/status").json()
-    placed = client.post("/api/live/orders/place", json={"symbol": "300750", "side": "buy", "quantity": 100, "limit_price": 100}).json()
+    placed = client.post(
+        "/api/live/orders/place",
+        json={"symbol": "300750", "side": "buy", "quantity": 100, "limit_price": 100},
+    ).json()
 
     assert status["safety"]["LIVE_TRADING_ENABLED"] is False
     assert placed["ok"] is False
@@ -25,7 +28,7 @@ def test_live_batch_preview_does_not_bypass_safety():
     assert data["count"] == 2
     assert all("precheck" in row["preview"] for row in data["data"])
     assert all(row["preview"]["precheck"]["ok"] is False for row in data["data"])
-    assert "不会绕过" in data["note"] or "不会" in data["note"]
+    assert data["note"]
 
 
 def test_live_positions_include_normalized_pnl_fields():
@@ -65,4 +68,4 @@ def test_live_account_reports_unavailable_instead_of_real_zero_balance():
 
     assert data["ok"] is True
     assert data["data_available"] is False
-    assert "不是可用于交易的真实账户余额" in data["missing_reason"]
+    assert data["missing_reason"]

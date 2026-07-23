@@ -229,14 +229,14 @@ def build_auto_trading_workbench_ui() -> str:
             </div>
           </div>
           <div class="panel">
-            <div class="panel-h"><span>模拟账户/持仓</span><div class="row"><button class="btn" onclick="reviewPaperPositions(this)">复核全部持仓</button><button class="btn" onclick="openModule('realtime')">详情</button></div></div>
-            <div class="panel-b"><div id="sessionSnapshot" class="notice">暂无 active session</div><div id="paperPositionReviews" class="position-review-list"><span class="muted">有持仓后可执行每日复核；复核不会绕过实时模拟内核创建订单。</span></div><table class="mini-table" style="margin-top:10px"><tbody id="sessionRows"><tr><td>等待 session...</td></tr></tbody></table></div>
+            <div class="panel-h"><span>模拟账户/持仓</span><div class="row"><button class="btn" onclick="runDuePositionReviews(this)">检查每日复核</button><button class="btn" onclick="reviewPaperPositions(this)">复核全部持仓</button><button class="btn" onclick="openModule('realtime')">详情</button></div></div>
+            <div class="panel-b"><div id="reviewScheduleStatus" class="notice">正在读取每日持仓复核计划...</div><div id="sessionSnapshot" class="notice" style="margin-top:8px">暂无 active session</div><div id="paperPositionReviews" class="position-review-list"><span class="muted">有持仓后可执行每日复核；复核不会绕过实时模拟内核创建订单。</span></div><table class="mini-table" style="margin-top:10px"><tbody id="sessionRows"><tr><td>等待 session...</td></tr></tbody></table></div>
           </div>
           <div class="panel">
             <div class="panel-h"><span>实盘安全</span><div class="row"><button class="btn" onclick="reviewLivePositions(this)">只读持仓复核</button><button class="btn red" onclick="killLive(this)">Kill</button></div></div>
             <div class="panel-b">
-              <div class="notice" id="liveSafety">真实交易默认关闭。未配置券商 SDK、环境变量、账号授权时只显示 disabled/unsupported。</div>
-              <div class="notice" style="margin-top:8px">没有 QMT/PTrade SDK 时仍可完成评分、批量预检查、风控和待确认票据并写入交易记录；系统不会把票据伪装成券商委托或真实成交。全自动真实执行必须连接用户已授权的券商适配器。</div>
+              <div class="notice" id="liveSafety">真实交易默认关闭。未配置券商 SDK、环境变量、账号授权时只显示“已关闭/不支持”。</div>
+              <div class="notice" style="margin-top:8px">没有 QMT/PTrade SDK 时仍可完成评分、批量预检查、风控和待确认票据；也可连接用户自行授权的本地 HTTP 券商桥。任何真实执行都必须通过服务端确认队列和全部安全门禁。</div>
               <div class="split" style="margin-top:10px"><div class="field"><label>预检查代码</label><input id="liveSymbol" value="300750"></div><div class="field"><label>方向</label><select id="liveSide"><option value="buy">买入</option><option value="sell">卖出</option></select></div></div>
               <div class="split"><div class="field"><label>股数</label><input id="liveQty" type="number" value="100"></div><div class="field"><label>限价</label><input id="livePrice" type="number" value="0"></div></div>
               <div class="row"><button class="btn" onclick="previewOrder()">首只订单预检查</button><button class="btn" onclick="previewOrderBatch()">股票池批量预检查</button><button class="btn" onclick="openModule('live')">进入实盘页</button></div>
@@ -283,7 +283,7 @@ const MODULES={
   detail:{label:'K线详情',icon:'K',url:()=>'/detail/'+encodeURIComponent(primarySymbol())+'?frame=1d',desc:'日K/周K/月K、技术因子、异常标注、信息面与资金面。'},
   backtest:{label:'历史回测',icon:'测',url:()=>'/backtest?symbol='+encodeURIComponent(primarySymbol()),desc:'用同一套配置验证收益、回撤、买卖流水和策略跑输原因。'},
   realtime:{label:'实时模拟',icon:'模',url:()=>'/realtime-paper',desc:'真实行情驱动 paper trading，记录订单、成交、持仓、审计和图表 marker。'},
-  live:{label:'真实交易',icon:'实',url:()=>'/live-trading',desc:'QMT/PTrade 状态、确认队列、风控预检查和 kill switch。'},
+  live:{label:'真实交易',icon:'实',url:()=>'/live-trading',desc:'QMT、PTrade、本地 HTTP 券商桥、确认队列和紧急停止。'},
   records:{label:'交易记录',icon:'录',url:()=>'/trading-records',desc:'回测、模拟、真实交易统一流水。'},
   data:{label:'数据中心',icon:'数',url:()=>'/data-center',desc:'缓存、缺失字段、数据源错误、券商状态。'},
   docs:{label:'中文 API',icon:'?',url:()=>'/docs-cn',desc:'中文接口说明和调试入口。'}
@@ -325,7 +325,7 @@ function pct(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(2)+'%':'--
 function pnlClass(v){const n=Number(v);return n>0?'ok':n<0?'bad':''}
 function cnEnum(v){
   const raw=String(v??'').trim();
-  const map={macro:'宏观市场',global:'全球市场',market:'市场环境',company_event:'公司事件',market_macro:'宏观市场',news:'新闻资讯',announcement:'公司公告',policy:'政策信息',research:'研究信息',positive:'偏利好',negative:'偏利空',neutral:'中性',no_direct_mapping:'暂无直接映射',mapping_error:'映射失败',connected:'已连接',disabled:'已关闭',unsupported:'不支持',running:'运行中',paused:'已暂停',stopped:'已停止',buy:'买入',sell:'卖出',hold:'观察',add:'加仓',reduce:'减仓',avoid:'回避',needs_confirmation:'待人工确认',score_weighted:'评分加权',atr_risk:'波动风险仓位',volatility_target:'波动率目标',fixed_weight:'固定权重',core_satellite:'核心-卫星',cash_first_defensive:'现金优先防守',equal_risk_contribution:'等风险分配',hybrid:'综合评分',etf_momentum_rotation:'ETF动量轮动',score_reversal:'评分拐点修复',event_driven:'事件驱动'};
+  const map={macro:'宏观市场',global:'全球市场',market:'市场环境',company_event:'公司事件',market_macro:'宏观市场',news:'新闻资讯',announcement:'公司公告',policy:'政策信息',research:'研究信息',positive:'偏利好',negative:'偏利空',neutral:'中性',no_direct_mapping:'暂无直接映射',mapping_error:'映射失败',connected:'已连接',disconnected:'未连接',disabled:'已关闭',unsupported:'不支持',blocked:'已阻断',qmt:'迅投 QMT',ptrade:'PTrade',http_bridge:'本地 HTTP 券商桥',simulator:'本地模拟器',running:'运行中',paused:'已暂停',stopped:'已停止',buy:'买入',sell:'卖出',hold:'观察',add:'加仓',reduce:'减仓',avoid:'回避',needs_confirmation:'待人工确认',score_weighted:'评分加权',atr_risk:'波动风险仓位',volatility_target:'波动率目标',fixed_weight:'固定权重',core_satellite:'核心-卫星',cash_first_defensive:'现金优先防守',equal_risk_contribution:'等风险分配',hybrid:'综合评分',etf_momentum_rotation:'ETF动量轮动',score_reversal:'评分拐点修复',event_driven:'事件驱动'};
   return map[raw]||raw;
 }
 function cnAction(v){return cnEnum(v)||'观察'}
@@ -586,6 +586,18 @@ async function reviewLivePositions(btn=null){
     renderPositionReviews(js.data||[],'livePositionReviews',js.missing_reason||'当前没有可复核真实持仓。');
     $('auditLog').textContent=JSON.stringify(js,null,2);
     return js;
+  });
+}
+function renderReviewSchedule(js){
+  const row=js?.data||{};const last=js?.last_run||{};
+  const state=row.due?'已到期':(row.reason||'等待计划');
+  $('reviewScheduleStatus').innerHTML=`<b>每日持仓复核：</b>${esc(state)}｜上次 ${esc(last.review_date||'尚未运行')}｜下次 ${esc(row.next_run_at||'待计算')}<br><span class="muted">收盘后每日一次；只更新持仓评分和建议，不创建订单。</span>`;
+}
+async function runDuePositionReviews(btn=null){
+  return withAction(btn,'检查中','每日持仓复核检查完成',async()=>{
+    const js=await api('/api/position-reviews/scheduler/run-due',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({force:false})});
+    const status=await api('/api/position-reviews/scheduler/status');renderReviewSchedule(status);
+    $('auditLog').textContent=JSON.stringify(js,null,2);await refreshAll();return js;
   });
 }
 async function loadAgentDecision(force=false){
@@ -866,13 +878,14 @@ async function refreshAll(btn=null){return withAction(btn,'刷新中','总控台
     renderModuleCards();
     setText('scoreTime','正在更新核心状态…');
     const extraPromise=Promise.allSettled([api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),loadGlobalStream(false),api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80'),api('/api/market/sectors/mainline?limit=50&include_concept=true'),api('/api/realtime-paper/signals?limit=100'),api('/api/market/event-factors/'+encodeURIComponent(primarySymbol()))]);
-    const core=await Promise.allSettled([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/live/position-reviews?limit=50')]);
+    const core=await Promise.allSettled([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/live/position-reviews?limit=50'),api('/api/position-reviews/scheduler/status')]);
     const value=(idx,fallback={})=>core[idx].status==='fulfilled'?core[idx].value:fallback;
-    const broker=value(0),sessions=value(1,{data:[]}),records=value(2,{data:[],summary:{}}),data=value(3),queue=value(4,{data:[],count:0}),liveAccount=value(5),livePositions=value(6,{data:[]}),autoConfig=value(7,{data:{}}),readiness=value(8,{gates:{}}),liveReviews=value(9,{data:[]});
+    const broker=value(0),sessions=value(1,{data:[]}),records=value(2,{data:[],summary:{}}),data=value(3),queue=value(4,{data:[],count:0}),liveAccount=value(5),livePositions=value(6,{data:[]}),autoConfig=value(7,{data:{}}),readiness=value(8,{gates:{}}),liveReviews=value(9,{data:[]}),reviewSchedule=value(10,{data:{}});
     applyAutoConfig(autoConfig.data);
     renderConfigSummary(autoConfig.data,readiness);
     renderPortfolioOverview(liveAccount,livePositions,records);
     renderPositionReviews(liveReviews.data||[],'livePositionReviews','当前没有真实持仓复核记录。');
+    renderReviewSchedule(reviewSchedule);
     const brokerName=broker.broker?.broker||broker.config?.broker_type||'disabled';
     const brokerStatus=broker.broker?.status||broker.status||'disabled';
     $('brokerBadge').textContent=cnEnum(brokerName)+' / '+cnEnum(brokerStatus);

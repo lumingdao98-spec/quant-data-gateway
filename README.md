@@ -8,9 +8,11 @@
 - 海外科技风险、流动性变化和大额 IPO 可有限调整大盘环境，只有公司主营/产业链明确重合才调整个股信息；
 - `/api/realtime-paper/sessions/{session_id}/review-positions` 保存模拟持仓的成本、现价、盈亏、评分变化与持有/减仓/退出建议；
 - `/api/live/review-positions` 只读复核真实持仓，永不直接调用券商，减仓和退出仍需标准风控及人工确认；
-- 无 QMT/PTrade SDK 时仍可回测、模拟、批量预检查并保存待确认票据，但不会伪造成券商委托或真实成交。
+- `/api/position-reviews/scheduler/status` 和 `/api/position-reviews/scheduler/run-due` 提供可恢复的每日持仓复评调度；
+- 无 QMT/PTrade SDK 时仍可回测、模拟、批量预检查并保存待确认票据；如用户已有合规授权的本地交易桥，可选择 `http_bridge` 适配器，否则不会伪造成券商委托或真实成交；
+- 浏览器不能绕过人工确认：批准时会重新校验服务器行情、评分溯源、风控、交易时段、券商连接、现金/持仓和重复订单。
 
-详细规则见 `docs/V325_MARKET_EVENT_POSITION_REVIEW.md`。
+详细规则见 `docs/V325_MARKET_EVENT_POSITION_REVIEW.md` 和 `docs/V325_PROGRAMMATIC_BROKER_BRIDGE.md`。
 
 ## V3.24 Live Sync / PIT / Ledger
 

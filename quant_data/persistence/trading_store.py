@@ -24,6 +24,7 @@ TABLES = (
     "paper_sessions",
     "live_sessions",
     "position_reviews",
+    "position_review_runs",
 )
 
 NORMALIZED_TABLE_SCHEMAS = {

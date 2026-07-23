@@ -24,6 +24,10 @@ class BrokerConfig:
     ptrade_account_id: str = ""
     ptrade_module: str = "ptrade"
     ptrade_client_factory: str = ""
+    http_bridge_url: str = ""
+    http_bridge_token: str = ""
+    http_bridge_allow_remote: bool = False
+    http_bridge_timeout_seconds: float = 5.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,7 +41,7 @@ def load_broker_config(env: dict[str, str] | None = None) -> BrokerConfig:
         feature_live_broker=_bool(data.get("FEATURE_LIVE_BROKER"), False),
         order_confirm_required=_bool(data.get("ORDER_CONFIRM_REQUIRED"), True),
         live_kill_switch=_bool(data.get("LIVE_KILL_SWITCH"), False),
-        trade_whitelist_symbols=_csv(data.get("TRADE_WHITELIST_SYMBOLS", "")),
+        trade_whitelist_symbols=_csv_normalized(data.get("TRADE_WHITELIST_SYMBOLS", "")),
         max_live_order_value=float(data.get("MAX_LIVE_ORDER_VALUE") or 50_000),
         max_daily_live_order_count=int(data.get("MAX_DAILY_LIVE_ORDER_COUNT") or 5),
         max_daily_loss_pct=float(data.get("MAX_DAILY_LOSS_PCT") or 0.03),
@@ -49,11 +53,22 @@ def load_broker_config(env: dict[str, str] | None = None) -> BrokerConfig:
         ptrade_account_id=data.get("PTRADE_ACCOUNT_ID", ""),
         ptrade_module=data.get("PTRADE_MODULE", "ptrade"),
         ptrade_client_factory=data.get("PTRADE_CLIENT_FACTORY", ""),
+        http_bridge_url=data.get("BROKER_HTTP_URL", "").strip(),
+        http_bridge_token=data.get("BROKER_HTTP_TOKEN", "").strip(),
+        http_bridge_allow_remote=_bool(data.get("BROKER_HTTP_ALLOW_REMOTE"), False),
+        http_bridge_timeout_seconds=max(1.0, min(30.0, float(data.get("BROKER_HTTP_TIMEOUT_SECONDS") or 5.0))),
     )
 
 
 def _csv(value: str) -> list[str]:
     text = str(value or "").replace("，", ",").replace("；", ",").replace(";", ",").replace("\n", ",")
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def _csv_normalized(value: str) -> list[str]:
+    text = str(value or "")
+    for separator in (";", "\n", "\r", "\uff0c", "\uff1b", "\u3001"):
+        text = text.replace(separator, ",")
     return [item.strip() for item in text.split(",") if item.strip()]
 
 

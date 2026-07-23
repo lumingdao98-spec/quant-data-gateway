@@ -12,6 +12,7 @@ from .realtime_paper_engine import RealtimePaperEngine
 from .realtime_state import RealtimePaperConfig, RealtimePaperState
 from .signal_fusion import SignalFusionConfig, SignalFusionEngine, UnifiedSignal
 from .position_review_service import PositionReviewService
+from .position_review_scheduler import PositionReviewScheduler, PositionReviewScheduleDecision
 
 __all__ = [
     "AuditEvent",
@@ -31,6 +32,8 @@ __all__ = [
     "PaperPosition",
     "PaperTradingGateway",
     "PositionReviewService",
+    "PositionReviewScheduler",
+    "PositionReviewScheduleDecision",
     "RealtimePaperConfig",
     "RealtimePaperEngine",
     "RealtimePaperState",

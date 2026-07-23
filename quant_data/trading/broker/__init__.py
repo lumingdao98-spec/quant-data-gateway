@@ -14,6 +14,7 @@ from .broker_models import (
     LiveOrderRequest,
 )
 from .disabled import DisabledBrokerAdapter
+from .http_bridge_adapter import HttpBridgeBrokerAdapter
 from .ptrade_adapter import PTradeBrokerAdapter
 from .qmt_adapter import QmtBrokerAdapter
 from .simulator_adapter import SimulatorBrokerAdapter
@@ -29,6 +30,7 @@ __all__ = [
     "BrokerTrade",
     "CancelOrderResult",
     "DisabledBrokerAdapter",
+    "HttpBridgeBrokerAdapter",
     "LiveOrderAck",
     "LiveOrderRequest",
     "PTradeBrokerAdapter",
