@@ -93,6 +93,7 @@ from quant_data.trading import (
     AnomalyGuard,
     DataFreshnessGuard,
     PaperTradingGateway,
+    PositionReviewService,
     RealtimePaperEngine,
     SignalFusionEngine,
     TradingSignal,
@@ -152,6 +153,7 @@ stock_classifier_v323 = StockClassifierV323()
 strategy_suitability_v323 = StrategySuitabilityV323()
 live_trading_engine_v323 = LiveTradingEngine(store=trading_store_v323)
 realtime_paper_engine_v323 = RealtimePaperEngineV323(realtime_paper_engine_v321, trading_store_v323)
+position_review_service_v325 = PositionReviewService(trading_store_v323)
 score_provenance_memory_v323: dict[str, dict] = {}
 _background_jobs: set[str] = set()
 _background_jobs_lock = Lock()
@@ -280,6 +282,11 @@ def _render_chinese_api_docs() -> str:
                 ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
                 ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
+                ("GET", "/api/market/event-factors/{symbol}", "读取可追溯市场事件因子，分别返回大盘环境与个股信息调整、来源链接、时间和传导链。"),
+                ("POST", "/api/realtime-paper/sessions/{session_id}/review-positions", "按最新真实缓存复核模拟持仓；保存持有/减仓/退出建议，但接口本身不创建订单。"),
+                ("GET", "/api/realtime-paper/sessions/{session_id}/position-reviews", "读取模拟持仓每日复核记录、评分变化、成本、盈亏和数据缺失原因。"),
+                ("POST", "/api/live/review-positions", "只读复核真实券商持仓；不会调用券商下单，减仓/退出仍需风控和人工确认。"),
+                ("GET", "/api/live/position-reviews", "读取真实持仓复核记录；broker_submitted 始终为 false。"),
                 ("GET", "/api/news/jin10/realtime", "金十/金十期货直连快讯流；优先公开 JSON 接口，页面摘要兜底，不抓搜索结果页。"),
                 ("GET", "/api/agent/market-brief", "联网证据代理：聚合金十快讯、全球宏观事件、评分溯源和实盘安全状态，只做辅助判断，不自动下单。"),
                 ("POST", "/api/live/orders/preview-batch", "真实交易多股票批量预检查；逐只经过风控、白名单、kill switch 和确认要求，不会直接下单。"),
@@ -4194,6 +4201,46 @@ def _hydrate_realtime_tick_payload(payload: dict | None) -> dict:
     return out
 
 
+def _current_position_review_decision(
+    symbol: str,
+    *,
+    name: str = "",
+    profile: dict | None = None,
+    session_symbols: list[str] | None = None,
+) -> dict:
+    payload: dict[str, Any] = {"symbol": symbol, "name": name or symbol}
+    try:
+        quote_obj = service.cache.get_quote(symbol, max_age_seconds=None)
+    except Exception:
+        quote_obj = None
+    if quote_obj is None:
+        try:
+            quote_obj = service.get_quote(symbol, force_refresh=False)
+        except Exception as exc:
+            payload["missing_data"] = ["持仓行情快照缺失"]
+            payload["quote_error"] = str(exc)[:180]
+    if quote_obj is not None:
+        payload["quote"] = quote_obj.to_dict() if hasattr(quote_obj, "to_dict") else dict(getattr(quote_obj, "__dict__", {}) or {})
+        payload["price"] = payload["quote"].get("last") or payload["quote"].get("price")
+        payload["quote_price"] = payload["price"]
+    hydrated = realtime_decision_service.hydrate(
+        payload,
+        profile=dict(profile or {}),
+        symbols=session_symbols or [symbol],
+    )
+    decision = position_review_service_v325.decision_from_payload(hydrated)
+    decision.update(
+        {
+            "name": hydrated.get("name") or name or symbol,
+            "quote_price": hydrated.get("price") or (hydrated.get("quote") or {}).get("last"),
+            "market_event_context": dict(hydrated.get("market_event_context") or {}),
+            "recent_information": dict(hydrated.get("recent_information") or {}),
+            "score_source": hydrated.get("score_source"),
+        }
+    )
+    return decision
+
+
 @app.post("/api/realtime-paper/tick")
 def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
     payload = dict(payload or {})
@@ -4219,6 +4266,20 @@ def realtime_paper_tick(payload: dict = Body(default_factory=dict)) -> dict:
     payload["market_session_verified"] = True
     payload = _hydrate_realtime_tick_payload(payload)
     result = realtime_paper_engine_v323.tick(payload, manual_replay=False)
+    signal = result.get("signal") if isinstance(result.get("signal"), dict) else {}
+    portfolio = result.get("portfolio") if isinstance(result.get("portfolio"), dict) else {}
+    position = dict((portfolio.get("positions") or {}).get(symbol) or {})
+    if signal and position:
+        session_id = str(result.get("session_id") or payload.get("session_id") or realtime_paper_engine_v323.active_session_id or "")
+        session = realtime_paper_engine_v323.get_session(session_id) or {}
+        result["position_review"] = position_review_service_v325.review(
+            mode="realtime_paper",
+            session_id=session_id,
+            symbol=symbol,
+            position=position,
+            decision=signal,
+            risk_controls=dict((session.get("config") or {}).get("risk_controls") or {}),
+        )
     result["market_session"] = market_session
     return result
 
@@ -4442,6 +4503,57 @@ def realtime_paper_session_positions(session_id: str) -> dict:
         "curve": data.get("curve") or [],
         "session_id": session_id,
     }
+
+
+@app.post("/api/realtime-paper/sessions/{session_id}/review-positions")
+def realtime_paper_review_positions(session_id: str) -> dict:
+    session = realtime_paper_engine_v323.get_session(session_id)
+    if not session:
+        return {"ok": False, "message": "实时模拟会话不存在", "data": []}
+    stored = realtime_paper_engine_v323.stored_positions(session_id)
+    positions = list((stored[0] if stored else {}).get("positions") or [])
+    config = dict(session.get("config") or {})
+    signal_map = config.get("screener_signal_map") if isinstance(config.get("screener_signal_map"), dict) else {}
+    rows: list[dict] = []
+    for position in positions:
+        symbol = normalize_symbol(str(position.get("symbol") or ""))
+        if not symbol:
+            continue
+        decision = _current_position_review_decision(
+            symbol,
+            name=str(position.get("name") or (signal_map.get(symbol) or {}).get("name") or symbol),
+            profile=dict(signal_map.get(symbol) or {}),
+            session_symbols=list(session.get("symbols") or []),
+        )
+        rows.append(
+            position_review_service_v325.review(
+                mode="realtime_paper",
+                session_id=session_id,
+                symbol=symbol,
+                position=position,
+                decision=decision,
+                risk_controls=dict(config.get("risk_controls") or {}),
+            )
+        )
+    return {
+        "ok": True,
+        "data": rows,
+        "count": len(rows),
+        "held_count": len(positions),
+        "session_id": session_id,
+        "message": f"已复核 {len(rows)}/{len(positions)} 只模拟持仓；该接口本身不创建订单。",
+    }
+
+
+@app.get("/api/realtime-paper/sessions/{session_id}/position-reviews")
+def realtime_paper_position_reviews(session_id: str, symbol: str = "", limit: int = 200) -> dict:
+    rows = position_review_service_v325.list_reviews(
+        mode="realtime_paper",
+        session_id=session_id,
+        symbol=normalize_symbol(symbol) if symbol else "",
+        limit=max(1, min(int(limit or 200), 1000)),
+    )
+    return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
 @app.get("/api/realtime-paper/sessions/{session_id}/markers")
@@ -4887,6 +4999,58 @@ def live_positions() -> dict:
         "source": source,
         "missing_reason": "" if rows else "当前券商未返回持仓；可能是 disabled/unsupported、未授权或账户暂无持仓。",
     }
+
+
+@app.post("/api/live/review-positions")
+def live_review_positions() -> dict:
+    synced = live_trading_engine_v323.sync_live_account_state()
+    positions = [_normalize_live_position(x) for x in synced.get("positions") or []]
+    config_read = cache_state_service.get("auto_trading_config", "default", allow_stale=True)
+    config = dict(config_read.data or {})
+    signal_map = config.get("screener_signal_map") if isinstance(config.get("screener_signal_map"), dict) else {}
+    symbols = [str(row.get("symbol") or "") for row in positions if row.get("symbol")]
+    session_id = str(synced.get("session_id") or live_trading_engine_v323.session.session_id)
+    rows: list[dict] = []
+    for position in positions:
+        symbol = normalize_symbol(str(position.get("symbol") or ""))
+        if not symbol:
+            continue
+        decision = _current_position_review_decision(
+            symbol,
+            name=str(position.get("name") or (signal_map.get(symbol) or {}).get("name") or symbol),
+            profile=dict(signal_map.get(symbol) or {}),
+            session_symbols=symbols,
+        )
+        rows.append(
+            position_review_service_v325.review(
+                mode="live",
+                session_id=session_id,
+                symbol=symbol,
+                position=position,
+                decision=decision,
+                risk_controls=dict(config.get("risk_controls") or {}),
+            )
+        )
+    return {
+        "ok": True,
+        "data": rows,
+        "count": len(rows),
+        "held_count": len(positions),
+        "session_id": session_id,
+        "broker_submitted": False,
+        "message": f"已复核 {len(rows)}/{len(positions)} 只真实持仓；复核结果不会直接下单，减仓/退出仍需风控和人工确认。",
+        "missing_reason": "" if positions else "券商未连接/未授权或账户暂无持仓。",
+    }
+
+
+@app.get("/api/live/position-reviews")
+def live_position_reviews(symbol: str = "", limit: int = 200) -> dict:
+    rows = position_review_service_v325.list_reviews(
+        mode="live",
+        symbol=normalize_symbol(symbol) if symbol else "",
+        limit=max(1, min(int(limit or 200), 1000)),
+    )
+    return {"ok": True, "data": rows, "count": len(rows), "broker_submitted": False}
 
 
 @app.get("/api/live/orders")
@@ -7222,6 +7386,25 @@ def macro_global_events(limit: int = 80, force: bool = False) -> dict:
         "cache_status": cache_status,
         "agent_status": "联网辅助：使用真实全球信息面/缓存做规则归因；未接入外部 LLM 下单。",
         "disclaimer": "宏观事件只作为风险和解释变量，不单独构成买卖建议；无真实来源时显示等待真实来源。",
+    }
+
+
+@app.get("/api/market/event-factors/{symbol}")
+def market_event_factors(symbol: str) -> dict:
+    normalized = normalize_symbol(symbol)
+    profile = company_profile_service.get_profile(normalized, force=False, local_only=True)
+    name = str(profile.get("name") or normalized)
+    context = realtime_decision_service.market_event_factors.build_context(
+        symbol=normalized,
+        name=name,
+        profile=profile,
+    )
+    return {
+        "ok": True,
+        "symbol": normalized,
+        "name": name,
+        "data": context,
+        "message": "只读取可追溯缓存并区分市场环境与个股信息；不会因接口调用而抓取或伪造新闻。",
     }
 
 

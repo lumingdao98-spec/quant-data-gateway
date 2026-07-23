@@ -30,11 +30,37 @@ RULES: list[dict[str, Any]] = [
     },
     {
         "key": "ai_semiconductor",
-        "keywords": ["人工智能", "AI", "算力", "芯片", "半导体", "存储芯片", "出口管制"],
+        "keywords": ["人工智能", "AI", "算力", "芯片", "半导体", "存储芯片", "出口管制", "科技股", "费城半导体"],
         "industries": ["半导体", "算力基础设施", "电子", "通信设备"],
         "concepts": ["人工智能", "国产替代", "芯片", "算力"],
         "symbols": [],
         "reason": "算力需求、芯片周期和出口限制会改变半导体及电子产业链景气预期。",
+    },
+    {
+        "key": "dram_memory_chain",
+        "keywords": ["长鑫科技", "长鑫存储", "DRAM", "动态随机存取存储器", "存储器", "存储芯片", "内存芯片"],
+        "industries": ["存储芯片", "半导体设备", "半导体材料", "集成电路"],
+        "concepts": ["国产存储", "半导体", "国产替代", "DRAM"],
+        "symbols": [],
+        "reason": "DRAM 产能、价格、资本开支和上市融资会影响存储芯片、半导体设备及材料产业链预期。",
+    },
+    {
+        "key": "large_ipo_liquidity",
+        "keywords": ["IPO", "首次公开发行", "发行上市", "申购", "募集资金", "募资", "战略配售"],
+        "industries": ["资本市场"],
+        "concepts": ["IPO资金分流", "新股供给"],
+        "symbols": [],
+        "reason": "大额新股发行可能在申购、缴款和上市窗口占用市场资金，但影响强度必须以真实发行规模和时间为依据。",
+        "market_wide": True,
+    },
+    {
+        "key": "global_technology_risk",
+        "keywords": ["纳斯达克", "科技股抛售", "芯片股抛售", "半导体股下跌", "AI交易", "人工智能泡沫"],
+        "industries": ["高估值成长", "科技成长", "半导体"],
+        "concepts": ["全球科技风险", "风险偏好", "估值折现"],
+        "symbols": [],
+        "reason": "海外科技与半导体风险偏好变化会通过估值、外资和情绪传导至A股成长板块。",
+        "market_wide": True,
     },
     {
         "key": "robot_low_altitude",
@@ -224,6 +250,7 @@ class GlobalIndustryMapper:
         overlap = exposure_words.intersection(set(industries + concepts))
         direct = symbol in symbols
         market_wide = any(bool(rule.get("market_wide")) for rule in hit_rules)
+        rule_keys = [str(rule.get("key") or "") for rule in hit_rules]
         relevance = 18 if not hit_rules else 32 + len(hit_rules) * 10 + len(overlap) * 12 + (20 if direct else 0) + (5 if market_wide else 0)
         relevance = max(0, min(100, relevance))
         positive_words = ["利好", "支持", "增长", "降息", "补贴", "中标", "需求上升", "回暖"]
@@ -252,4 +279,22 @@ class GlobalIndustryMapper:
             "included_in_score": included,
             "score_included": included,
             "market_wide": market_wide,
+            "matched_rule_keys": rule_keys,
+            "impact_scope_cn": "市场环境" if market_wide and not included else "个股产业链" if included else "背景信息",
+            "transmission_chain": self._transmission_chain(rule_keys, bool(overlap or direct), market_wide),
         }
+
+    @staticmethod
+    def _transmission_chain(rule_keys: list[str], symbol_related: bool, market_wide: bool) -> list[str]:
+        chain: list[str] = []
+        if "global_technology_risk" in rule_keys or "ai_semiconductor" in rule_keys:
+            chain.extend(["海外科技/半导体风险偏好", "成长估值与外资情绪", "A股科技板块"])
+        if "global_liquidity" in rule_keys:
+            chain.extend(["海外利率与美元流动性", "估值折现/汇率", "A股市场环境"])
+        if "large_ipo_liquidity" in rule_keys:
+            chain.extend(["IPO申购与缴款", "短期资金占用", "A股流动性"])
+        if "dram_memory_chain" in rule_keys and symbol_related:
+            chain.extend(["DRAM供需与资本开支", "设备/材料/存储产业链", "公司业务暴露"])
+        if market_wide and not symbol_related and not chain:
+            chain.append("市场级变量")
+        return list(dict.fromkeys(chain))

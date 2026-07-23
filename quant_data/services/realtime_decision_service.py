@@ -5,6 +5,8 @@ from typing import Any, Iterable
 
 from quant_data.models import Bar, IntradayPoint, Quote
 
+from .market_event_factor_service import MarketEventFactorService
+
 
 def _number(value: Any) -> float | None:
     try:
@@ -57,10 +59,17 @@ class RealtimeDecisionService:
     It deliberately performs no network I/O; a missing input stays missing.
     """
 
-    def __init__(self, market_data: Any, cache_state: Any, market_regime: Any) -> None:
+    def __init__(
+        self,
+        market_data: Any,
+        cache_state: Any,
+        market_regime: Any,
+        market_event_factors: MarketEventFactorService | None = None,
+    ) -> None:
         self.market_data = market_data
         self.cache_state = cache_state
         self.market_regime = market_regime
+        self.market_event_factors = market_event_factors or MarketEventFactorService(cache_state)
 
     def hydrate(
         self,
@@ -105,6 +114,23 @@ class RealtimeDecisionService:
 
         info = self._recent_information(symbol, profile)
         market = self._market_score(symbols or [], profile)
+        event_context = self.market_event_factors.build_context(
+            symbol=symbol,
+            name=str(out.get("name") or profile.get("name") or symbol),
+            profile=profile,
+        )
+        adjusted = self.market_event_factors.apply_scores(
+            event_context,
+            market_score=_number(market.get("score")),
+            information_score=_number(info.get("score")),
+        )
+        info["base_score"] = info.get("score")
+        info["score"] = adjusted.get("information_score")
+        info["event_adjustment"] = adjusted.get("information_adjustment")
+        market["base_score"] = market.get("score")
+        market["score"] = adjusted.get("market_score")
+        market["event_adjustment"] = adjusted.get("market_adjustment")
+        market["event_factors"] = [row for row in event_context.get("factors", []) if row.get("scope") == "市场环境"]
 
         screening_score = _number(profile.get("final_score"))
         if screening_score is None:
@@ -128,11 +154,12 @@ class RealtimeDecisionService:
                 "news_ts": info.get("latest_published_at"),
                 "recent_information": info,
                 "market_regime": market,
+                "market_event_context": event_context,
                 "orderbook_snapshot": self._orderbook_summary(quote),
             }
         )
 
-        if info.get("negative_veto"):
+        if info.get("negative_veto") or event_context.get("negative_veto"):
             out["info_negative_veto"] = True
             out["major_negative_news"] = True
 
@@ -157,6 +184,7 @@ class RealtimeDecisionService:
                 "information": info.get("source"),
                 "fund_flow": flow.get("source"),
                 "market": market.get("source"),
+                "market_events": "全球要闻/IPO/板块真实缓存",
             }
         )
         existing.update(
@@ -174,6 +202,10 @@ class RealtimeDecisionService:
                 "recent_information_count": info.get("recent_count", 0),
                 "recent_information_latest": info.get("latest_published_at"),
                 "excluded_information_count": info.get("excluded_count", 0),
+                "market_event_adjustment": adjusted.get("market_adjustment"),
+                "information_event_adjustment": adjusted.get("information_adjustment"),
+                "event_factor_count": event_context.get("factor_count", 0),
+                "event_factors": event_context.get("factors", []),
             }
         )
         out["score_breakdown"] = existing
@@ -184,8 +216,10 @@ class RealtimeDecisionService:
                 f"服务端实时择时：日K {self._display(daily_score)} / 分时 {self._display(intraday_score)}",
                 f"近期信息：{info.get('recent_count', 0)} 条，历史/无日期排除 {info.get('excluded_count', 0)} 条",
                 f"盘口：{self._display(self._best_price(quote, 'bid'))} / {self._display(self._best_price(quote, 'ask'))}，来源 {quote.get('orderbook_source') or '缺失'}",
+                f"市场事件调整：大盘 {adjusted.get('market_adjustment', 0):+.2f} / 个股信息 {adjusted.get('information_adjustment', 0):+.2f}，证据 {event_context.get('factor_count', 0)} 项",
             ]
         )
+        evidence.extend(event_context.get("evidence") or [])
         out["evidence"] = list(dict.fromkeys(evidence))
         return out
 
@@ -362,21 +396,28 @@ class RealtimeDecisionService:
             cache_status = dict(cached.cache_status or {})
         except Exception:
             data, cache_status = {}, {"status": "error", "stale": True}
-        items: list[dict[str, Any]] = []
-        for bucket in (
-            data.get("items"),
-            (data.get("news") or {}).get("items") if isinstance(data.get("news"), dict) else None,
-            data.get("global_items"),
-            data.get("industry_mapped_items"),
+        items: list[tuple[str, dict[str, Any]]] = []
+        for bucket_name, bucket in (
+            ("items", data.get("items")),
+            ("news", (data.get("news") or {}).get("items") if isinstance(data.get("news"), dict) else None),
+            ("global", data.get("global_items")),
+            ("mapped_global", data.get("industry_mapped_items")),
         ):
             for item in bucket or []:
                 if isinstance(item, dict):
-                    items.append(dict(item))
+                    items.append((bucket_name, dict(item)))
         unique: dict[str, dict[str, Any]] = {}
         recent: list[dict[str, Any]] = []
         excluded = 0
         now = datetime.now()
-        for item in items:
+        global_unmapped_excluded = 0
+        for bucket_name, item in items:
+            if bucket_name in {"global", "mapped_global"} and not bool(
+                item.get("included_in_score") or item.get("score_included") or item.get("is_related_to_symbol")
+            ):
+                excluded += 1
+                global_unmapped_excluded += 1
+                continue
             source_type = str(item.get("source_type") or item.get("type") or "news").lower()
             if source_type in {"forum", "community", "search"}:
                 excluded += 1
@@ -439,6 +480,7 @@ class RealtimeDecisionService:
             "has_recent": bool(recent),
             "recent_count": len(recent),
             "excluded_count": excluded,
+            "global_unmapped_excluded": global_unmapped_excluded,
             "latest_published_at": latest,
             "snapshot_id": data.get("snapshot_id") or cache_status.get("snapshot_id"),
             "snapshot_at": data.get("created_at") or cache_status.get("created_at"),

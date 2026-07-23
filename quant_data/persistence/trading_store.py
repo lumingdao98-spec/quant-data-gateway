@@ -23,6 +23,7 @@ TABLES = (
     "manual_confirmations",
     "paper_sessions",
     "live_sessions",
+    "position_reviews",
 )
 
 NORMALIZED_TABLE_SCHEMAS = {

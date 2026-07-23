@@ -99,6 +99,14 @@ def test_auto_trading_workbench_page_visible():
     assert "这个分数怎么来的" in html
     assert "scoreExplain" in html
     assert "renderScoreExplain" in html
+    assert "/api/market/event-factors/" in html
+    assert "市场事件调整" in html
+    assert "event-factor-list" in html
+    assert "复核全部持仓" in html
+    assert "只读持仓复核" in html
+    assert "/position-reviews?limit=50" in html
+    assert "/review-positions" in html
+    assert "renderPositionReviews" in html
     assert "高级自定义（完整策略目录与逐项参数）" in html
     assert "按股票池推荐" in html
     assert "波段观察" in html

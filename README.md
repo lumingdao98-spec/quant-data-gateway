@@ -1,5 +1,17 @@
 # Quant Data Gateway V3.18.3 / Stable Recovery
 
+## V3.25 Market Intelligence / Position Review
+
+在 V3.24 交易内核之上新增可追溯市场事件调分和每日持仓复核，不修改已稳定的评分权重与映射核心：
+
+- `/api/market/event-factors/{symbol}` 区分“大盘环境”和“个股信息”，只读取带时间、来源和链接的真实缓存；
+- 海外科技风险、流动性变化和大额 IPO 可有限调整大盘环境，只有公司主营/产业链明确重合才调整个股信息；
+- `/api/realtime-paper/sessions/{session_id}/review-positions` 保存模拟持仓的成本、现价、盈亏、评分变化与持有/减仓/退出建议；
+- `/api/live/review-positions` 只读复核真实持仓，永不直接调用券商，减仓和退出仍需标准风控及人工确认；
+- 无 QMT/PTrade SDK 时仍可回测、模拟、批量预检查并保存待确认票据，但不会伪造成券商委托或真实成交。
+
+详细规则见 `docs/V325_MARKET_EVENT_POSITION_REVIEW.md`。
+
 ## V3.24 Live Sync / PIT / Ledger
 
 V3.24 在 V3.23 自动交易核心上补齐多股票实盘批量预检查、QMT/PTrade 安全适配、账户/持仓/委托/成交同步、统一策略族、FIFO 持仓批次、跨模式账本与新闻/财报/IPO 的 point-in-time 事件查询。既有评分权重和映射逻辑不重写。
@@ -85,6 +97,7 @@ python -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 
 常用页面：
 
+- `http://127.0.0.1:8001/auto-trading`：自动交易总控台，统一进入筛选、回测、实时模拟、实盘安全、记录和数据中心。
 - `http://127.0.0.1:8001/screener`：筛选页，默认精简视图，可恢复上次筛选。
 - `http://127.0.0.1:8001/info?symbol=300274&name=阳光电源`：信息详情页，自动读取快照或普通刷新。
 - `http://127.0.0.1:8001/ui`：行情监控与 K 线详情。
@@ -95,6 +108,14 @@ python -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 - `http://127.0.0.1:8001/cache`：缓存状态。
 - `http://127.0.0.1:8001/backtest`：legacy 单票快速回测页，页面会显式提示不作为科学组合回测。
 - `http://127.0.0.1:8001/trading`：V3.20 纸面交易风控网关，不连接真实券商。
+
+新增解释与复核接口：
+
+- `GET /api/market/event-factors/{symbol}`
+- `POST /api/realtime-paper/sessions/{session_id}/review-positions`
+- `GET /api/realtime-paper/sessions/{session_id}/position-reviews`
+- `POST /api/live/review-positions`
+- `GET /api/live/position-reviews`
 
 ## V3.20 回测体系说明
 
