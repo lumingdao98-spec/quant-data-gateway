@@ -113,6 +113,14 @@ def test_auto_trading_workbench_page_visible():
     assert "affected_companies" in html
     assert "证券代码" in html
     assert "暂无直接映射" in html
+    assert "首页只保留快速配置" in html
+    assert "展开完整配置与逐项参数" in html
+    assert ".hero>.panel:nth-child(2)>.panel-b{max-height:248px" in html
+    assert ".grid-main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))" in html
+    assert ".grid-main>.stack{display:grid;gap:14px;align-content:start" in html
+    assert "function arrangeDashboardPanels" in html
+    assert "const columns=[[6,0],[3,1,2],[4,5,7]]" in html
+    assert ".sector-table-wrap{overflow:auto;max-width:100%;max-height:280px" in html
 
 
 def test_auto_trading_workbench_uses_single_right_overlay_iframe():

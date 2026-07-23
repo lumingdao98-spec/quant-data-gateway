@@ -5975,10 +5975,27 @@ def screener_add_to_live_watch_v323(payload: dict = Body(default_factory=dict)) 
 
 @app.get("/api/chart/{symbol}/markers")
 def chart_markers_v323(symbol: str, mode: str = "", limit: int = 300) -> dict:
-    rows = chart_annotation_service_v323.list_markers(symbol, mode=mode or None, limit=max(1, min(int(limit or 300), 1000)))
-    if not rows:
-        stored = trading_store_v323.list("chart_markers", mode=mode, symbol=symbol, limit=limit)
-        rows = stored
+    max_limit = max(1, min(int(limit or 300), 1000))
+    memory_rows = chart_annotation_service_v323.list_markers(symbol, mode=mode or None, limit=max_limit)
+    stored_rows = trading_store_v323.list("chart_markers", mode=mode, symbol=symbol, limit=max_limit)
+    rows = []
+    seen: set[str] = set()
+    for row in [*stored_rows, *memory_rows]:
+        marker_id = str(row.get("marker_id") or row.get("id") or "")
+        key = marker_id or "|".join(
+            [
+                str(row.get("mode") or ""),
+                str(row.get("timestamp") or row.get("created_at") or ""),
+                str(row.get("marker_type") or row.get("type") or ""),
+                str(row.get("order_id") or row.get("fill_id") or ""),
+            ]
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    rows.sort(key=lambda row: str(row.get("timestamp") or row.get("created_at") or ""))
+    rows = rows[-max_limit:]
     return {"ok": True, "symbol": symbol, "mode": mode, "data": rows, "count": len(rows)}
 
 

@@ -72,4 +72,14 @@ def test_kline_marker_panel_is_collapsible_and_separate():
     assert "function toggleMarkerPanel" in html
     assert "marker-toggle" in html
     assert "marker-row" in html
-    assert "近7日异常/K线标注" in html
+    assert "近7日交易/异常标注" in html
+    assert "统一交易标注" in html
+    assert "/api/chart/'+currentSymbol+'/markers?limit=500" in html
+    assert "buy_order_submitted" in html
+    assert "sell_order_submitted" in html
+    assert "buy_fill" in html
+    assert "sell_fill" in html
+    assert "needs_confirmation" in html
+    assert "function markerGlyph" in html
+    assert "filled:'全部成交'" in html
+    assert "if(stack>=6)return" in html
