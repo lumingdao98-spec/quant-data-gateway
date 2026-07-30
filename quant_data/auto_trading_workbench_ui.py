@@ -173,15 +173,15 @@ def build_auto_trading_workbench_ui() -> str:
               </div>
               <div id="strategyRecommendation" class="recommend-box">组合原则：选 1 个主策略，配 2-3 个确认因子，再保留风险、数据质量和大盘环境门控；不建议把全部策略同时勾选。</div>
               <div id="strategySelectedSummary" class="notice" style="margin-bottom:10px">已选策略会在这里翻译成中文。</div>
-              <details class="advanced-box">
+              <details class="advanced-box" id="strategyAdvancedDetails" ontoggle="onStrategyEditorToggle(this)">
                 <summary>高级自定义（完整策略目录与逐项参数）</summary>
                 <div class="advanced-body">
                   <div class="field"><label>内部策略标识（通常无需手工编辑）</label><textarea class="compact" id="strategyCombo" oninput="renderStrategyCatalog(lastAutoConfig||{})">score_driven, low_position, avoid_chasing_high, ma_repair, macd_cross, volume_breakout, atr_risk, position_risk, risk_control, event_driven, finance_quality, market_regime</textarea></div>
-                  <div class="strategy-catalog" id="strategyCatalog"></div>
+                  <div class="strategy-catalog" id="strategyCatalog"><div class="notice">展开高级自定义后加载完整策略目录。</div></div>
                   <div class="strategy-param-wrap" style="margin-top:10px">
                     <table class="strategy-param">
                       <thead><tr><th>策略</th><th>启用</th><th>仓位模型</th><th>单票%</th><th>止损%</th><th>止盈%</th><th>最大回撤%</th><th>买入分</th><th>卖出分</th></tr></thead>
-                      <tbody id="strategyParamRows"><tr><td colspan="9" class="muted">选择策略或一键配置后生成</td></tr></tbody>
+                      <tbody id="strategyParamRows"><tr><td colspan="9" class="muted">展开高级自定义后加载逐项参数。</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -312,6 +312,8 @@ let globalStreamPromise=null;
 let workbenchRefreshPromise=null;
 let globalTickerPaused=false;
 let globalStreamRefreshMs=20000;
+let strategyEditorHydrated=false;
+let deferredStrategyConfig=null;
 function arrangeDashboardPanels(){
   const grid=document.querySelector('.grid-main');
   if(!grid||grid.dataset.arranged==='1')return;
@@ -420,12 +422,22 @@ function setComboFromList(list){
   renderStrategyCatalog(lastAutoConfig||{});
   renderWorkflow();
 }
+function strategyEditorIsOpen(){return !!$('strategyAdvancedDetails')?.open}
+function onStrategyEditorToggle(details){
+  if(!details?.open||strategyEditorHydrated)return;
+  strategyEditorHydrated=true;
+  renderStrategyCatalog(deferredStrategyConfig||lastAutoConfig||{});
+}
 function renderStrategyCatalog(cfg){
-  const catalog=cfg?.strategy_catalog||[];
+  deferredStrategyConfig=cfg||deferredStrategyConfig||lastAutoConfig||{};
+  const activeCfg=deferredStrategyConfig;
+  const catalog=activeCfg?.strategy_catalog||[];
   const selected=currentComboSet();
   $('strategyCatalogHint').textContent=`已选 ${selected.size} 项 / 可用 ${catalog.length} 项`;
-  renderStrategySelectionSummary(cfg);
-  renderStrategyParamEditor(cfg);
+  renderStrategySelectionSummary(activeCfg);
+  if(!strategyEditorHydrated&&!strategyEditorIsOpen())return;
+  strategyEditorHydrated=true;
+  renderStrategyParamEditor(activeCfg);
   if(!catalog.length){$('strategyCatalog').innerHTML='<div class="notice">策略目录暂未返回，仍可手动输入策略 key。</div>';return}
   $('strategyCatalog').innerHTML=catalog.map(item=>{
     const key=String(item.key||'');
@@ -436,7 +448,17 @@ function renderStrategyCatalog(cfg){
 function toggleStrategyFromCatalog(el){const set=currentComboSet();if(el.checked)set.add(el.dataset.strategyKey);else set.delete(el.dataset.strategyKey);setComboFromList([...set])}
 function collectStrategyParamEditor(){
   const out={};
-  document.querySelectorAll('[data-strategy-row]').forEach(row=>{
+  const rows=[...document.querySelectorAll('[data-strategy-row]')];
+  if(!rows.length){
+    const cfg=deferredStrategyConfig||lastAutoConfig||{};
+    const existing=cfg.strategy_parameters||{};
+    strategyCombo().forEach(key=>{
+      const row=existing[key]||{};
+      out[key]={strategy:key,name:strategyLabel(key,cfg),enabled:row.enabled!==false,position_sizing:row.position_sizing||$('positionSizing').value||'score_weighted',max_single_position_pct:Number(row.max_single_position_pct??num('maxSinglePositionPct',20)),stop_loss_pct:Number(row.stop_loss_pct??num('stopLossPct',8)),take_profit_pct:Number(row.take_profit_pct??num('takeProfitPct',18)),max_drawdown_pct:Number(row.max_drawdown_pct??row.max_strategy_drawdown_pct??num('maxDrawdownPct',18)),buy_threshold:Number(row.buy_threshold??62),sell_threshold:Number(row.sell_threshold??45)};
+    });
+    return out;
+  }
+  rows.forEach(row=>{
     const key=row.dataset.strategyRow;
     out[key]={strategy:key,name:strategyLabel(key,lastAutoConfig),enabled:!!row.querySelector('[data-param="enabled"]')?.checked,position_sizing:row.querySelector('[data-param="position_sizing"]')?.value||$('positionSizing').value,max_single_position_pct:Number(row.querySelector('[data-param="max_single_position_pct"]')?.value||20),stop_loss_pct:Number(row.querySelector('[data-param="stop_loss_pct"]')?.value||8),take_profit_pct:Number(row.querySelector('[data-param="take_profit_pct"]')?.value||18),max_drawdown_pct:Number(row.querySelector('[data-param="max_drawdown_pct"]')?.value||18),buy_threshold:Number(row.querySelector('[data-param="buy_threshold"]')?.value||62),sell_threshold:Number(row.querySelector('[data-param="sell_threshold"]')?.value||45)};
   });
@@ -989,8 +1011,8 @@ async function refreshAll(btn=null){
     $('auditLog').textContent='核心状态已更新 '+new Date().toLocaleTimeString()+'；正在加载评分、信息和板块…';
     const extra=await extraPromise;
     const extraValue=(idx,fallback={})=>extra[idx].status==='fulfilled'?extra[idx].value:fallback;
-    const score=extraValue(0),macro=extraValue(1,{items:[]}),stream=extraValue(2,{items:[]}),agent=extraValue(3,{data:{}}),sectors=extraValue(4,{items:[],missing_reasons:['板块服务暂不可用']}),signalData=extraValue(5,{data:[]}),eventData=extraValue(6,{data:{}});
-    renderGlobalFeed(macro);renderGlobalStream(stream);renderAgentDecision(agent);renderSectorMainline(sectors);
+    const score=extraValue(0),macro=extraValue(1,{items:[]}),agent=extraValue(3,{data:{}}),sectors=extraValue(4,{items:[],missing_reasons:['板块服务暂不可用']}),signalData=extraValue(5,{data:[]}),eventData=extraValue(6,{data:{}});
+    renderGlobalFeed(macro);renderAgentDecision(agent);renderSectorMainline(sectors);
     const signalRows=signalData.data||[];
     const liveSignal=signalRows.find(x=>String(x.symbol||'')===primarySymbol())||signalRows[0];
     const latest={...(liveSignal||score.data||{})};

@@ -147,6 +147,21 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     assert "/data-center" in html
 
 
+def test_auto_trading_workbench_lazily_hydrates_advanced_strategy_editor():
+    html = TestClient(api.app).get("/auto-trading").text
+
+    assert 'id="strategyAdvancedDetails"' in html
+    assert 'ontoggle="onStrategyEditorToggle(this)"' in html
+    assert "let strategyEditorHydrated=false" in html
+    assert "let deferredStrategyConfig=null" in html
+    assert "if(!strategyEditorHydrated&&!strategyEditorIsOpen())return" in html
+    assert "const existing=cfg.strategy_parameters||{}" in html
+    assert "展开高级自定义后加载完整策略目录" in html
+    assert "展开高级自定义后加载逐项参数" in html
+    assert "renderGlobalFeed(macro);renderAgentDecision(agent)" in html
+    assert "renderGlobalFeed(macro);renderGlobalStream(stream)" not in html
+
+
 def test_embedded_quote_page_has_workbench_layout_guards():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time&embedded=1").text
 
