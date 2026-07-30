@@ -36,6 +36,9 @@ def test_realtime_paper_page_passes_strategy_parameters():
     assert "signalScoreExplain" in html
     assert "renderSignalScoreExplain" in html
     assert "实际权重" in html
+    assert "information_trace" in html
+    assert "筛选信息" in html
+    assert "score_delta_from_screening" in html
     assert "高级策略自定义（完整目录）" in html
     assert "波段观察" in html
     assert "评分加权" in html

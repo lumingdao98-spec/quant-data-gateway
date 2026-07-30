@@ -171,13 +171,28 @@ def test_realtime_information_uses_recent_dated_evidence_only():
         }
     )
 
-    result = service.hydrate({"symbol": "600438", "quote": _quote().to_dict()}, profile={"final_score": 60})
+    result = service.hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={
+            "final_score": 60,
+            "information_score": 54,
+            "information_source": "筛选信息快照",
+            "information_snapshot_id": "screen-info-1",
+        },
+    )
     info = result["recent_information"]
 
     assert info["recent_count"] == 1
     assert info["excluded_count"] == 2
     assert info["score"] > 60
     assert info["items"][0]["source_ref"] == "https://example.com/recent"
+    assert info["screening_score"] == 54
+    assert info["score_delta_from_screening"] == round(info["score"] - 54, 4)
+    assert info["screening_snapshot_id"] == "screen-info-1"
+    assert result["score_breakdown"]["screening_information_score"] == 54
+    assert result["score_breakdown"]["information_score_delta_from_screening"] > 0
+    assert "信息面：筛选快照 54.00 分" in result["score_breakdown"]["formula"]
+    assert "screen-info-1" in result["score_breakdown"]["information_trace"]
 
 
 def test_missing_orderbook_is_explicit_and_never_fabricated():

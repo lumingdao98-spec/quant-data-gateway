@@ -113,6 +113,7 @@ class RealtimeDecisionService:
             fund_flow_score = live_flow if live_flow is not None else profile_flow
 
         info = self._recent_information(symbol, profile)
+        screening_information_score = _number(profile.get("information_score"))
         market = self._market_score(symbols or [], profile)
         event_context = self.market_event_factors.build_context(
             symbol=symbol,
@@ -127,6 +128,14 @@ class RealtimeDecisionService:
         info["base_score"] = info.get("score")
         info["score"] = adjusted.get("information_score")
         info["event_adjustment"] = adjusted.get("information_adjustment")
+        info["screening_score"] = screening_information_score
+        info["score_delta_from_screening"] = (
+            round(float(info["score"]) - screening_information_score, 4)
+            if info.get("score") is not None and screening_information_score is not None
+            else None
+        )
+        info["screening_snapshot_id"] = profile.get("information_snapshot_id")
+        info["screening_source"] = profile.get("information_source")
         market["base_score"] = market.get("score")
         market["score"] = adjusted.get("market_score")
         market["event_adjustment"] = adjusted.get("market_adjustment")
@@ -195,6 +204,10 @@ class RealtimeDecisionService:
                 "timing_score": out.get("technical_score"),
                 "technical_score": out.get("technical_score"),
                 "information_score": out.get("information_score"),
+                "screening_information_score": screening_information_score,
+                "information_score_delta_from_screening": info.get("score_delta_from_screening"),
+                "screening_information_snapshot_id": profile.get("information_snapshot_id"),
+                "screening_information_source": profile.get("information_source"),
                 "fund_flow_score": out.get("fund_flow_score"),
                 "market_score": out.get("market_score"),
                 "formula": "综合交易分=筛选底座+实时择时（日K55%+分时45%）+近期信息+资金+大盘-异常风险",
@@ -208,6 +221,15 @@ class RealtimeDecisionService:
                 "event_factors": event_context.get("factors", []),
             }
         )
+        if screening_information_score is not None and info.get("score") is not None:
+            information_trace = (
+                f"信息面：筛选快照 {screening_information_score:.2f} 分"
+                f" → 当前近期证据 {float(info['score']):.2f} 分"
+                f"（变化 {float(info['score']) - screening_information_score:+.2f}，"
+                f"快照 {profile.get('information_snapshot_id') or info.get('snapshot_id') or '缺失'}）"
+            )
+            existing["information_trace"] = information_trace
+            existing["formula"] = f"{existing.get('formula') or ''}；{information_trace}"
         out["score_breakdown"] = existing
 
         evidence = list(out.get("evidence") or [])

@@ -1997,6 +1997,73 @@ def _auto_score(row: dict, *keys: str, default: float = 50.0) -> float:
     return float(default)
 
 
+def _auto_information_profile(row: dict) -> dict:
+    info = row.get("info") if isinstance(row.get("info"), dict) else {}
+    news = row.get("news") if isinstance(row.get("news"), dict) else {}
+    recent = row.get("recent_information") if isinstance(row.get("recent_information"), dict) else {}
+    score = None
+    source = "近期信息评分缺失"
+    candidates = [
+        (row.get("information_score"), "筛选结果"),
+        (row.get("info_score"), "筛选结果"),
+        (row.get("info_sentiment_score"), "筛选结果"),
+        (info.get("info_score"), "筛选信息快照"),
+        (recent.get("score"), "实时近期信息"),
+        (news.get("news_score"), "筛选新闻快照"),
+    ]
+    for value, candidate_source in candidates:
+        if value in (None, "", "--"):
+            continue
+        score = _as_float(value, 50.0)
+        source = candidate_source
+        break
+
+    current_summary = (
+        info.get("current_information_summary")
+        if isinstance(info.get("current_information_summary"), dict)
+        else {}
+    )
+    evidence_counts = (
+        info.get("evidence_counts")
+        if isinstance(info.get("evidence_counts"), dict)
+        else {}
+    )
+    recent_count = 0
+    for value in (
+        current_summary.get("current_scoring_count"),
+        recent.get("recent_count"),
+        news.get("recent_count"),
+        evidence_counts.get("item_count"),
+        news.get("count"),
+    ):
+        if value in (None, "", "--"):
+            continue
+        recent_count = max(0, int(_as_float(value, 0.0)))
+        break
+
+    snapshot_id = str(
+        row.get("info_snapshot_id")
+        or info.get("snapshot_id")
+        or news.get("snapshot_id")
+        or recent.get("snapshot_id")
+        or ""
+    )
+    latest_published_at = str(
+        current_summary.get("latest_published_at")
+        or recent.get("latest_published_at")
+        or news.get("latest_published_at")
+        or ""
+    )
+    return {
+        "score": round(score, 4) if score is not None else None,
+        "source": source,
+        "snapshot_id": snapshot_id,
+        "recent_count": recent_count,
+        "latest_published_at": latest_published_at,
+        "missing": score is None,
+    }
+
+
 def _auto_action_from_screener(row: dict, final_score: float, risk_flags: list[str]) -> str:
     grade = str(row.get("grade") or row.get("level") or "").upper()
     risk_text = " ".join(risk_flags + _row_text_items(row, "risk_summary", "missing_data_hints", "missing_data"))
@@ -2016,9 +2083,20 @@ def _auto_screener_signal_map(rows: list[dict], symbols: list[str], risk_control
     max_single = _as_float(risk_controls.get("max_single_position_pct"), 20.0)
     for symbol in symbols:
         row = dict(row_map.get(symbol) or {"symbol": symbol})
+        information = _auto_information_profile(row)
         final_score = _auto_score(row, "final_trade_score", "total_score", "manual_review_score", "script_score", default=50.0)
         risk_flags = _row_text_items(row, "risk_flags", "risk_tags", "risk_warnings", "missing_data_hints", "missing_data")
         tags = _row_text_items(row, "tags", "hit_tags", "core_tags", "upgrade_reasons", "strategy_tags")
+        missing_data = _row_text_items(row, "missing_data_hints", "missing_data")
+        if information["missing"]:
+            missing_data.append("recent_information_score_missing")
+        evidence = list(tags)
+        evidence.append(
+            "信息快照 "
+            f"{information['snapshot_id'] or '缺失'}："
+            f"筛选信息分 {information['score'] if information['score'] is not None else '--'}，"
+            f"近期 {information['recent_count']} 条"
+        )
         action = _auto_action_from_screener(row, final_score, risk_flags)
         target_weight_hint = 0.0 if action == "avoid" else max(0.0, min(max_single, (final_score - 45.0) * 0.55))
         by_symbol[symbol] = {
@@ -2028,14 +2106,19 @@ def _auto_screener_signal_map(rows: list[dict], symbols: list[str], risk_control
             "final_score": round(final_score, 4),
             "technical_score": _auto_score(row, "technical_score", "technical_factor_score", "total_score", default=final_score),
             "fundamental_score": _auto_score(row, "fundamental_score", "manual_review_score", "total_score", default=55.0),
-            "information_score": _auto_score(row, "information_score", "info_score", "info_sentiment_score", default=50.0),
+            "information_score": information["score"] if information["score"] is not None else 50.0,
+            "information_source": information["source"],
+            "information_snapshot_id": information["snapshot_id"],
+            "information_recent_count": information["recent_count"],
+            "information_latest_published_at": information["latest_published_at"],
+            "information_missing": information["missing"],
             "fund_flow_score": _auto_score(row, "fund_flow_score", "strength_score", "amount_score", default=50.0),
             "market_score": _auto_score(row, "market_score", "market_mood_score", "market_sentiment_score", default=50.0),
             "target_weight_hint_pct": round(target_weight_hint, 4),
             "risk_flags": risk_flags[:12],
             "strategy_tags": tags[:16],
-            "missing_data": _row_text_items(row, "missing_data_hints", "missing_data")[:12],
-            "evidence": (tags or ["来自筛选快照的综合评分"])[:10],
+            "missing_data": list(dict.fromkeys(missing_data))[:12],
+            "evidence": evidence[:10],
             "source_row": row,
             "source": "latest_screener" if row_map.get(symbol) else "config_symbol_only",
         }
@@ -4625,7 +4708,7 @@ def auto_trading_start_paper(payload: dict = Body(default_factory=dict)) -> dict
         "interval_seconds": int(config.get("interval_seconds") or 15),
         "initial_cash": float(config.get("initial_cash") or 100000),
         "reset_account": reset_requested,
-        "source_page": "auto-trading",
+        "source_page": str(payload.get("source_page") or config.get("source_page") or "auto-trading"),
     }
     active = realtime_paper_engine_v323.active_session()
     if active and active.get("status") in {"running", "paused"} and not reset_requested:
@@ -7020,6 +7103,17 @@ def _screener_anomaly_features(row: dict) -> dict:
 
 def _screener_signal_preview(symbol: str, payload: dict | None = None) -> dict:
     row = _screener_row_for_signal(symbol, payload)
+    information = _auto_information_profile(row)
+    missing_data = list(row.get("missing_data_hints") or row.get("missing_data") or [])
+    if information["missing"]:
+        missing_data.append("recent_information_score_missing")
+    evidence = list(row.get("tags") or row.get("upgrade_reasons") or row.get("hit_tags") or ["来自当前筛选快照"])
+    evidence.append(
+        "信息快照 "
+        f"{information['snapshot_id'] or '缺失'}："
+        f"筛选信息分 {information['score'] if information['score'] is not None else '--'}，"
+        f"近期 {information['recent_count']} 条"
+    )
     anomaly = realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row))
     now = datetime.now()
     freshness = realtime_paper_engine_v321.freshness_guard.check(
@@ -7038,16 +7132,25 @@ def _screener_signal_preview(symbol: str, payload: dict | None = None) -> dict:
         horizon=str((payload or {}).get("horizon") or "swing"),
         fundamental_score=_safe_float(row.get("fundamental_score"), _safe_float(row.get("manual_review_score"), 55.0)),
         technical_score=_safe_float(row.get("technical_score"), _safe_float(row.get("total_score"), 50.0)),
-        information_score=_safe_float(row.get("information_score"), _safe_float(row.get("info_score"), 50.0)),
+        information_score=information["score"] if information["score"] is not None else 50.0,
         market_score=_safe_float(row.get("market_score"), _safe_float(row.get("market_mood_score"), 50.0)),
         anomaly_score=anomaly.anomaly_score,
         anomaly_action=anomaly.action_suggestion,
-        evidence=list(row.get("tags") or row.get("upgrade_reasons") or row.get("hit_tags") or ["来自当前筛选快照"]),
+        evidence=evidence,
         data_freshness=freshness.to_dict(),
-        missing_data=list(row.get("missing_data_hints") or row.get("missing_data") or []),
+        missing_data=list(dict.fromkeys(missing_data)),
         now=now,
     )
-    return {"ok": True, "symbol": symbol, "row": row, "signal": signal.to_dict(), "anomaly": anomaly.to_dict(), "freshness": freshness.to_dict(), "paper_only": True}
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "row": row,
+        "signal": signal.to_dict(),
+        "information_trace": information,
+        "anomaly": anomaly.to_dict(),
+        "freshness": freshness.to_dict(),
+        "paper_only": True,
+    }
 
 
 @app.post("/api/screener/realtime-paper/add")
@@ -7063,18 +7166,28 @@ def screener_realtime_paper_start(payload: dict = Body(default_factory=dict)) ->
     if not symbols:
         return {"ok": False, "message": "没有可用于实时模拟的筛选标的"}
     watchlist_service.add(symbols)
-    start_payload = {
-        "symbols": symbols,
-        "initial_cash": payload.get("initial_cash", 100000),
-        "interval_seconds": payload.get("interval_seconds", 15),
-        "horizon": payload.get("horizon", "intraday_paper"),
-        "strategy": payload.get("strategy", "three_dimension_score"),
-    }
-    started = realtime_paper_engine_v323.start_session(start_payload)
+    rows = _screener_rows_from_payload(payload)
+    started = auto_trading_start_paper(
+        {
+            **payload,
+            "symbols": symbols,
+            "rows": rows,
+            "reset_account": _as_bool(payload.get("reset_account"), False),
+            "source_page": "screener",
+        }
+    )
     data = dict(started.get("engine") or {})
-    data["v323_session"] = started.get("session")
-    data["session_id"] = (started.get("session") or {}).get("session_id")
-    data["symbols"] = symbols
+    config = dict(started.get("config") or {})
+    session = dict(started.get("session") or {})
+    data["ok"] = bool(started.get("ok"))
+    data["v323_session"] = session
+    data["session_id"] = session.get("session_id")
+    data["symbols"] = list(config.get("symbols") or symbols)
+    data["config"] = config
+    data["score_profile_count"] = len(config.get("screener_signal_map") or {})
+    data["reused_session"] = bool(started.get("reused_session"))
+    data["account_preserved"] = bool(started.get("account_preserved"))
+    data["readiness"] = started.get("readiness")
     data["message"] = "已用当前筛选结果启动盘中实时模拟"
     return data
 

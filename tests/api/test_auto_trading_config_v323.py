@@ -296,6 +296,38 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick(monkeypatch)
     assert "screener_target_hint" in " ".join(tick["signal"]["evidence"])
 
 
+def test_auto_trading_reads_nested_screener_information_snapshot():
+    profiles = api._auto_screener_signal_map(
+        [
+            {
+                "symbol": "300750",
+                "name": "CATL",
+                "total_score": 76,
+                "info_snapshot_id": "screen-info-300750",
+                "info": {
+                    "info_score": 72.5,
+                    "current_information_summary": {
+                        "current_scoring_count": 4,
+                        "latest_published_at": "2026-07-30T09:15:00",
+                    },
+                },
+                "news": {"news_score": 65, "count": 8},
+            }
+        ],
+        ["300750"],
+        {"max_single_position_pct": 20},
+    )
+
+    profile = profiles["300750"]
+    assert profile["information_score"] == 72.5
+    assert profile["information_source"] == "筛选信息快照"
+    assert profile["information_snapshot_id"] == "screen-info-300750"
+    assert profile["information_recent_count"] == 4
+    assert profile["information_latest_published_at"] == "2026-07-30T09:15:00"
+    assert profile["information_missing"] is False
+    assert "筛选信息分 72.5" in " ".join(profile["evidence"])
+
+
 def test_realtime_paper_applies_strategy_position_and_stop_controls(monkeypatch):
     market_clock = {"now": "2026-06-01T10:00:00"}
     monkeypatch.setattr(

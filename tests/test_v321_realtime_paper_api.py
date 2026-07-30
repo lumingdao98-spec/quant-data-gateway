@@ -79,10 +79,82 @@ def test_realtime_paper_api_and_screener_bridge(monkeypatch):
         json={"symbol": "300750", "price": 100, "ts": "2026-06-01T10:00:00", "technical_score": 82, "information_score": 70, "fundamental_score": 65, "market_score": 60, "quote": {"amount": 100_000_000}},
     ).json()
     bridge = client.post("/api/screener/realtime-paper/add", json={"symbols": ["300750"], "rows": [{"symbol": "300750", "total_score": 72}]}).json()
-    signal = client.post("/api/screener/signal-preview/300750", json={"row": {"symbol": "300750", "total_score": 72, "manual_review_score": 62}}).json()
+    signal = client.post(
+        "/api/screener/signal-preview/300750",
+        json={
+            "row": {
+                "symbol": "300750",
+                "total_score": 72,
+                "manual_review_score": 62,
+                "info_snapshot_id": "screen-info-300750",
+                "info": {
+                    "info_score": 71,
+                    "current_information_summary": {"current_scoring_count": 3},
+                },
+            }
+        },
+    ).json()
 
     assert started["ok"] is True
     assert tick["ok"] is True
     assert bridge["ok"] is True
     assert signal["ok"] is True
     assert "signal" in signal
+    assert signal["signal"]["information_score"] == 71
+    assert signal["information_trace"]["snapshot_id"] == "screen-info-300750"
+
+
+def test_screener_start_reuses_auto_trading_config_and_information_profile(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        api.watchlist_service,
+        "add",
+        lambda symbols: {"symbols": list(symbols), "count": len(symbols)},
+    )
+
+    def fake_start(payload):
+        captured.update(payload)
+        return {
+            "ok": True,
+            "config": {
+                "symbols": payload["symbols"],
+                "source_page": payload["source_page"],
+                "screener_signal_map": {
+                    "300750": {
+                        "information_score": 73,
+                        "information_snapshot_id": "screen-info-start",
+                    }
+                },
+            },
+            "session": {"session_id": "paper-from-screen", "status": "running"},
+            "engine": {"status": "running"},
+            "reused_session": True,
+            "account_preserved": True,
+            "readiness": {"ready_for_paper": True},
+        }
+
+    monkeypatch.setattr(api, "auto_trading_start_paper", fake_start)
+    client = TestClient(api.app)
+    response = client.post(
+        "/api/screener/realtime-paper/start",
+        json={
+            "symbols": ["300750"],
+            "rows": [
+                {
+                    "symbol": "300750",
+                    "total_score": 76,
+                    "info_snapshot_id": "screen-info-start",
+                    "info": {"info_score": 73},
+                }
+            ],
+        },
+    ).json()
+
+    assert captured["source_page"] == "screener"
+    assert captured["reset_account"] is False
+    assert captured["rows"][0]["info"]["info_score"] == 73
+    assert response["ok"] is True
+    assert response["score_profile_count"] == 1
+    assert response["reused_session"] is True
+    assert response["account_preserved"] is True
