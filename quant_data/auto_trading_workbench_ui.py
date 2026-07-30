@@ -308,6 +308,8 @@ let currentWorkspaceUrl='about:blank';
 let latestPaperPortfolio=null;
 let latestPortfolioInputs={liveAccount:null,livePositions:null,records:null};
 let globalStreamTimer=null;
+let globalStreamPromise=null;
+let workbenchRefreshPromise=null;
 let globalTickerPaused=false;
 let globalStreamRefreshMs=20000;
 function arrangeDashboardPanels(){
@@ -324,7 +326,7 @@ function arrangeDashboardPanels(){
   grid.replaceChildren(...columns);
   grid.dataset.arranged='1';
 }
-async function api(url,opt){const r=await fetch(url,opt);try{return await r.json()}catch(e){return {ok:false,status:r.status,message:String(e)}}}
+async function api(url,opt={}){const r=await fetch(url,{cache:'no-store',...opt});let data;try{data=await r.json()}catch(e){throw new Error(`接口 ${url} 返回的不是 JSON`)}if(!r.ok)throw new Error(data?.message||data?.reason||`HTTP ${r.status}`);return data}
 let actionToastTimer=null;
 function showActionToast(message,type='good'){
   const box=$('actionToast');if(!box)return;
@@ -694,25 +696,42 @@ function mergeGlobalStreams(jin10,global){
   };
 }
 async function loadGlobalStream(force=false){
-  const [jin10,global]=await Promise.all([
-    api('/api/news/jin10/realtime?limit=80&force='+(force?'true':'false')),
-    api('/api/news/global/stream?limit=80&live=true&force='+(force?'true':'false'))
-  ]);
-  const merged=mergeGlobalStreams(jin10,global);
-  renderGlobalStream(merged);
-  scheduleGlobalStreamLoop();
-  return merged;
+  if(globalStreamPromise)return globalStreamPromise;
+  const task=(async()=>{
+    const [jin10,global]=await Promise.all([
+      api('/api/news/jin10/realtime?limit=80&force='+(force?'true':'false')),
+      api('/api/news/global/stream?limit=80&live=true&force='+(force?'true':'false'))
+    ]);
+    const merged=mergeGlobalStreams(jin10,global);
+    renderGlobalStream(merged);
+    scheduleGlobalStreamLoop();
+    return merged;
+  })();
+  globalStreamPromise=task;
+  try{return await task}finally{if(globalStreamPromise===task)globalStreamPromise=null}
 }
 function toggleGlobalTicker(){
   globalTickerPaused=!globalTickerPaused;
   $('globalTicker').classList.toggle('paused',globalTickerPaused);
   $('tickerPauseBtn').textContent=globalTickerPaused?'继续轮播':'暂停轮播';
+  if(globalTickerPaused){if(globalStreamTimer)clearInterval(globalStreamTimer);globalStreamTimer=null}
+  else{loadGlobalStream(false).catch(()=>{});scheduleGlobalStreamLoop()}
 }
 function scheduleGlobalStreamLoop(){
   if(globalStreamTimer)clearInterval(globalStreamTimer);
-  globalStreamTimer=setInterval(()=>{if(!globalTickerPaused)loadGlobalStream(false).catch(()=>{})},globalStreamRefreshMs);
+  globalStreamTimer=null;
+  if(document.hidden||globalTickerPaused)return;
+  globalStreamTimer=setInterval(()=>{if(!document.hidden&&!globalTickerPaused)loadGlobalStream(false).catch(()=>{})},globalStreamRefreshMs);
 }
 function startGlobalStreamLoop(){
+  if(!window.__qdGlobalVisibilityBound){
+    window.__qdGlobalVisibilityBound=true;
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden){if(globalStreamTimer)clearInterval(globalStreamTimer);globalStreamTimer=null;return}
+      loadGlobalStream(false).catch(()=>{});
+      scheduleGlobalStreamLoop();
+    });
+  }
   scheduleGlobalStreamLoop();
 }
 // V3.23 readable global-info renderer override. The older renderer stayed compact;
@@ -936,7 +955,9 @@ function renderSectorMainline(js){
   }).join(''):`<tr><td colspan="20">${esc((js.missing_reasons||['当前没有真实板块资金数据']).join('；'))}</td></tr>`;
 }
 async function loadSectorMainline(force=false){const js=await api('/api/market/sectors/mainline?limit=50&include_concept=true&force='+force);renderSectorMainline(js);return js}
-async function refreshAll(btn=null){return withAction(btn,'刷新中','总控台已更新',async()=>{
+async function refreshAll(btn=null){
+  if(workbenchRefreshPromise)return workbenchRefreshPromise;
+  const task=withAction(btn,'刷新中','总控台已更新',async()=>{
   try{
     renderModuleCards();
     setText('scoreTime','正在更新核心状态…');
@@ -983,7 +1004,10 @@ async function refreshAll(btn=null){return withAction(btn,'刷新中','总控台
     $('auditLog').textContent='最后刷新 '+new Date().toLocaleTimeString()+(failed.length?'；部分模块失败 '+failed.length+' 项':'；全部模块完成')+'\\n'+JSON.stringify({broker:broker.safety,readiness:readiness.gates,paper_scheduler:{enabled:paperSchedule.enabled,running:paperSchedule.running,active_sessions:paperSchedule.active_sessions,market_session:paperSchedule.market_session},active_session:activeSessionId,records:(records.data||[]).length},null,2);
     return {ok:true,failed:failed.length};
   }catch(e){$('auditLog').textContent='刷新失败：'+e;throw e}
-})}
+  });
+  workbenchRefreshPromise=task;
+  try{return await task}finally{if(workbenchRefreshPromise===task)workbenchRefreshPromise=null}
+}
 async function oneClickConfig(btn=null){return withAction(btn,'配置中','组合配置已生成',async()=>{
   const js=await api('/api/auto-trading/config/one-click',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(collectAutoConfig())});
   applyAutoConfig(js.data);renderConfigSummary(js.data,js.readiness);$('auditLog').textContent=JSON.stringify(js,null,2);await refreshAll();return js;

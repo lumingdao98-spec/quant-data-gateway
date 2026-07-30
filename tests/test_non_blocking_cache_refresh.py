@@ -18,4 +18,4 @@ def test_frontend_uses_cache_first_and_background_refresh_language():
     assert "使用本地行情缓存" in ui
     assert "后台刷新" in ui
     assert "refresh=false" in ui or "refresh='+force" in ui
-    assert "Restored local screener rows immediately" in screener
+    assert "已立即恢复本地筛选结果" in screener

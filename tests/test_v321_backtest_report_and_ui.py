@@ -117,7 +117,7 @@ def test_v323_realtime_paper_ui_explains_and_runs_auto_loop():
     assert "休市待机（不下单）" in html
     assert "自动循环已停止" in html
     assert "成本" in html
-    assert "setInterval(async()=>{await refreshAll()" in html
+    assert "setInterval(async()=>{if(document.hidden)return;await refreshAll()" in html
     assert "setInterval(()=>runOneCycle('auto')" not in html
     assert "/api/quotes?symbols=" in html
     assert "手动tick" not in html

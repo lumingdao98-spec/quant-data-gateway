@@ -4418,13 +4418,37 @@ def _run_realtime_paper_sessions_due(*, now: datetime | None = None) -> dict:
         _realtime_paper_scheduler_lock.release()
 
 
+def _realtime_paper_scheduler_wait_seconds(result: dict | None) -> float:
+    """Back off when no paper work is due without delaying active sessions."""
+
+    payload = result or {}
+    status = str(payload.get("status") or "")
+    if status == "market_closed":
+        raw_wait = (payload.get("market_session") or {}).get("seconds_to_next_refresh")
+        try:
+            seconds = float(raw_wait)
+        except (TypeError, ValueError):
+            seconds = 30.0
+        return max(1.0, min(30.0, seconds if seconds > 0 else 30.0))
+    if status == "busy":
+        return 2.0
+    try:
+        sessions_checked = int(payload.get("sessions_checked") or 0)
+    except (TypeError, ValueError):
+        sessions_checked = 0
+    return 1.0 if sessions_checked > 0 else 10.0
+
+
 def _realtime_paper_scheduler_loop() -> None:
     global _realtime_paper_scheduler_last_error
-    while not _realtime_paper_scheduler_stop.wait(1):
+    wait_seconds = 1.0
+    while not _realtime_paper_scheduler_stop.wait(wait_seconds):
         try:
-            _run_realtime_paper_sessions_due()
+            result = _run_realtime_paper_sessions_due()
+            wait_seconds = _realtime_paper_scheduler_wait_seconds(result)
             _realtime_paper_scheduler_last_error = ""
         except Exception as exc:
+            wait_seconds = 5.0
             message = str(exc)[:240]
             if message != _realtime_paper_scheduler_last_error:
                 _realtime_paper_scheduler_last_error = message

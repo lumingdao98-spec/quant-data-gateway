@@ -153,7 +153,7 @@ def score(context):
       <div class="metric"><div class="k">错误数</div><div id="mErr" class="v">--</div></div>
     </div>
     <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0">
-      <div class="card-h"><div class="card-title">筛选结果</div><div class="row view-toggle"><button id="compactBtn" class="btn2 active" onclick="setTableMode('compact')">精简视图</button><button id="fullBtn" class="btn2" onclick="setTableMode('full')">完整视图</button><button id="debugBtn" class="btn2" onclick="setTableMode('debug')">调试视图</button><span class="small" id="cacheHint">更多字段在右侧详情卡展示；返回页面会自动恢复 snapshot</span></div></div>
+      <div class="card-h"><div class="card-title">筛选结果</div><div class="row view-toggle"><button id="compactBtn" class="btn2 active" onclick="setTableMode('compact')">精简视图</button><button id="fullBtn" class="btn2" onclick="setTableMode('full')">完整视图</button><button id="debugBtn" class="btn2" onclick="setTableMode('debug')">调试视图</button><span class="small" id="cacheHint">更多字段在右侧详情卡展示；返回页面会自动恢复筛选快照</span></div></div>
       <div class="small" style="padding:6px 10px;border-bottom:1px solid var(--line)">字段说明：最新价即现价；技术摘要、综合诊断、风险和缺失原因默认收进右侧详情卡或完整/调试视图。</div>
       <div class="table-wrap">
         <table id="resultTable">
@@ -259,15 +259,15 @@ function applySnapshotState(js){const p=js.params||js.snapshot?.params||{};if(js
 function snapshotRows(js){return js.data||js.results||js.snapshot?.results||[]}
 function restoreSelection(preferred){if(!rows.length){selected=null;render();renderDetail(null);return}const sym=preferred||localStorage.getItem(LS_SELECTED);const hit=sym&&rows.some(x=>x.symbol===sym);selectRow(hit?sym:rows[0].symbol)}
 function buildQuery(){const p=new URLSearchParams();p.set('universe',$('universe').value);p.set('symbols',parseSymbols());p.set('mode',$('mode').value);p.set('strategies',selectedStrategies().join(','));p.set('enable_news',$('enableNews')?.checked?'true':'false');p.set('info_limit',$('infoLimit')?.value||'180');p.set('max_items',$('maxItems').value||'30');p.set('max_pages',$('maxPages').value||'1');p.set('page_size',$('pageSize').value||'100');p.set('kline_limit',$('klineLimit').value||'260');p.set('kline_adjust',$('klineAdjust')?.value||'qfq');p.set('min_score',$('minScore').value||'0');p.set('min_amount',String((Number($('minAmountWan').value)||0)*10000));p.set('include_stocks',$('includeStocks').checked?'true':'false');p.set('include_etf',$('includeEtf').checked?'true':'false');p.set('force_quotes',$('forceQuotes').checked?'true':'false');p.set('force_kline',$('forceKline').checked?'true':'false');p.set('selected_symbol',selected?.symbol||localStorage.getItem(LS_SELECTED)||'');p.set('view_mode',tableMode);p.set('scroll_position',String(document.querySelector('.table-wrap')?.scrollTop||0));p.set('show_excluded',tableMode==='debug'?'true':'false');persistLocalInputs(p);return p}
-async function runScreener(){const btn=$('runBtn');const oldRows=rows.slice();const oldSelected=selected;btn.disabled=true;btn.textContent='筛选中...';$('cacheHint').textContent='Screener is running; previous rows stay available if this run fails.';try{const query=buildQuery();log('Start screener; external latency depends on public sources and kline cache.');const resp=await fetch('/api/screener/run?'+query.toString(),{cache:'no-store'});if(!resp.ok)throw new Error('HTTP '+resp.status);const js=await resp.json();if(!js.ok)throw new Error(js.message||'screener failed');rows=snapshotRows(js);selected=null;if(js.screener_snapshot_id||js.snapshot_id){const sid=js.screener_snapshot_id||js.snapshot_id;localStorage.setItem(LS_SNAPSHOT,sid);localStorage.setItem(LS_SNAPSHOT_LEGACY,sid)}const stableNote=js.score_stability_note?` · ${js.score_stability_note}`:'';if(!rows.length){render();renderDetail(null);$('cacheHint').textContent='This snapshot has no rows. Switch to debug view if all candidates were excluded.'+stableNote;}else{$('cacheHint').textContent=`cache=${js.cache_status?.status||'refreshed'} · snapshot=${js.screener_snapshot_id||js.snapshot_id||'--'} · page restore enabled${stableNote}`;}
-log(`Screener done: result ${js.result_count}, analyzed ${js.analyzed_count??'--'}, pool ${js.pool_count??js.universe_count}, filtered ${js.filtered_out_count??0}, elapsed ${js.elapsed_seconds}s, errors ${js.error_count}, news=${js.news_enabled?'on':'off'}`);if(js.errors&&js.errors.length)log('Partial failures: '+js.errors.slice(0,5).map(e=>e.symbol+':'+e.error).join('; '),'WARN');updateMetrics(js);sortRows(false);render();restoreSelection(js.selected_symbol);setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(localStorage.getItem(LS_SCROLL)||0)},50)}catch(e){rows=oldRows;selected=oldSelected;render();renderDetail(selected);$('cacheHint').textContent='Screener failed; previous rows preserved: '+e;log(e,'ERROR')}finally{btn.disabled=false;btn.textContent='开始筛选'}}
+async function runScreener(){const btn=$('runBtn');const oldRows=rows.slice();const oldSelected=selected;btn.disabled=true;btn.textContent='筛选中...';$('cacheHint').textContent='正在筛选；如本次失败，上一批结果仍会保留。';try{const query=buildQuery();log('开始筛选；耗时取决于公开数据源响应和本地 K 线缓存。');const resp=await fetch('/api/screener/run?'+query.toString(),{cache:'no-store'});if(!resp.ok)throw new Error('HTTP '+resp.status);const js=await resp.json();if(!js.ok)throw new Error(js.message||'筛选失败');rows=snapshotRows(js);selected=null;if(js.screener_snapshot_id||js.snapshot_id){const sid=js.screener_snapshot_id||js.snapshot_id;localStorage.setItem(LS_SNAPSHOT,sid);localStorage.setItem(LS_SNAPSHOT_LEGACY,sid)}const stableNote=js.score_stability_note?` · ${js.score_stability_note}`:'';if(!rows.length){render();renderDetail(null);$('cacheHint').textContent='本次快照没有结果；可切换调试视图查看候选是否被排除。'+stableNote;}else{$('cacheHint').textContent=`缓存=${js.cache_status?.status||'已刷新'} · 快照=${js.screener_snapshot_id||js.snapshot_id||'--'} · 已启用页面恢复${stableNote}`;}
+log(`筛选完成：结果 ${js.result_count}，已分析 ${js.analyzed_count??'--'}，股票池 ${js.pool_count??js.universe_count}，排除 ${js.filtered_out_count??0}，耗时 ${js.elapsed_seconds} 秒，错误 ${js.error_count}，信息面=${js.news_enabled?'开启':'关闭'}`);if(js.errors&&js.errors.length)log('部分数据源失败：'+js.errors.slice(0,5).map(e=>e.symbol+':'+e.error).join('; '),'WARN');updateMetrics(js);sortRows(false);render();restoreSelection(js.selected_symbol);setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(localStorage.getItem(LS_SCROLL)||0)},50)}catch(e){rows=oldRows;selected=oldSelected;render();renderDetail(selected);$('cacheHint').textContent='筛选失败，已保留上一批结果：'+e;log(e,'ERROR')}finally{btn.disabled=false;btn.textContent='开始筛选'}}
 function updateMetrics(js){$('mCount').textContent=js.result_count??rows.length;$('mUniverse').textContent=(js.analyzed_count??'--')+'/'+(js.pool_count??js.universe_count??'--');const elapsed=js.elapsed_seconds??'--';$('mTime').textContent=(typeof elapsed==='number'?elapsed+'s':String(elapsed));$('mErr').textContent=js.error_count??'--';const scores=rows.map(x=>Number(x.total_score||0));$('mTop').textContent=scores.length?Math.max(...scores).toFixed(1):'--';$('mAvg').textContent=scores.length?(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1):'--'}
 function clearResults(){rows=[];selected=null;render();renderDetail(null);['mCount','mUniverse','mTop','mAvg','mTime','mErr'].forEach(id=>$(id).textContent='--')}
-function clearLocalState(){[LS_SNAPSHOT,LS_SNAPSHOT_LEGACY,LS_SELECTED,LS_SCROLL,LS_PARAMS,'qdg_screener_view',LS_CUSTOM,LS_STRATEGIES,LS_MODE,LS_ENABLE_NEWS,LS_VIEW,LS_SHOW_EXCLUDED,LS_MIN_SCORE,LS_MAX_ITEMS].forEach(k=>localStorage.removeItem(k));clearResults();$('cacheHint').textContent='Local screener state cleared. Backend cache is still visible on /cache.'}
+function clearLocalState(){[LS_SNAPSHOT,LS_SNAPSHOT_LEGACY,LS_SELECTED,LS_SCROLL,LS_PARAMS,'qdg_screener_view',LS_CUSTOM,LS_STRATEGIES,LS_MODE,LS_ENABLE_NEWS,LS_VIEW,LS_SHOW_EXCLUDED,LS_MIN_SCORE,LS_MAX_ITEMS].forEach(k=>localStorage.removeItem(k));clearResults();$('cacheHint').textContent='本地筛选状态已清空；后端缓存仍可在 /cache 查看。'}
 async function restoreLastScreener(){try{restoreLocalInputs();let sid=localStorage.getItem(LS_SNAPSHOT)||localStorage.getItem(LS_SNAPSHOT_LEGACY)||'';let js=null;if(sid){const resp=await fetch('/api/screener/snapshot/'+encodeURIComponent(sid),{cache:'no-store'});js=await resp.json();}if(!js||!js.ok){const resp=await fetch('/api/cache/screener/latest',{cache:'no-store'});js=await resp.json();}
-if(!js.ok){rows=[];selected=null;render();renderDetail(null);$('cacheHint').textContent='No screener snapshot to restore.';return}
-rows=snapshotRows(js);selected=null;if(js.snapshot_id){localStorage.setItem(LS_SNAPSHOT,js.snapshot_id);localStorage.setItem(LS_SNAPSHOT_LEGACY,js.snapshot_id)}applySnapshotState(js);updateMetrics({result_count:rows.length,analyzed_count:js.summary?.analyzed_count,universe_count:js.summary?.result_count,error_count:js.summary?.error_count,elapsed_seconds:'cache'});if(!rows.length){render();renderDetail(null);$('cacheHint').textContent='Snapshot has no rows. Run screener again.';return}
-const stale=js.cache_status?.stale?' ? stale, refresh when ready':'';$('cacheHint').textContent=`Restored snapshot ${js.snapshot_id||sid||'latest'} ? cache=${js.cache_status?.status||'--'}${stale}`;render();restoreSelection(js.selected_symbol||js.selected_row?.symbol);setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(js.scroll_position??(localStorage.getItem(LS_SCROLL)||0))},80);log('Restored previous screener snapshot without rerun')}catch(e){rows=[];selected=null;render();renderDetail(null);log('Restore failed: '+e,'ERROR')}}
+if(!js.ok){rows=[];selected=null;render();renderDetail(null);$('cacheHint').textContent='没有可恢复的筛选快照。';return}
+rows=snapshotRows(js);selected=null;if(js.snapshot_id){localStorage.setItem(LS_SNAPSHOT,js.snapshot_id);localStorage.setItem(LS_SNAPSHOT_LEGACY,js.snapshot_id)}applySnapshotState(js);updateMetrics({result_count:rows.length,analyzed_count:js.summary?.analyzed_count,universe_count:js.summary?.result_count,error_count:js.summary?.error_count,elapsed_seconds:'缓存'});if(!rows.length){render();renderDetail(null);$('cacheHint').textContent='快照没有结果，请重新运行筛选。';return}
+const stale=js.cache_status?.stale?' · 缓存已过期，稍后可刷新':'';$('cacheHint').textContent=`已恢复快照 ${js.snapshot_id||sid||'最近一次'} · 缓存=${js.cache_status?.status||'--'}${stale}`;render();restoreSelection(js.selected_symbol||js.selected_row?.symbol);setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(js.scroll_position??(localStorage.getItem(LS_SCROLL)||0))},80);log('已恢复上一批筛选快照，无需重新运行')}catch(e){rows=[];selected=null;render();renderDetail(null);log('恢复失败：'+e,'ERROR')}}
 function sortRows(toggle=true){if(toggle)sortDir*=-1;rows.sort((a,b)=>{let av=a[sortKey],bv=b[sortKey];if(typeof av==='string')return String(av).localeCompare(String(bv),'zh')*sortDir;return ((Number(av)||0)-(Number(bv)||0))*sortDir})}
 function render(){const tb=document.querySelector('#resultTable tbody');tb.innerHTML=rows.map(r=>{const sr=r.support_resistance_distance||{};const up=uniq([...(r.upgrade_reasons||[]),...(r.downgrade_reasons||[])]).slice(0,3).join('；');const miss=uniq(r.missing_data_hints||[]).slice(0,4).join('；');return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')"><td>${htmlEsc(r.symbol)}</td><td>${htmlEsc(r.name)}</td><td title="${htmlEsc(r.candidate_channel_reason||'')}">${htmlEsc((r.candidate_channels||[]).join('/')||'--')}</td><td>${pct(r.turnover)}</td><td>${fmt(r.volume_ratio,2)}</td><td>${money(r.amount)}</td><td>${fmt(r.pe_dynamic,2)}</td><td>${fmt(r.pb,2)}</td><td>${money(r.total_market_cap)}</td><td>${money(r.float_market_cap)}</td><td>${pct(r.ma20_deviation_pct)}</td><td>${pct(r.amplitude_5d_pct)}</td><td>${pct(r.pos20)}</td><td title="${htmlEsc(r.technical_signal_summary||'')}">${htmlEsc(String(r.technical_signal_summary||'--').slice(0,34))}</td><td>${htmlEsc(r.capital_signal||'--')}</td><td title="${htmlEsc((r.theme_labels||[]).join('、'))}">${htmlEsc(r.theme_stage||'--')}</td><td>${htmlEsc(r.market_cap_style||'--')}</td><td>${pct(sr.support_dist_pct??r.support_dist_pct)}</td><td>${pct(sr.resistance_dist_pct??r.resistance_dist_pct)}</td><td>${htmlEsc(r.chase_high_risk||'--')}</td><td title="${htmlEsc(r.comprehensive_diagnosis||'')}"><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span> ${htmlEsc(String(r.comprehensive_diagnosis||'').slice(0,28))}</td><td>${fmt(r.script_score,1)}</td><td>${fmt(r.manual_review_score,1)}</td><td title="${htmlEsc(up)}">${htmlEsc(up.slice(0,28)||'--')}</td><td title="${htmlEsc(miss)}">${htmlEsc(miss.slice(0,28)||'--')}</td><td>${htmlEsc(r.grade)}</td><td>${(r.tags||[]).slice(0,6).map(t=>`<span class="tag" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')}</td></tr>`}).join('')||'<tr><td colspan="27" class="muted">暂无结果，请设置参数后点击“开始筛选”</td></tr>'}
 
@@ -426,7 +426,7 @@ function restoreScreenerState(){
         const sym=localStorage.getItem(LS_Q_SELECTED)||localStorage.getItem(LS_SELECTED);
         selected=rows.find(x=>x.symbol===sym)||rows[0]||null;
         updateMetrics({result_count:rows.length,analyzed_count:rows.length,pool_count:rows.length,elapsed_seconds:'本地恢复',error_count:0});
-        $('cacheHint').textContent='Restored local screener rows immediately; backend snapshot refresh continues in background.';
+        $('cacheHint').textContent='已立即恢复本地筛选结果；后端快照正在后台校验。';
       }
     }else if($('cacheHint')){
       $('cacheHint').textContent='本地暂无筛选结果缓存，正在尝试读取后端快照。';
@@ -451,7 +451,7 @@ function useFallbackStrategyLibrary(reason){
   selectedStrategyKeys=saved!==null?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);
   currentStrategyCategory='全部';
   renderStrategyTabs();renderStrategyLibrary();
-  if($('strategySummary'))$('strategySummary').insertAdjacentHTML('beforeend',` <span class="tag risk">fallback: ${htmlEsc(reason||'strategy api timeout')}</span>`);
+  if($('strategySummary'))$('strategySummary').insertAdjacentHTML('beforeend',` <span class="tag risk">兜底：${htmlEsc(reason||'策略接口超时')}</span>`);
 }
 async function loadStrategyLibrary(){
   const ctrl=new AbortController();
@@ -523,15 +523,15 @@ async function restoreLastScreener(){
     let js=null;
     if(sid){const resp=await fetch('/api/screener/snapshot/'+encodeURIComponent(sid),{cache:'no-store'});js=await resp.json();}
     if(!js||!js.ok){const resp=await fetch('/api/cache/screener/latest',{cache:'no-store'});js=await resp.json();}
-    if(!js||!js.ok){if(rows.length){$('cacheHint').textContent='Using local screener rows; backend snapshot unavailable.';}else showNoCacheState('后端没有可恢复的筛选快照');return}
+    if(!js||!js.ok){if(rows.length){$('cacheHint').textContent='后端快照暂不可用，正在使用本地筛选结果。';}else showNoCacheState('后端没有可恢复的筛选快照');return}
     const incoming=snapshotRows(js);
-    if(!incoming.length){$('cacheHint').textContent='Snapshot has no rows; local rows kept if available.';if(!rows.length)showNoCacheState('后端快照为空');return}
+    if(!incoming.length){$('cacheHint').textContent='后端快照没有结果；如有本地结果则继续保留。';if(!rows.length)showNoCacheState('后端快照为空');return}
     rows=incoming;selected=null;
     const sid2=js.snapshot_id||sid;if(sid2){localStorage.setItem(LS_Q_SNAPSHOT,sid2);localStorage.setItem(LS_SNAPSHOT,sid2);localStorage.setItem(LS_SNAPSHOT_LEGACY,sid2);}
     applySnapshotState(js);sortRows(false);render();restoreSelection(js.selected_symbol||js.selected_row?.symbol);persistScreenerState();
-    const stale=js.cache_status?.stale?' stale':'';
-    $('cacheHint').textContent=`Restored backend screener snapshot ${sid2||'latest'} (${incoming.length} rows, ${js.cache_status?.status||'cache'}${stale}).`;
-  }catch(e){if(rows.length){$('cacheHint').textContent='Backend restore failed; local rows preserved.';}else showNoCacheState('后端缓存读取失败：'+e);log('Restore failed: '+e,'ERROR')}
+    const stale=js.cache_status?.stale?'，已过期':'';
+    $('cacheHint').textContent=`已恢复后端筛选快照 ${sid2||'最近一次'}（${incoming.length} 行，${js.cache_status?.status||'缓存'}${stale}）。`;
+  }catch(e){if(rows.length){$('cacheHint').textContent='后端恢复失败，已保留本地结果。';}else showNoCacheState('后端缓存读取失败：'+e);log('恢复失败：'+e,'ERROR')}
 }
 
 function hideExplain(){const b=$('explainBox');if(b)b.style.display='none'}
@@ -722,11 +722,11 @@ runScreener=async function(){
   $('cacheHint').textContent='正在筛选；如果外部源失败或返回空结果，上一批缓存会保留。';
   try{
     const query=buildQuery();
-    log('Start screener; external latency depends on public sources and kline cache.');
+    log('开始筛选；耗时取决于公开数据源响应和本地 K 线缓存。');
     const resp=await fetch('/api/screener/run?'+query.toString(),{cache:'no-store'});
     if(!resp.ok)throw new Error('HTTP '+resp.status);
     const js=await resp.json();
-    if(!js.ok)throw new Error(js.message||'screener failed');
+    if(!js.ok)throw new Error(js.message||'筛选失败');
     const incoming=snapshotRows(js);
     const sid=js.screener_snapshot_id||js.snapshot_id||'';
     if(sid){localStorage.setItem(LS_SNAPSHOT,sid);localStorage.setItem(LS_SNAPSHOT_LEGACY,sid);localStorage.setItem(LS_Q_SNAPSHOT,sid)}
@@ -747,10 +747,10 @@ runScreener=async function(){
     render();restoreSelection(js.selected_symbol);
     persistScreenerState();
     const stableNote=js.score_stability_note?` · ${js.score_stability_note}`:'';
-    $('cacheHint').textContent=`cache=${js.cache_status?.status||'refreshed'} · snapshot=${sid||'--'} · 已写入本地缓存${stableNote}`;
-    log(`Screener done: result ${js.result_count}, analyzed ${js.analyzed_count??'--'}, pool ${js.pool_count??js.universe_count}, filtered ${js.filtered_out_count??0}, elapsed ${js.elapsed_seconds}s, errors ${js.error_count}, news=${js.news_enabled?'on':'off'}`);
+    $('cacheHint').textContent=`缓存=${js.cache_status?.status||'已刷新'} · 快照=${sid||'--'} · 已写入本地缓存${stableNote}`;
+    log(`筛选完成：结果 ${js.result_count}，已分析 ${js.analyzed_count??'--'}，股票池 ${js.pool_count??js.universe_count}，排除 ${js.filtered_out_count??0}，耗时 ${js.elapsed_seconds} 秒，错误 ${js.error_count}，信息面=${js.news_enabled?'开启':'关闭'}`);
     showActionToast(`筛选完成：${rows.length} 只，耗时 ${js.elapsed_seconds??'--'} 秒`);
-    if(js.errors&&js.errors.length)log('Partial failures: '+js.errors.slice(0,5).map(e=>e.symbol+':'+e.error).join('; '),'WARN');
+    if(js.errors&&js.errors.length)log('部分数据源失败：'+js.errors.slice(0,5).map(e=>e.symbol+':'+e.error).join('; '),'WARN');
     setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(localStorage.getItem(LS_Q_SCROLL)||localStorage.getItem(LS_SCROLL)||0)},50);
   }catch(e){
     rows=oldRows;selected=oldSelected;render();if(selected)renderDetail(selected);else renderDetail(null);
@@ -820,7 +820,7 @@ selectDefaultStrategies=function(){
   updateStrategySummary();
 }
 
-(function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('startup fallback');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 screener initialized: stable recovery, fallback strategies and local state persistence enabled')})();
+;(function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('本地启动兜底');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.18.3 筛选器已初始化：稳定恢复、兜底策略和本地状态持久化已启用')})();
 </script>
 </body>
 </html>'''
