@@ -19,11 +19,12 @@ def test_workbench_pauses_global_stream_when_hidden_and_deduplicates_requests():
 
 def test_realtime_paper_polling_is_visibility_aware_and_deduplicated():
     html = build_realtime_paper_ui()
-    assert "function installVisiblePoll" in html
-    assert "if(document.hidden||busy)return" in html
     assert "pageRefreshPromise" in html
-    assert "installVisiblePoll(refresh,15000)" in html
-    assert "installVisiblePoll(window.loadPaperConfirmations,15000)" in html
+    assert "document.addEventListener('visibilitychange'" in html
+    assert "renderPaperSessionMeta(activeSession||{})" in html
+    assert "renderPaperConfirmationsData(data.confirmations||{},data.sessions||{})" in html
+    assert "installVisiblePoll" not in html
+    assert "Promise.all([fetch('/api/realtime-paper/confirmations" not in html
 
 
 def test_screener_runtime_feedback_is_chinese():
