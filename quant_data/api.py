@@ -318,6 +318,7 @@ def _render_chinese_api_docs() -> str:
                 ("GET", "/api/auto-trading/config", "读取当前自动交易配置，包含股票池、策略组合、仓位模型、止盈止损、最大回撤和事件监控。"),
                 ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
+                ("GET", "/api/auto-trading/dashboard-overview", "一次读取总控台券商、模拟会话、账户持仓、交易记录、配置、调度器和数据中心状态；只读，不生成订单。"),
                 ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
                 ("GET", "/api/realtime-paper/scheduler/status", "查看服务端自动复评循环、活跃会话和交易时段；页面关闭后会话仍可运行，休市和午休不生成信号、订单或成交。"),
                 ("GET", "/api/market/event-factors/{symbol}", "读取可追溯市场事件因子，分别返回大盘环境与个股信息调整、来源链接、时间和传导链。"),
@@ -4491,8 +4492,7 @@ def _stop_realtime_paper_scheduler() -> None:
         _realtime_paper_scheduler_thread.join(timeout=2)
 
 
-@app.get("/api/realtime-paper/scheduler/status")
-def realtime_paper_scheduler_status() -> dict:
+def _realtime_paper_scheduler_status(session_rows_source: list[dict] | None = None) -> dict:
     enabled = str(os.getenv("REALTIME_PAPER_SCHEDULER_ENABLED", "true")).strip().lower() not in {
         "0",
         "false",
@@ -4503,7 +4503,12 @@ def realtime_paper_scheduler_status() -> dict:
     market_session = _market_session("CN")
     market_open = bool(market_session.get("can_refresh"))
     session_rows: list[dict[str, Any]] = []
-    for row in realtime_paper_engine_v323.list_sessions():
+    source_rows = (
+        session_rows_source
+        if session_rows_source is not None
+        else realtime_paper_engine_v323.list_sessions()
+    )
+    for row in source_rows:
         status = str(row.get("status") or "")
         if status not in {"running", "paused", "killed"}:
             continue
@@ -4547,6 +4552,11 @@ def realtime_paper_scheduler_status() -> dict:
         "last_error": _realtime_paper_scheduler_last_error,
         "policy": "开盘时按会话频率服务端逐只复评；休市和午休不生成信号、订单或成交。",
     }
+
+
+@app.get("/api/realtime-paper/scheduler/status")
+def realtime_paper_scheduler_status() -> dict:
+    return _realtime_paper_scheduler_status()
 
 
 @app.post("/api/realtime-paper/scheduler/run-due")
@@ -5393,9 +5403,7 @@ def live_broker_disconnect() -> dict:
     return live_trading_engine_v323.disconnect()
 
 
-@app.get("/api/live/account")
-def live_account() -> dict:
-    synced = live_trading_engine_v323.sync_live_account_state()
+def _live_account_response(synced: dict) -> dict:
     snapshot = {
         **dict(synced.get("account") or {}),
         "account": dict(synced.get("account") or {}),
@@ -5434,9 +5442,7 @@ def live_account() -> dict:
     return {"ok": True, "data": enriched, "source": source, "data_available": data_available, "missing_reason": enriched["missing_reason"]}
 
 
-@app.get("/api/live/positions")
-def live_positions() -> dict:
-    synced = live_trading_engine_v323.sync_live_account_state()
+def _live_positions_response(synced: dict) -> dict:
     rows = [_normalize_live_position(x) for x in synced.get("positions") or []]
     source = dict(synced.get("broker") or {})
     return {
@@ -5447,6 +5453,16 @@ def live_positions() -> dict:
         "source": source,
         "missing_reason": "" if rows else "当前券商未返回持仓；可能是 disabled/unsupported、未授权或账户暂无持仓。",
     }
+
+
+@app.get("/api/live/account")
+def live_account() -> dict:
+    return _live_account_response(live_trading_engine_v323.sync_live_account_state())
+
+
+@app.get("/api/live/positions")
+def live_positions() -> dict:
+    return _live_positions_response(live_trading_engine_v323.sync_live_account_state())
 
 
 def _review_live_positions() -> dict:
@@ -6113,8 +6129,7 @@ def trading_records_export_v323(mode: str = "", symbol: str = "") -> dict:
     return trading_records_v323(mode=mode, symbol=symbol, limit=1000)
 
 
-@app.get("/api/data-center/status")
-def data_center_status_v323() -> dict:
+def _data_center_status_payload(broker: dict | None = None) -> dict:
     cache = cache_state_service.overview()
     return {
         "ok": True,
@@ -6123,8 +6138,123 @@ def data_center_status_v323() -> dict:
         "trading_store": trading_store_v323.stats(),
         "pit_store": pit_store_v323.stats(),
         "sources": source_registry_v323.list(),
-        "broker": live_trading_engine_v323.status()["broker"],
+        "broker": dict(broker if broker is not None else live_trading_engine_v323.status().get("broker") or {}),
         "disclaimer": "没有真实数据时系统显示缺失/过期/不支持，不伪造。",
+    }
+
+
+@app.get("/api/data-center/status")
+def data_center_status_v323() -> dict:
+    return _data_center_status_payload()
+
+
+@app.get("/api/auto-trading/dashboard-overview")
+def auto_trading_dashboard_overview(records_limit: int = 30) -> dict:
+    """Aggregate stable dashboard state without creating signals or orders."""
+    component_errors: list[dict[str, str]] = []
+    timings_ms: dict[str, float] = {}
+
+    def capture(key: str, factory, fallback: dict) -> dict:
+        started = time_module.perf_counter()
+        try:
+            return factory()
+        except Exception as exc:
+            component_errors.append({"key": key, "error": str(exc)[:240]})
+            return fallback
+        finally:
+            timings_ms[key] = round((time_module.perf_counter() - started) * 1000, 2)
+
+    records_cap = max(1, min(int(records_limit or 30), 200))
+    fallbacks = {
+        "broker": {
+            "ok": False,
+            "broker": {"broker": "disabled", "status": "unknown", "connected": False},
+            "config": {"broker_type": "disabled"},
+            "safety": {
+                "LIVE_TRADING_ENABLED": False,
+                "ORDER_CONFIRM_REQUIRED": True,
+                "LIVE_KILL_SWITCH": False,
+            },
+        },
+        "live_sync": {
+            "account": {},
+            "positions": [],
+            "cash": {},
+            "broker": {},
+            "data_available": False,
+        },
+        "auto_config": {"ok": False, "data": {}},
+        "sessions": {"ok": False, "data": []},
+        "records": {"ok": False, "data": [], "count": 0, "summary": {}},
+        "queue": {"ok": False, "data": [], "count": 0},
+        "live_reviews": {"ok": False, "data": [], "count": 0, "broker_submitted": False},
+        "review_schedule": {"ok": False, "data": {}, "last_run": {}, "order_execution": False},
+    }
+    factories = {
+        "broker": live_broker_status,
+        "live_sync": live_trading_engine_v323.sync_live_account_state,
+        "auto_config": auto_trading_config_get,
+        "sessions": realtime_paper_sessions,
+        "records": lambda: trading_records_v323(limit=records_cap),
+        "queue": live_confirm_queue,
+        "live_reviews": lambda: live_position_reviews(limit=50),
+        "review_schedule": position_review_scheduler_status,
+    }
+    # These readers share the same SQLite store. Serial reads avoid lock contention
+    # and are faster here because the aggregate reuses their snapshots below.
+    base = {
+        key: capture(key, factory, fallbacks[key])
+        for key, factory in factories.items()
+    }
+
+    broker = base["broker"]
+    synced = base["live_sync"]
+    auto_config = base["auto_config"]
+    config_data = dict(auto_config.get("data") or {})
+    data = {
+        "broker": broker,
+        "sessions": base["sessions"],
+        "records": base["records"],
+        "data_center": capture(
+            "data_center",
+            lambda: _data_center_status_payload(dict(broker.get("broker") or {})),
+            {"ok": False, "trading_store": {"tables": {}}},
+        ),
+        "queue": base["queue"],
+        "live_account": capture(
+            "live_account",
+            lambda: _live_account_response(synced),
+            {"ok": False, "data": {}, "data_available": False},
+        ),
+        "live_positions": capture(
+            "live_positions",
+            lambda: _live_positions_response(synced),
+            {"ok": False, "data": [], "count": 0, "summary": {}},
+        ),
+        "auto_config": auto_config,
+        "readiness": capture(
+            "readiness",
+            lambda: _auto_trading_readiness(config_data),
+            {"ok": False, "gates": {}},
+        ),
+        "live_reviews": base["live_reviews"],
+        "review_schedule": base["review_schedule"],
+        "paper_schedule": capture(
+            "paper_schedule",
+            lambda: _realtime_paper_scheduler_status(
+                list(base["sessions"].get("data") or [])
+            ),
+            {"ok": False, "enabled": False, "running": False, "sessions": []},
+        ),
+    }
+    return {
+        "ok": True,
+        "partial": bool(component_errors),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "data": data,
+        "component_errors": component_errors,
+        "timings_ms": timings_ms,
+        "truth_boundary": "只读聚合状态；不会生成信号、订单、成交或绕过真实交易安全门禁。",
     }
 
 

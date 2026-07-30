@@ -966,6 +966,35 @@ function renderSectorMainline(js){
   }).join(''):`<tr><td colspan="20">${esc((js.missing_reasons||['当前没有真实板块资金数据']).join('；'))}</td></tr>`;
 }
 async function loadSectorMainline(force=false){const js=await api('/api/market/sectors/mainline?limit=50&include_concept=true&force='+force);renderSectorMainline(js);return js}
+async function loadDashboardCoreOverview(){
+  const keys=['broker','sessions','records','data_center','queue','live_account','live_positions','auto_config','readiness','live_reviews','review_schedule','paper_schedule'];
+  try{
+    const overview=await api('/api/auto-trading/dashboard-overview?records_limit=30');
+    if(overview?.ok&&overview.data){
+      const failedKeys=new Set((overview.component_errors||[]).map(x=>String(x.key||'')));
+      if(failedKeys.has('live_sync')){failedKeys.add('live_account');failedKeys.add('live_positions')}
+      return keys.map(key=>failedKeys.has(key)
+        ?{status:'rejected',reason:new Error((overview.component_errors||[]).find(x=>x.key===key)?.error||key+' unavailable')}
+        :{status:'fulfilled',value:overview.data[key]||{}});
+    }
+  }catch(error){
+    console.warn('auto trading dashboard overview fallback',error);
+  }
+  return Promise.allSettled([
+    api('/api/live-broker/status'),
+    api('/api/realtime-paper/sessions'),
+    api('/api/trading-records?limit=30'),
+    api('/api/data-center/status'),
+    api('/api/live/confirm-queue'),
+    api('/api/live/account'),
+    api('/api/live/positions'),
+    api('/api/auto-trading/config'),
+    api('/api/auto-trading/readiness'),
+    api('/api/live/position-reviews?limit=50'),
+    api('/api/position-reviews/scheduler/status'),
+    api('/api/realtime-paper/scheduler/status')
+  ]);
+}
 async function refreshAll(btn=null){
   if(workbenchRefreshPromise)return workbenchRefreshPromise;
   const task=withAction(btn,'刷新中','总控台已更新',async()=>{
@@ -973,7 +1002,7 @@ async function refreshAll(btn=null){
     renderModuleCards();
     setText('scoreTime','正在更新核心状态…');
     const extraPromise=Promise.allSettled([api('/api/score/latest/'+encodeURIComponent(primarySymbol())),api('/api/macro/global-events?limit=80'),loadGlobalStream(false),api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=80'),api('/api/market/sectors/mainline?limit=50&include_concept=true'),api('/api/realtime-paper/signals?limit=100'),api('/api/market/event-factors/'+encodeURIComponent(primarySymbol()))]);
-    const core=await Promise.allSettled([api('/api/live-broker/status'),api('/api/realtime-paper/sessions'),api('/api/trading-records?limit=30'),api('/api/data-center/status'),api('/api/live/confirm-queue'),api('/api/live/account'),api('/api/live/positions'),api('/api/auto-trading/config'),api('/api/auto-trading/readiness'),api('/api/live/position-reviews?limit=50'),api('/api/position-reviews/scheduler/status'),api('/api/realtime-paper/scheduler/status')]);
+    const core=await loadDashboardCoreOverview();
     const value=(idx,fallback={})=>core[idx].status==='fulfilled'?core[idx].value:fallback;
     const broker=value(0),sessions=value(1,{data:[]}),records=value(2,{data:[],summary:{}}),data=value(3),queue=value(4,{data:[],count:0}),liveAccount=value(5),livePositions=value(6,{data:[]}),autoConfig=value(7,{data:{}}),readiness=value(8,{gates:{}}),liveReviews=value(9,{data:[]}),reviewSchedule=value(10,{data:{}}),paperSchedule=value(11,{});
     applyAutoConfig(autoConfig.data);

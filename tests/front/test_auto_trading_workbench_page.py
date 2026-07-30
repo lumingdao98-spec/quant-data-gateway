@@ -173,6 +173,18 @@ def test_auto_trading_workbench_prefers_aggregated_paper_session_overview():
     assert "api(base+'/position-reviews?limit=50')" in html
 
 
+def test_auto_trading_workbench_prefers_aggregated_dashboard_overview():
+    html = TestClient(api.app).get("/auto-trading").text
+
+    assert "async function loadDashboardCoreOverview()" in html
+    assert "api('/api/auto-trading/dashboard-overview?records_limit=30')" in html
+    assert "if(overview?.ok&&overview.data)" in html
+    assert "auto trading dashboard overview fallback" in html
+    assert "const core=await loadDashboardCoreOverview()" in html
+    assert "api('/api/live-broker/status')" in html
+    assert "api('/api/realtime-paper/scheduler/status')" in html
+
+
 def test_embedded_quote_page_has_workbench_layout_guards():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time&embedded=1").text
 
