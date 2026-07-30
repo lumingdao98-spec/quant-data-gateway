@@ -16,6 +16,7 @@ class BrokerConfig:
     max_live_order_value: float = 50_000.0
     max_daily_live_order_count: int = 5
     max_daily_loss_pct: float = 0.03
+    live_score_max_age_seconds: int = 300
     qmt_path: str = ""
     qmt_account_id: str = ""
     qmt_account_type: str = ""
@@ -45,6 +46,7 @@ def load_broker_config(env: dict[str, str] | None = None) -> BrokerConfig:
         max_live_order_value=float(data.get("MAX_LIVE_ORDER_VALUE") or 50_000),
         max_daily_live_order_count=int(data.get("MAX_DAILY_LIVE_ORDER_COUNT") or 5),
         max_daily_loss_pct=float(data.get("MAX_DAILY_LOSS_PCT") or 0.03),
+        live_score_max_age_seconds=max(30, min(3600, int(data.get("LIVE_SCORE_MAX_AGE_SECONDS") or 300))),
         qmt_path=data.get("QMT_PATH", ""),
         qmt_account_id=data.get("QMT_ACCOUNT_ID", ""),
         qmt_account_type=data.get("QMT_ACCOUNT_TYPE", ""),

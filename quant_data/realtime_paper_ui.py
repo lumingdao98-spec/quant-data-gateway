@@ -179,7 +179,50 @@ async function loadAiDecision(btn=null){
     return js;
   });
 }
-async function refreshAll(btn=null){if(pageRefreshPromise)return pageRefreshPromise;const task=withButton(btn,'刷新中','页面已刷新',async()=>{const fast=await Promise.allSettled([api('/api/realtime-paper/status'),api('/api/realtime-paper/portfolio')]);if(fast[0].status==='fulfilled'){window.lastState=fast[0].value.state;renderStatus(fast[0].value)}if(fast[1].status==='fulfilled')renderPortfolio(fast[1].value);const details=await Promise.allSettled([api('/api/realtime-paper/signals'),api('/api/realtime-paper/orders'),api('/api/realtime-paper/audit')]);if(details[0].status==='fulfilled')renderSignals(details[0].value);if(details[1].status==='fulfilled')renderOrders(details[1].value);if(details[2].status==='fulfilled')renderAudit(details[2].value);const failed=[...fast,...details].filter(x=>x.status==='rejected');if(failed.length)log('部分模块刷新失败 '+failed.map(x=>x.reason).join('；'));return {failed:failed.length}});pageRefreshPromise=task;try{return await task}finally{if(pageRefreshPromise===task)pageRefreshPromise=null}}
+async function refreshAll(btn=null){
+  if(pageRefreshPromise)return pageRefreshPromise;
+  const task=withButton(btn,'刷新中','页面已刷新',async()=>{
+    try{
+      const overview=await api('/api/realtime-paper/dashboard-overview?limit=200&audit_limit=100');
+      const data=overview.data||{};
+      window.__paperOverview=overview;
+      window.lastState=data.status?.state||{};
+      renderStatus(data.status||{});
+      renderPortfolio(data.portfolio||{});
+      renderSignals(data.signals||{data:[]});
+      renderOrders(data.orders||{data:[]});
+      renderAudit(data.audit||{data:[]});
+      const sessionRows=data.sessions?.data||[];
+      activeSession=sessionRows.find(x=>['running','paused'].includes(x.status))||sessionRows[0]||activeSession;
+      if(typeof window.renderPaperSessionMeta==='function')window.renderPaperSessionMeta(activeSession||{});
+      return {failed:0,aggregated:true};
+    }catch(overviewError){
+      log('聚合状态暂不可用，已切换兼容读取：'+overviewError,'WARN');
+      const fast=await Promise.allSettled([
+        api('/api/realtime-paper/status'),
+        api('/api/realtime-paper/portfolio')
+      ]);
+      if(fast[0].status==='fulfilled'){
+        window.lastState=fast[0].value.state;
+        renderStatus(fast[0].value);
+      }
+      if(fast[1].status==='fulfilled')renderPortfolio(fast[1].value);
+      const details=await Promise.allSettled([
+        api('/api/realtime-paper/signals'),
+        api('/api/realtime-paper/orders'),
+        api('/api/realtime-paper/audit')
+      ]);
+      if(details[0].status==='fulfilled')renderSignals(details[0].value);
+      if(details[1].status==='fulfilled')renderOrders(details[1].value);
+      if(details[2].status==='fulfilled')renderAudit(details[2].value);
+      const failed=[...fast,...details].filter(x=>x.status==='rejected');
+      if(failed.length)log('部分模块刷新失败 '+failed.map(x=>x.reason).join('；'));
+      return {failed:failed.length,aggregated:false};
+    }
+  });
+  pageRefreshPromise=task;
+  try{return await task}finally{if(pageRefreshPromise===task)pageRefreshPromise=null}
+}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){nextAt=Date.now()+intervalSec()*1000;refreshAll().catch(e=>log('恢复页面刷新失败 '+e));updateCountdown()}});
 loadAutoConfig(true).then(()=>{initializingConfig=false;document.querySelectorAll('.side input,.side select,.side textarea').forEach(el=>{el.addEventListener('input',scheduleConfigApply);if(el.tagName!=='TEXTAREA')el.addEventListener('change',scheduleConfigApply)});return refreshAll()}).then(()=>restoreAutoLoop()).then(()=>loadAiDecision().catch(e=>log('AI证据辅助读取失败 '+e))).catch(e=>{initializingConfig=false;log('初始化失败 '+e)});
 </script>
@@ -193,6 +236,7 @@ loadAutoConfig(true).then(()=>{initializingConfig=false;document.querySelectorAl
   const panel=document.createElement('div');panel.id='v324SessionMeta';panel.className='v324-session-meta';banner.insertAdjacentElement('afterend',panel);
   const cnStatus=v=>({running:'运行中',paused:'已暂停',stopped:'已停止',killed:'Kill 已启用',fresh:'数据新鲜',stale:'数据过期',missing:'数据缺失'})[v]||v||'--';
   const render=s=>{const cfg=s.config||{};panel.innerHTML=[['会话 ID',s.session_id||'尚未启动'],['状态',cnStatus(s.status)],['刷新频率',(s.interval_seconds||cfg.interval_seconds||'--')+' 秒'],['最后行情',s.last_tick_at||'尚无'],['最后决策',s.last_decision_at||'尚无'],['数据/事件',cnStatus(s.freshness_status)+' · '+(s.event_trigger_count||0)+' 次']].map(x=>`<div><span>${x[0]}</span><b title="${String(x[1]).replace(/"/g,'&quot;')}">${x[1]}</b></div>`).join('')};
+  window.renderPaperSessionMeta=render;
   async function refresh(){try{const js=await fetch('/api/realtime-paper/sessions',{cache:'no-store'}).then(r=>r.json()),rows=js.data||[],s=rows.find(x=>['running','paused','killed'].includes(x.status))||rows[0]||{};render(s)}catch(e){render({status:'读取失败'})}}
   installVisiblePoll(refresh,15000);
 })();

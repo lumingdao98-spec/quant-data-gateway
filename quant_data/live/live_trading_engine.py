@@ -341,11 +341,27 @@ class LiveTradingEngine:
             provenance = self.store.get("score_provenance", order.provenance_id) if order.provenance_id else None
             provenance_ok = bool(provenance) and str((provenance or {}).get("symbol") or "") == order.symbol
             gate("score_provenance", provenance_ok, "缺少与该标的一致的持久化评分溯源")
+            provenance_mode = str((provenance or {}).get("mode") or "")
+            gate(
+                "score_provenance_mode",
+                provenance_ok and provenance_mode in {"realtime_paper", "live"},
+                "实盘订单不能使用历史回测评分溯源",
+            )
             provenance_fresh = provenance_ok and not list((provenance or {}).get("stale_data") or [])
             gate(
                 "score_provenance_fresh",
                 provenance_fresh,
                 "评分溯源包含过期数据",
+                required=order.side == "buy",
+            )
+            provenance_recent = provenance_ok and self._provenance_recent(
+                provenance or {},
+                max_age_seconds=self.config.live_score_max_age_seconds,
+            )
+            gate(
+                "score_provenance_recent",
+                provenance_recent,
+                "评分溯源已超过实盘允许时效，请重新生成实时评分",
                 required=order.side == "buy",
             )
 
@@ -460,6 +476,19 @@ class LiveTradingEngine:
         except (TypeError, ValueError):
             return False
         return -5 <= age <= max(1, int(ttl_seconds))
+
+    @staticmethod
+    def _provenance_recent(provenance: dict[str, Any], *, max_age_seconds: int = 300) -> bool:
+        raw = provenance.get("decision_time") or provenance.get("created_at")
+        if not raw:
+            return False
+        try:
+            decision_time = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            current = datetime.now(decision_time.tzinfo) if decision_time.tzinfo else datetime.now()
+            age = (current - decision_time).total_seconds()
+        except (TypeError, ValueError):
+            return False
+        return -5 <= age <= max(30, int(max_age_seconds or 300))
 
     @staticmethod
     def _precheck_result(gates: list[dict[str, Any]], *, order_value: float) -> dict[str, Any]:

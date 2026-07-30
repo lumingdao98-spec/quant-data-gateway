@@ -8,6 +8,7 @@ from typing import Any
 
 from quant_data.chart.trading_marker_engine import TradingMarkerEngine
 from quant_data.persistence.trading_store import TradingStore
+from quant_data.scoring import ScoreRequest, build_score_provenance_v323
 from quant_data.strategy.strategy_family import get_strategy_execution_profile, normalize_strategy_family
 from quant_data.trading.ledger import LedgerService
 from quant_data.trading.paper_account import PaperAccount
@@ -366,22 +367,55 @@ class RealtimePaperEngineV323:
 
     def sync_engine_state(self, session_id: str = "") -> dict[str, Any]:
         sid = session_id or self.active_session_id
-        counts = {"signals": 0, "orders": 0, "fills": 0, "positions": 0, "markers": 0, "audit_events": 0}
+        counts = {
+            "signals": 0,
+            "score_provenance": 0,
+            "orders": 0,
+            "fills": 0,
+            "positions": 0,
+            "markers": 0,
+            "audit_events": 0,
+        }
         if not sid:
             return counts
         engine = self.engines.get(sid)
         if engine is None:
             return counts
 
+        session = self.sessions.get(sid)
+        signal_links_by_key: dict[tuple[str, str], dict[str, str]] = {}
+        latest_signal_links: dict[str, dict[str, str]] = {}
         for row in engine.signal_rows(limit=1000).get("data") or []:
             item = dict(row)
             item.setdefault("mode", "realtime_paper")
             item.setdefault("session_id", sid)
             item.setdefault("created_at", item.get("timestamp") or item.get("decision_time") or _now())
             record_id = str(item.get("signal_id") or _stable_id("signal", sid, item))
+            item["signal_id"] = record_id
+            provenance = _build_realtime_score_provenance(item, session=session, session_id=sid)
+            if provenance:
+                provenance_id = str(provenance["provenance_id"])
+                item["provenance_id"] = provenance_id
+                self.store.put(
+                    "score_provenance",
+                    provenance,
+                    mode="realtime_paper",
+                    symbol=str(item.get("symbol") or ""),
+                    session_id=sid,
+                    record_id=provenance_id,
+                )
+                counts["score_provenance"] += 1
+            link = {
+                "signal_id": record_id,
+                "provenance_id": str(item.get("provenance_id") or ""),
+            }
+            symbol = str(item.get("symbol") or "")
+            signal_links_by_key.setdefault((symbol, _event_second(item)), link)
+            latest_signal_links.setdefault(symbol, link)
             self.store.put("signals", item, mode="realtime_paper", symbol=str(item.get("symbol") or ""), session_id=sid, record_id=record_id)
             counts["signals"] += 1
 
+        order_links: dict[str, dict[str, str]] = {}
         for row in engine.orders(limit=1000).get("data") or []:
             item = dict(row)
             item.setdefault("mode", "realtime_paper")
@@ -389,6 +423,14 @@ class RealtimePaperEngineV323:
             item.setdefault("created_at", item.get("created_at") or item.get("timestamp") or _now())
             record_id = str(item.get("order_id") or _stable_id("order", sid, item))
             item.setdefault("order_id", record_id)
+            symbol = str(item.get("symbol") or "")
+            signal_link = signal_links_by_key.get((symbol, _event_second(item))) or latest_signal_links.get(symbol) or {}
+            item.setdefault("signal_id", signal_link.get("signal_id") or "")
+            item.setdefault("provenance_id", signal_link.get("provenance_id") or "")
+            order_links[record_id] = {
+                "signal_id": str(item.get("signal_id") or ""),
+                "provenance_id": str(item.get("provenance_id") or ""),
+            }
             self.store.put("orders", item, mode="realtime_paper", symbol=str(item.get("symbol") or ""), session_id=sid, record_id=record_id)
             marker = self.marker_engine.from_order(item).to_dict()
             self.store.put("chart_markers", marker, mode="realtime_paper", symbol=marker.get("symbol", ""), session_id=sid, record_id=marker["marker_id"])
@@ -403,6 +445,9 @@ class RealtimePaperEngineV323:
             item.setdefault("filled_at", item.get("created_at") or item.get("timestamp") or _now())
             fill_id = str(item.get("fill_id") or _stable_id("fill", sid, item))
             item["fill_id"] = fill_id
+            order_link = order_links.get(str(item.get("order_id") or "")) or {}
+            item.setdefault("signal_id", order_link.get("signal_id") or "")
+            item.setdefault("provenance_id", order_link.get("provenance_id") or "")
             self.store.put("fills", item, mode="realtime_paper", symbol=str(item.get("symbol") or ""), session_id=sid, record_id=fill_id)
             self.ledger.record_fill(
                 item,
@@ -608,6 +653,198 @@ class RealtimePaperEngineV323:
 
     def _persist_session(self, session: RealtimeSession) -> None:
         self.store.put("paper_sessions", session.to_dict(), mode="realtime_paper", session_id=session.session_id, record_id=session.session_id)
+
+
+def _build_realtime_score_provenance(
+    item: dict[str, Any],
+    *,
+    session: RealtimeSession | None,
+    session_id: str,
+) -> dict[str, Any]:
+    symbol = str(item.get("symbol") or "").strip()
+    if not symbol:
+        return {}
+    decision_time = str(item.get("decision_time") or item.get("timestamp") or item.get("created_at") or _now())
+    freshness = dict(item.get("data_freshness") or {})
+    recent_information = dict(item.get("recent_information") or {})
+    screener_signal = dict(item.get("screener_signal") or {})
+    market_regime = dict(item.get("market_regime") or {})
+    missing_data = [str(value) for value in (item.get("missing_data") or []) if str(value)]
+    stale_fields = {str(value) for value in (freshness.get("stale_fields") or [])}
+    freshness_missing = {str(value) for value in (freshness.get("missing_fields") or [])}
+    score_source = str(item.get("score_source") or "unified_realtime_score")
+
+    sources: list[dict[str, Any]] = []
+    screener_snapshot_id = str(
+        (session.config or {}).get("screener_snapshot_id") if session else ""
+    )
+    screener_supports = [
+        key
+        for key in ("fundamental_score", "information_score")
+        if item.get(key) is not None and screener_signal.get(key) is not None
+    ]
+    if screener_supports or screener_snapshot_id:
+        sources.append(
+            {
+                "source_id": str(screener_signal.get("source") or "screener_snapshot"),
+                "source_name": "筛选评分快照",
+                "source_ref": screener_snapshot_id,
+                "fetched_at": str(screener_signal.get("fetched_at") or decision_time),
+                "available_at": str(screener_signal.get("available_at") or decision_time),
+                "supports": screener_supports,
+                "stale": bool(screener_signal.get("stale")),
+                "quality_status": str(screener_signal.get("quality_status") or "snapshot"),
+                "missing_reasons": list(screener_signal.get("missing_data") or []),
+            }
+        )
+
+    market_missing = sorted(
+        value
+        for value in freshness_missing
+        if value in {"quote", "intraday", "technical"}
+    )
+    sources.append(
+        {
+            "source_id": score_source,
+            "source_name": "实时行情与分时",
+            "source_ref": str(item.get("orderbook_source") or ""),
+            "fetched_at": str(
+                ((freshness.get("details") or {}).get("quote") or {}).get("timestamp")
+                or decision_time
+            ),
+            "available_at": decision_time,
+            "supports": ["technical_score", "fund_flow_score", "data_quality_score"],
+            "stale": bool(stale_fields.intersection({"quote", "intraday", "technical"})),
+            "quality_status": str(freshness.get("freshness_status") or freshness.get("action") or "unknown"),
+            "missing_reasons": market_missing,
+        }
+    )
+
+    information_supports = ["information_score"] if item.get("information_score") is not None else []
+    if recent_information or information_supports:
+        info_missing = [] if information_supports else ["information_score_missing"]
+        sources.append(
+            {
+                "source_id": str(
+                    recent_information.get("source_id")
+                    or recent_information.get("source")
+                    or "recent_information_snapshot"
+                ),
+                "source_name": str(recent_information.get("source_name") or "近期信息快照"),
+                "source_url": str(recent_information.get("source_url") or ""),
+                "source_ref": str(
+                    recent_information.get("snapshot_id")
+                    or recent_information.get("source_ref")
+                    or ""
+                ),
+                "fetched_at": str(
+                    recent_information.get("fetched_at")
+                    or recent_information.get("latest_published_at")
+                    or decision_time
+                ),
+                "published_at": str(recent_information.get("latest_published_at") or ""),
+                "available_at": str(recent_information.get("available_at") or decision_time),
+                "supports": information_supports,
+                "stale": bool(recent_information.get("stale") or "news" in stale_fields),
+                "quality_status": str(recent_information.get("quality_status") or "snapshot"),
+                "missing_reasons": info_missing + list(recent_information.get("missing_reasons") or []),
+            }
+        )
+
+    if item.get("market_score") is not None or market_regime:
+        sources.append(
+            {
+                "source_id": str(market_regime.get("source_id") or market_regime.get("source") or "market_regime"),
+                "source_name": str(market_regime.get("source_name") or "大盘环境"),
+                "source_ref": str(market_regime.get("snapshot_id") or ""),
+                "fetched_at": str(market_regime.get("fetched_at") or decision_time),
+                "available_at": str(market_regime.get("available_at") or decision_time),
+                "supports": ["market_regime_score"],
+                "stale": bool(market_regime.get("stale")),
+                "quality_status": str(market_regime.get("quality_status") or "snapshot"),
+                "missing_reasons": list(market_regime.get("missing_reasons") or []),
+            }
+        )
+
+    sources.append(
+        {
+            "source_id": "realtime_behavior_guard",
+            "source_name": "盘中异常风控",
+            "fetched_at": decision_time,
+            "available_at": decision_time,
+            "supports": ["behavior_risk_score"],
+            "stale": False,
+            "quality_status": "derived",
+            "missing_reasons": [],
+        }
+    )
+    market_source = next(
+        source for source in sources if source.get("source_name") == "实时行情与分时"
+    )
+    if missing_data:
+        market_source["missing_reasons"] = list(
+            dict.fromkeys(list(market_source.get("missing_reasons") or []) + missing_data)
+        )
+
+    quality_score = {
+        "allow": 95.0,
+        "reduce": 60.0,
+        "refresh_required": 40.0,
+        "block": 10.0,
+    }.get(str(freshness.get("action") or ""), 50.0)
+    provenance = build_score_provenance_v323(
+        ScoreRequest(
+            symbol=symbol,
+            decision_time=decision_time,
+            mode="realtime_paper",
+            strategy_family=str((session.strategy_family if session else "") or item.get("horizon") or "hybrid"),
+            factor_values={
+                "fundamental_score": item.get("fundamental_score"),
+                "technical_score": item.get("technical_score"),
+                "information_score": item.get("information_score"),
+                "fund_flow_score": item.get("fund_flow_score"),
+                "market_regime_score": item.get("market_score"),
+                "behavior_risk_score": item.get("anomaly_score"),
+                "data_quality_score": quality_score,
+            },
+            data_sources=sources,
+            action_hint=str(item.get("action") or "hold"),
+        )
+    ).to_dict()
+    policy_score = provenance.get("final_score")
+    decision_score = _score_number(item.get("final_score"))
+    if decision_score is not None:
+        provenance["policy_score"] = policy_score
+        provenance["final_score"] = decision_score
+        provenance["final_trade_score"] = decision_score
+    provenance.update(
+        {
+            "session_id": session_id,
+            "signal_id": str(item.get("signal_id") or ""),
+            "created_at": decision_time,
+            "score_source": score_source,
+            "score_breakdown": dict(item.get("score_breakdown") or {}),
+            "screener_snapshot_id": screener_snapshot_id,
+            "information_snapshot_id": str(recent_information.get("snapshot_id") or ""),
+            "decision_policy_hash": _stable_id(
+                "decision-policy",
+                (session.config or {}).get("score_weights") if session else {},
+                (item.get("score_breakdown") or {}).get("formula"),
+            ),
+        }
+    )
+    return provenance
+
+
+def _event_second(item: dict[str, Any]) -> str:
+    value = (
+        item.get("filled_at")
+        or item.get("created_at")
+        or item.get("timestamp")
+        or item.get("decision_time")
+        or ""
+    )
+    return str(value).replace(" ", "T")[:19]
 
 
 def _session_config(payload: dict[str, Any]) -> dict[str, Any]:

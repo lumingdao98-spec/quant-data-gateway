@@ -307,6 +307,7 @@ def _render_chinese_api_docs() -> str:
             [
                 ("POST", "/api/realtime-paper/start", "启动盘中纸面交易，只模拟不连真实券商。"),
                 ("GET", "/api/realtime-paper/status", "查看资金、持仓、最近信号、风险拦截和人工确认队列数量。"),
+                ("GET", "/api/realtime-paper/dashboard-overview", "一次读取模拟会话、账户、信号、订单、审计和确认队列；只读且不会生成交易。"),
                 ("GET", "/api/realtime-paper/orders", "纸面订单流水。"),
                 ("GET", "/api/realtime-paper/confirmations", "需要人工确认的候选交易。"),
             ],
@@ -2873,8 +2874,22 @@ def risk_pretrade_check(payload: dict = Body(default_factory=dict)) -> dict:
 
 @app.get("/api/score/latest/{symbol}")
 def score_latest_v323(symbol: str) -> dict:
-    rows = [x for x in score_provenance_memory_v323.values() if x.get("symbol") == symbol]
-    rows.sort(key=lambda x: str(x.get("decision_time") or ""), reverse=True)
+    symbol = normalize_symbol(symbol)
+    rows = [
+        dict(row)
+        for row in list(score_provenance_memory_v323.values())
+        + trading_store_v323.list("score_provenance", symbol=symbol, limit=500)
+        if str(row.get("symbol") or "") == symbol
+    ]
+    deduplicated = {
+        str(row.get("provenance_id") or row.get("id") or index): row
+        for index, row in enumerate(rows)
+    }
+    rows = list(deduplicated.values())
+    rows.sort(
+        key=lambda row: str(row.get("decision_time") or row.get("created_at") or ""),
+        reverse=True,
+    )
     return {"ok": True, "data": rows[0] if rows else None, "missing_reason": "" if rows else "暂无评分溯源，请先运行筛选/回测/模拟。"}
 
 
@@ -4234,6 +4249,69 @@ def realtime_paper_confirmations(status: str = "pending", limit: int = 200) -> d
     by_id = {str(row.get("task_id") or ""): row for row in [*rows, *legacy_rows]}
     rows = list(by_id.values())[:size]
     return {"ok": True, "data": rows, "count": len(rows), "paper_only": True}
+
+
+@app.get("/api/realtime-paper/dashboard-overview")
+def realtime_paper_dashboard_overview(limit: int = 200, audit_limit: int = 100) -> dict:
+    """Return one read-only paper-trading snapshot after a single store sync."""
+
+    size = max(1, min(int(limit or 200), 1000))
+    audit_size = max(1, min(int(audit_limit or 100), 1000))
+    sync_counts = realtime_paper_engine_v323.sync_engine_state()
+    session_id = realtime_paper_engine_v323.active_session_id
+    status = realtime_paper_engine_v323.status(session_id)
+    portfolio = realtime_paper_engine_v323.portfolio(session_id)
+    portfolio["v323_session"] = realtime_paper_engine_v323.active_session()
+    sessions = realtime_paper_engine_v323.list_sessions()
+    signals = (
+        trading_store_v323.list(
+            "signals",
+            mode="realtime_paper",
+            session_id=session_id,
+            limit=size,
+        )
+        if session_id
+        else []
+    )
+    orders = (
+        trading_store_v323.list(
+            "orders",
+            mode="realtime_paper",
+            session_id=session_id,
+            limit=size,
+        )
+        if session_id
+        else []
+    )
+    audit = (
+        trading_store_v323.list(
+            "audit_events",
+            mode="realtime_paper",
+            session_id=session_id,
+            limit=audit_size,
+        )
+        if session_id
+        else []
+    )
+    confirmations = realtime_paper_confirmations(status="pending", limit=size)
+    return {
+        "ok": True,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "session_id": session_id,
+        "data": {
+            "status": status,
+            "portfolio": portfolio,
+            "sessions": {"ok": True, "data": sessions, "count": len(sessions)},
+            "signals": {"ok": True, "data": signals, "count": len(signals), "session_id": session_id},
+            "orders": {"ok": True, "data": orders, "count": len(orders), "session_id": session_id},
+            "audit": {"ok": True, "data": audit, "count": len(audit), "session_id": session_id},
+            "confirmations": confirmations,
+        },
+        "sync_counts": sync_counts,
+        "paper_only": True,
+        "trading_events_created": False,
+        "truth_boundary": "只读聚合展示；不会触发评分、信号、委托或成交。",
+    }
 
 
 @app.post("/api/realtime-paper/confirmations/{task_id}/approve")
@@ -5894,14 +5972,19 @@ def live_reconciliation_run() -> dict:
 
 
 def _latest_score_provenance_for_live(symbol: str) -> dict[str, Any]:
+    allowed_modes = {"realtime_paper", "live"}
     rows = [
         dict(row)
         for row in list(score_provenance_memory_v323.values())
         + trading_store_v323.list("score_provenance", symbol=symbol, limit=500)
         if str(row.get("symbol") or "") == symbol
+        and str(row.get("mode") or "") in allowed_modes
     ]
     rows.sort(
-        key=lambda row: str(row.get("decision_time") or row.get("created_at") or ""),
+        key=lambda row: (
+            str(row.get("decision_time") or row.get("created_at") or ""),
+            1 if str(row.get("mode") or "") == "live" else 0,
+        ),
         reverse=True,
     )
     return rows[0] if rows else {}

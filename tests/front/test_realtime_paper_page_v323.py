@@ -57,3 +57,27 @@ def test_realtime_paper_page_has_visible_action_feedback_and_progressive_refresh
     assert "addEventListener('change',scheduleConfigApply)" in html
     assert "restoreAutoLoop" in html
     assert "已从服务端会话恢复自动循环" in html
+    assert "/api/realtime-paper/dashboard-overview" in html
+    assert "aggregated:true" in html
+
+
+def test_realtime_paper_dashboard_overview_is_read_only_and_complete():
+    data = TestClient(api.app).get(
+        "/api/realtime-paper/dashboard-overview?limit=25&audit_limit=15"
+    ).json()
+
+    assert data["ok"] is True
+    assert data["paper_only"] is True
+    assert data["trading_events_created"] is False
+    assert set(data["data"]) == {
+        "status",
+        "portfolio",
+        "sessions",
+        "signals",
+        "orders",
+        "audit",
+        "confirmations",
+    }
+    assert data["data"]["signals"]["count"] <= 25
+    assert data["data"]["orders"]["count"] <= 25
+    assert data["data"]["audit"]["count"] <= 15

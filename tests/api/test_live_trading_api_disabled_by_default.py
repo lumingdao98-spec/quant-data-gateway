@@ -3,6 +3,15 @@ from fastapi.testclient import TestClient
 import quant_data.api as api
 
 
+class _ScoreStore:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def list(self, table, **kwargs):
+        assert table == "score_provenance"
+        return list(self.rows)
+
+
 def test_live_trading_api_disabled_by_default():
     client = TestClient(api.app)
 
@@ -69,3 +78,36 @@ def test_live_account_reports_unavailable_instead_of_real_zero_balance():
     assert data["ok"] is True
     assert data["data_available"] is False
     assert data["missing_reason"]
+
+
+def test_live_score_lookup_ignores_newer_backtest_provenance(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "score_provenance_memory_v323",
+        {
+            "backtest-new": {
+                "provenance_id": "backtest-new",
+                "symbol": "300750",
+                "mode": "backtest",
+                "decision_time": "2026-07-30T10:10:00",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        api,
+        "trading_store_v323",
+        _ScoreStore(
+            [
+                {
+                    "provenance_id": "paper-current",
+                    "symbol": "300750",
+                    "mode": "realtime_paper",
+                    "decision_time": "2026-07-30T10:09:00",
+                }
+            ]
+        ),
+    )
+
+    provenance = api._latest_score_provenance_for_live("300750")
+
+    assert provenance["provenance_id"] == "paper-current"

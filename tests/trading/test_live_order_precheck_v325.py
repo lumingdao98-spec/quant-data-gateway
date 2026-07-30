@@ -21,19 +21,19 @@ def _engine(tmp_path):
     return LiveTradingEngine(config=config, broker=broker, store=store), broker, store
 
 
-def _evidence(store, *, side="buy", quantity=100):
+def _evidence(store, *, side="buy", quantity=100, provenance_mode="realtime_paper"):
     now = datetime.now().isoformat(timespec="seconds")
     store.put(
         "score_provenance",
         {
             "provenance_id": "sp-live-1",
             "symbol": "300750",
-            "mode": "realtime_paper",
+            "mode": provenance_mode,
             "decision_time": now,
             "final_score": 68.0,
             "stale_data": [],
         },
-        mode="realtime_paper",
+        mode=provenance_mode,
         symbol="300750",
         record_id="sp-live-1",
     )
@@ -101,6 +101,28 @@ def test_real_provider_rechecks_all_evidence_before_broker_submission(tmp_path, 
     assert len(broker.get_orders()) == 1
 
 
+def test_real_provider_rejects_backtest_score_provenance(tmp_path, monkeypatch):
+    engine, broker, store = _engine(tmp_path)
+    monkeypatch.setattr(
+        live_engine_module,
+        "market_session_status",
+        lambda: {"is_trading_day": True, "is_trading_time": True},
+    )
+    payload = {
+        "symbol": "300750",
+        "side": "buy",
+        "quantity": 100,
+        "limit_price": 10,
+        **_evidence(store, provenance_mode="backtest"),
+    }
+
+    result = engine.place_order(payload, confirmed=True)
+
+    assert result["ok"] is False
+    assert result["data"]["precheck"]["reason_code"] == "score_provenance_mode"
+    assert broker.get_orders() == []
+
+
 def test_confirmation_rechecks_freshness_instead_of_reusing_old_boolean(tmp_path, monkeypatch):
     engine, broker, store = _engine(tmp_path)
     monkeypatch.setattr(
@@ -142,4 +164,3 @@ def test_disabled_broker_cannot_execute_after_human_confirmation(tmp_path):
 
     assert approved["ok"] is False
     assert approved["execution"]["data"]["precheck"]["reason_code"] == "broker_connected"
-

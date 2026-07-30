@@ -143,3 +143,68 @@ def test_realtime_score_combines_screener_daily_k_and_intraday(tmp_path):
     assert weak["technical_score"] < strong["technical_score"]
     assert weak["final_score"] < strong["final_score"]
     assert strong["score_breakdown"]["screener_snapshot_id"] == "screen-1"
+
+
+def test_realtime_signal_persists_score_provenance_and_links_orders(tmp_path):
+    store = TradingStore(tmp_path / "paper_score_provenance.sqlite")
+    engine = RealtimePaperEngineV323(store=store)
+    session_id = engine.start_session(
+        {
+            "symbols": ["600438"],
+            "initial_cash": 100_000,
+            "screener_snapshot_id": "screen-live-1",
+            "screener_signal_map": {
+                "600438": {
+                    "name": "通威股份",
+                    "final_score": 72,
+                    "technical_score": 70,
+                    "fundamental_score": 68,
+                    "information_score": 66,
+                    "fund_flow_score": 70,
+                    "market_score": 62,
+                    "source": "screener_snapshot",
+                }
+            },
+        }
+    )["session"]["session_id"]
+
+    engine.tick(
+        {
+            "session_id": session_id,
+            "symbol": "600438",
+            "price": 12.0,
+            "intraday_score": 76,
+            "technical_score": 76,
+            "fund_flow_score": 74,
+            "market_score": 64,
+            "score_source": "realtime_quote_intraday_v323",
+            "recent_information": {
+                "snapshot_id": "info-live-1",
+                "source_id": "official_news_cache",
+                "source_name": "近期官方信息",
+                "quality_status": "fresh",
+            },
+        },
+        manual_replay=True,
+    )
+    counts = engine.sync_engine_state(session_id)
+
+    provenances = store.list("score_provenance", mode="realtime_paper", session_id=session_id)
+    signals = store.list("signals", mode="realtime_paper", session_id=session_id)
+    orders = store.list("orders", mode="realtime_paper", session_id=session_id)
+
+    assert counts["score_provenance"] >= 1
+    assert provenances
+    assert provenances[0]["mode"] == "realtime_paper"
+    assert provenances[0]["screener_snapshot_id"] == "screen-live-1"
+    assert provenances[0]["information_snapshot_id"] == "info-live-1"
+    assert provenances[0]["final_score"] == signals[0]["final_score"]
+    assert signals[0]["provenance_id"] == provenances[0]["provenance_id"]
+    assert all(row["provenance_id"] == provenances[0]["provenance_id"] for row in orders)
+
+    provenance_ids = {row["provenance_id"] for row in provenances}
+    engine.sync_engine_state(session_id)
+    repeated = store.list("score_provenance", mode="realtime_paper", session_id=session_id)
+
+    assert len(repeated) == len(provenances)
+    assert {row["provenance_id"] for row in repeated} == provenance_ids
