@@ -311,7 +311,9 @@ let globalStreamTimer=null;
 let globalStreamPromise=null;
 let workbenchRefreshPromise=null;
 let globalTickerPaused=false;
-let globalStreamRefreshMs=20000;
+let globalStreamRefreshMs=35000;
+let globalStreamLastLoadedAt=0;
+let globalStreamLastPayload=null;
 let strategyEditorHydrated=false;
 let deferredStrategyConfig=null;
 function arrangeDashboardPanels(){
@@ -682,52 +684,20 @@ async function loadAgentBrief(force=false){
   renderAgentDecision(agent);
   renderGlobalFeed(js);
 }
-function streamItemsOf(js){return (js?.items||js?.data?.items||[]).filter(Boolean)}
-function mergeGlobalStreams(jin10,global){
-  const seen=new Set();
-  const items=[];
-  for(const item of [...streamItemsOf(jin10),...streamItemsOf(global)]){
-    const title=String(item.title||item.summary||'').trim();
-    if(!title)continue;
-    const key=(String(item.source||'')+':'+title).replace(/\\W+/g,'').slice(0,140);
-    if(seen.has(key))continue;
-    seen.add(key);
-    items.push({...item,rank:items.length+1});
-    if(items.length>=80)break;
-  }
-  const jd=jin10?.data||{};
-  const gd=global?.data||{};
-  const sources=[...(jd.sources_status||[]),...(gd.sources_status||[])];
-  const refresh=Math.max(12,Math.min(60,Number(jin10?.refresh_seconds||jd.refresh_seconds||global?.refresh_seconds||gd.refresh_seconds||20)));
-  return {
-    ok:true,
-    items,
-    cache_status:jin10?.cache_status||global?.cache_status||{},
-    data:{
-      ...gd,
-      items,
-      raw_count:items.length,
-      updated_at:jd.updated_at||gd.updated_at||new Date().toISOString(),
-      stream_mode:(jd.stream_mode||'jin10')+' + '+(gd.stream_mode||'global'),
-      sources_status:sources,
-      refresh_seconds:refresh,
-      missing_reason:items.length?'':(jd.missing_reason||gd.missing_reason||'金十和全球快讯源暂未返回有效条目；不会伪造新闻。'),
-      source_candidates:[...(jd.source_candidates||[]),...(gd.source_candidates||[])]
-    },
-    refresh_seconds:refresh
-  };
-}
 async function loadGlobalStream(force=false){
   if(globalStreamPromise)return globalStreamPromise;
-  const task=(async()=>{
-    const [jin10,global]=await Promise.all([
-      api('/api/news/jin10/realtime?limit=80&force='+(force?'true':'false')),
-      api('/api/news/global/stream?limit=80&live=true&force='+(force?'true':'false'))
-    ]);
-    const merged=mergeGlobalStreams(jin10,global);
-    renderGlobalStream(merged);
+  if(!force&&globalStreamLastPayload&&Date.now()-globalStreamLastLoadedAt<10000){
+    renderGlobalStream(globalStreamLastPayload);
     scheduleGlobalStreamLoop();
-    return merged;
+    return globalStreamLastPayload;
+  }
+  const task=(async()=>{
+    const stream=await api('/api/news/global/stream?limit=80&live=true&force='+(force?'true':'false'));
+    globalStreamLastPayload=stream;
+    globalStreamLastLoadedAt=Date.now();
+    renderGlobalStream(stream);
+    scheduleGlobalStreamLoop();
+    return stream;
   })();
   globalStreamPromise=task;
   try{return await task}finally{if(globalStreamPromise===task)globalStreamPromise=null}
@@ -736,20 +706,20 @@ function toggleGlobalTicker(){
   globalTickerPaused=!globalTickerPaused;
   $('globalTicker').classList.toggle('paused',globalTickerPaused);
   $('tickerPauseBtn').textContent=globalTickerPaused?'继续轮播':'暂停轮播';
-  if(globalTickerPaused){if(globalStreamTimer)clearInterval(globalStreamTimer);globalStreamTimer=null}
+  if(globalTickerPaused){if(globalStreamTimer)clearTimeout(globalStreamTimer);globalStreamTimer=null}
   else{loadGlobalStream(false).catch(()=>{});scheduleGlobalStreamLoop()}
 }
 function scheduleGlobalStreamLoop(){
-  if(globalStreamTimer)clearInterval(globalStreamTimer);
+  if(globalStreamTimer)clearTimeout(globalStreamTimer);
   globalStreamTimer=null;
   if(document.hidden||globalTickerPaused)return;
-  globalStreamTimer=setInterval(()=>{if(!document.hidden&&!globalTickerPaused)loadGlobalStream(false).catch(()=>{})},globalStreamRefreshMs);
+  globalStreamTimer=setTimeout(()=>{if(!document.hidden&&!globalTickerPaused)loadGlobalStream(false).catch(()=>{})},globalStreamRefreshMs);
 }
 function startGlobalStreamLoop(){
   if(!window.__qdGlobalVisibilityBound){
     window.__qdGlobalVisibilityBound=true;
     document.addEventListener('visibilitychange',()=>{
-      if(document.hidden){if(globalStreamTimer)clearInterval(globalStreamTimer);globalStreamTimer=null;return}
+      if(document.hidden){if(globalStreamTimer)clearTimeout(globalStreamTimer);globalStreamTimer=null;return}
       loadGlobalStream(false).catch(()=>{});
       scheduleGlobalStreamLoop();
     });
@@ -894,7 +864,7 @@ function renderGlobalStream(js){
   const items=(js.items||data.items||[]).slice(0,60);
   const status=$('globalStreamStatus');
   const mode=cnEnum(data.stream_mode||js.cache_status?.status||'实时流');
-  const refresh=Math.max(12,Math.min(60,Number(js.refresh_seconds||data.refresh_seconds||20)));
+  const refresh=Math.max(30,Math.min(90,Number(js.refresh_seconds||data.refresh_seconds||35)));
   globalStreamRefreshMs=refresh*1000;
   status.textContent=(items.length?items.length+' 条':'暂无快讯')+' · '+mode;
   status.className='pill '+(items.length?'good':'warn');

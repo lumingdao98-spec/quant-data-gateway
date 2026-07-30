@@ -40,12 +40,10 @@ def test_auto_trading_workbench_page_visible():
     assert "/api/data-center/status" in html
     assert "/api/macro/global-events" in html
     assert "/api/news/global/stream" in html
-    assert "/api/news/jin10/realtime" in html
     assert "/api/agent/market-brief" in html
     assert "globalTicker" in html
     assert "globalStream" in html
     assert "globalStreamSources" in html
-    assert "mergeGlobalStreams" in html
     assert "sourceUrlOf" in html
     assert "sourceLabelOf" in html
     assert "sourceMetaHtml" in html
@@ -160,6 +158,8 @@ def test_auto_trading_workbench_lazily_hydrates_advanced_strategy_editor():
     assert "展开高级自定义后加载逐项参数" in html
     assert "renderGlobalFeed(macro);renderAgentDecision(agent)" in html
     assert "renderGlobalFeed(macro);renderGlobalStream(stream)" not in html
+    assert html.count("api('/api/news/global/stream?") == 1
+    assert "api('/api/news/jin10/realtime?" not in html
 
 
 def test_embedded_quote_page_has_workbench_layout_guards():

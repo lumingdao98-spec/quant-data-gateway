@@ -9,6 +9,12 @@ def test_workbench_pauses_global_stream_when_hidden_and_deduplicates_requests():
     assert "globalStreamPromise" in html
     assert "workbenchRefreshPromise" in html
     assert "visibilitychange" in html
+    assert html.count("api('/api/news/global/stream?") == 1
+    assert "api('/api/news/jin10/realtime?" not in html
+    assert "globalStreamLastLoadedAt" in html
+    assert "Date.now()-globalStreamLastLoadedAt<10000" in html
+    assert "globalStreamTimer=setTimeout" in html
+    assert "Math.max(30,Math.min(90" in html
 
 
 def test_realtime_paper_polling_is_visibility_aware_and_deduplicated():
