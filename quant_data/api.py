@@ -4854,6 +4854,52 @@ def realtime_paper_session_audit(session_id: str, limit: int = 300) -> dict:
     return {"ok": True, "data": rows, "count": len(rows), "session_id": session_id}
 
 
+@app.get("/api/realtime-paper/sessions/{session_id}/overview")
+def realtime_paper_session_overview(
+    session_id: str,
+    orders_limit: int = 500,
+    fills_limit: int = 500,
+    markers_limit: int = 50,
+    audit_limit: int = 100,
+    reviews_limit: int = 50,
+) -> dict:
+    """Return the read-only session panels in one request."""
+    snapshot = realtime_paper_session_get(session_id)
+    if not snapshot.get("ok"):
+        return {
+            "ok": False,
+            "session_id": session_id,
+            "message": "实时模拟会话不存在",
+            "data": {"snapshot": snapshot},
+        }
+
+    marker_cap = max(1, min(int(markers_limit or 50), 1000))
+    markers = realtime_paper_session_markers(session_id)
+    marker_rows = list(markers.get("data") or [])[:marker_cap]
+    markers = {**markers, "data": marker_rows, "count": len(marker_rows)}
+
+    data = {
+        "snapshot": snapshot,
+        "orders": realtime_paper_session_orders(session_id, limit=orders_limit),
+        "fills": realtime_paper_session_fills(session_id, limit=fills_limit),
+        "positions": realtime_paper_session_positions(session_id),
+        "markers": markers,
+        "audit": realtime_paper_session_audit(session_id, limit=audit_limit),
+        "reviews": realtime_paper_position_reviews(session_id, limit=reviews_limit),
+    }
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "data": data,
+        "counts": {
+            key: int(value.get("count") or 0)
+            for key, value in data.items()
+            if key in {"orders", "fills", "markers", "audit", "reviews"}
+        },
+    }
+
+
 def _normalize_live_position(row: dict) -> dict:
     row = dict(row or {})
     qty = _as_float(row.get("quantity") or row.get("volume") or row.get("qty"), 0.0)

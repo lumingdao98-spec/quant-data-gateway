@@ -162,6 +162,17 @@ def test_auto_trading_workbench_lazily_hydrates_advanced_strategy_editor():
     assert "api('/api/news/jin10/realtime?" not in html
 
 
+def test_auto_trading_workbench_prefers_aggregated_paper_session_overview():
+    html = TestClient(api.app).get("/auto-trading").text
+
+    assert "async function loadSessionOverview(base)" in html
+    assert "base+'/overview?orders_limit=500&fills_limit=500&markers_limit=50&audit_limit=100&reviews_limit=50'" in html
+    assert "if(overview?.ok&&overview.data)return overview.data" in html
+    assert "realtime paper overview fallback" in html
+    assert "const {snapshot,orders,fills,positions,markers,audit,reviews}=await loadSessionOverview(base)" in html
+    assert "api(base+'/position-reviews?limit=50')" in html
+
+
 def test_embedded_quote_page_has_workbench_layout_guards():
     html = TestClient(api.app).get("/ui?symbol=300750&frame=time&embedded=1").text
 

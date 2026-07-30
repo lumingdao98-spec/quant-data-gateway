@@ -589,11 +589,30 @@ function renderPortfolioOverview(liveAccount,livePositions,records,paperPortfoli
     return `<tr><td>${esc(x.record_type_cn||x.table||'记录')}</td><td>${esc(x.symbol||'--')}</td><td>${esc(x.display_side||x.side||x.display_status||x.status||'--')}</td><td>${esc(price)}</td><td>${esc(qty)}</td><td class="${pnlClass(pnl)}">${detail}</td></tr>`;
   }).join('')||'<tr><td colspan="6">暂无交易流水；预检查、确认、成交后会自动出现在这里。</td></tr>';
 }
+async function loadSessionOverview(base){
+  const overviewUrl=base+'/overview?orders_limit=500&fills_limit=500&markers_limit=50&audit_limit=100&reviews_limit=50';
+  try{
+    const overview=await api(overviewUrl);
+    if(overview?.ok&&overview.data)return overview.data;
+  }catch(error){
+    console.warn('realtime paper overview fallback',error);
+  }
+  const [snapshot,orders,fills,positions,markers,audit,reviews]=await Promise.all([
+    api(base),
+    api(base+'/orders?limit=500'),
+    api(base+'/fills?limit=500'),
+    api(base+'/positions'),
+    api(base+'/markers?limit=50'),
+    api(base+'/audit?limit=100'),
+    api(base+'/position-reviews?limit=50')
+  ]);
+  return {snapshot,orders,fills,positions,markers,audit,reviews};
+}
 async function loadSessionDetails(session){
   activeSessionId=sessionIdOf(session)||activeSessionId;
   if(!activeSessionId){$('sessionSnapshot').textContent='暂无 active session';$('paperPositionReviews').innerHTML='<span class="muted">暂无可复核模拟持仓。</span>';renderSessionRows({});return}
   const base='/api/realtime-paper/sessions/'+encodeURIComponent(activeSessionId);
-  const [snapshot,orders,fills,positions,markers,audit,reviews]=await Promise.all([api(base),api(base+'/orders?limit=500'),api(base+'/fills?limit=500'),api(base+'/positions'),api(base+'/markers?limit=50'),api(base+'/audit?limit=100'),api(base+'/position-reviews?limit=50')]);
+  const {snapshot,orders,fills,positions,markers,audit,reviews}=await loadSessionOverview(base);
   const sess=snapshot.data||session||{};
   $('activeSessionText').textContent=(sess.status||'--')+' · '+activeSessionId;
   const account=positions.data?.snapshot||{};
