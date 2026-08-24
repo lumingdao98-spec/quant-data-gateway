@@ -106,7 +106,9 @@ def test_signal_fusion_exposes_exact_chinese_score_contributions():
     labels = {row["label"] for row in breakdown["contributions"]}
     contribution_total = sum(row["contribution"] for row in breakdown["contributions"])
 
-    assert {"筛选底座", "基本面", "实时择时", "近期信息", "量价资金", "大盘环境"} <= labels
+    assert {"基本面", "实时择时", "近期信息", "量价资金", "大盘环境"} <= labels
+    assert "筛选底座" not in labels
+    assert breakdown["audit_only_dimensions"] == ["筛选底座"]
     assert breakdown["timing_formula"] == "实时择时分 = 日K结构55% + 当日分时45%"
     assert breakdown["anomaly_deduction"] == 3.5
     assert round(contribution_total - breakdown["anomaly_deduction"], 4) == breakdown["final_score"]

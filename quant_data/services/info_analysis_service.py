@@ -9,6 +9,7 @@ from quant_data.services.news_service import NewsAnalysisService
 from quant_data.services.fundamental_library_service import FundamentalLibraryService
 from quant_data.services.company_profile_service import CompanyProfileService
 from quant_data.services.global_industry_mapper import GlobalIndustryMapper
+from quant_data.services.information_event_calendar_service import InformationEventCalendarService
 from quant_data.utils import normalize_symbol, safe_float
 
 
@@ -25,6 +26,7 @@ class InfoAnalysisService:
         self.fundamental_library = FundamentalLibraryService()
         self.company_profile_service = CompanyProfileService()
         self.global_mapper = GlobalIndustryMapper()
+        self.event_calendar = InformationEventCalendarService()
 
     def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "normal", deep_refresh: bool = False, allow_network: bool = True) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
@@ -51,7 +53,7 @@ class InfoAnalysisService:
                 if mode == "light" and force and allow_network
                 else 8.0
                 if mode == "deep"
-                else 5.0
+                else 4.5
                 if mode == "normal"
                 else 4.0
             ),
@@ -60,12 +62,20 @@ class InfoAnalysisService:
         # 公司画像只在 force=true 或本地缓存过期时主动刷新；全球/国内要闻按短缓存自动刷新。
         profile = self.company_profile_service.get_profile(
             symbol,
-            force=(force and mode != "light"),
-            local_only=(mode == "light"),
+            force=(deep_refresh and allow_network),
+            local_only=(mode != "deep" or not allow_network),
         )
-        global_news = self._safe_global_news(force=bool(force or deep_refresh)) if mode in {"normal", "deep"} else {"items": [], "cache_info": {"skipped": "light_mode"}}
+        # A stock refresh must not synchronously fan out to every macro source.
+        # Normal mode reuses the short global cache; only an explicit deep
+        # refresh asks the global stream to go back to the network.
+        global_news = self._safe_global_news(force=bool(deep_refresh)) if mode in {"normal", "deep"} and allow_network else {
+            "items": [],
+            "cache_info": {"skipped": "cache_only_mode" if not allow_network else "light_mode"},
+        }
         global_mapping = self.global_mapper.map_items((global_news or {}).get("items", []), symbol, name=qname, profile=profile)
-        finance = self._finance_snapshot(symbol, quote, allow_network=allow_network and mode != "light")
+        # Quote PE/PB/amount are enough for a normal information refresh.  The
+        # slower optional statement provider is reserved for deep refresh.
+        finance = self._finance_snapshot(symbol, quote, allow_network=allow_network and mode == "deep")
         policy = self._policy_summary(news, qname, symbol, global_news=global_news, profile=profile)
         policy["industry_mapped_items"] = global_mapping.get("industry_mapped_items", [])
         policy["mapped_industries"] = global_mapping.get("mapped_industries", [])
@@ -78,13 +88,24 @@ class InfoAnalysisService:
             adjust = sum(1.5 if x.get("impact_direction") == "positive" else -1.8 if x.get("impact_direction") == "negative" else 0.4 for x in related_mapped[:10])
             policy["policy_score"] = round(max(0, min(100, safe_float(policy.get("policy_score"), 50) + adjust)), 2)
         evidence_counts = self._evidence_counts(news, finance, policy)
-        info_score = self._info_score(news, finance, policy)
+        score_detail = self._info_score_detail(news, finance, policy)
+        info_score = score_detail["score"]
+        future_calendar = self.event_calendar.build(
+            symbol,
+            qname,
+            items=news.get("items") or [],
+            global_items=(global_news or {}).get("items") or [],
+        )
         data_quality = dict(news.get("data_quality") or {})
         data_quality.update({
             "dated_items": evidence_counts.get("dated_items"),
             "unknown_date_items": evidence_counts.get("unknown_date_items"),
             "stored_items_used": news.get("stored_items_used"),
             "stored_items_saved": news.get("stored_items_saved"),
+            "content_quality_coverage": score_detail["content_quality_coverage"],
+            "data_quality_score": score_detail["data_quality_score"],
+            "score_confidence": score_detail["score_confidence"],
+            "score_eligible": score_detail["score_eligible"],
         })
         return {
             "symbol": symbol,
@@ -119,17 +140,15 @@ class InfoAnalysisService:
             "mapped_symbols": global_mapping.get("mapped_symbols", []),
             "evidence_counts": evidence_counts,
             "policy_clue_count": policy.get("policy_clue_count", 0),
+            "future_event_calendar": future_calendar,
             "data_quality": data_quality,
             "cache_info": news.get("cache_info") or {},
             "crawl_mode": mode,
             "deep_refresh": bool(deep_refresh),
-            "breakdown": [
-                {"name": "公司/公告事件", "score": news.get("news_score", 50), "weight": 0.30},
-                {"name": "来源可信度", "score": news.get("avg_credibility") or 50, "weight": 0.10},
-                {"name": "财报/估值", "score": finance.get("finance_score", 50), "weight": 0.16},
-                {"name": "前沿要闻/行业映射", "score": policy.get("policy_score", 50), "weight": 0.36},
-                {"name": "传闻噪声惩罚", "score": max(0, 100 - safe_float(news.get("avg_fake_risk"), 20)), "weight": 0.08},
-            ],
+            "breakdown": score_detail["components"],
+            "score_confidence": score_detail["score_confidence"],
+            "data_quality_score": score_detail["data_quality_score"],
+            "score_eligible": score_detail["score_eligible"],
             "scoring_model": self._scoring_model(),
             "summary": self._summary(news, finance, policy, info_score),
             "risk_flags": list(dict.fromkeys((news.get("risk_flags") or []) + (finance.get("risk_flags") or []) + (policy.get("risk_flags") or []))),
@@ -152,12 +171,23 @@ class InfoAnalysisService:
 
     def _scoring_model(self) -> dict[str, Any]:
         return {
-            "信息面分公式": "0.30×公司/公告事件 + 0.10×来源可信度 + 0.16×财报估值 + 0.36×全球/国内要闻相关映射 + 0.08×(100-传闻噪声) - 官方负面惩罚",
+            "信息面分公式": "以50分为中性基线；各维度偏离50分的部分按权重和可用置信度计入，再扣除官方负面事件惩罚。缺失维度不再用虚构高分补齐。",
+            "正文质量权重": "公告/新闻正文1.00，结构化摘要0.72，仅标题0.35，网页导航或免责声明0；未来事件结果在发生前权重0。",
+            "未来事件规则": "中报/年报窗口、交割日和会议日进入事件日历。公开来源已确认日期可触发刷新、仓位限制或人工确认；规则推算日期只提醒，不预判涨跌。",
             "筛选融合公式": "启用信息面评分后：综合分 = 技术/量价底分×(1-信息权重) + 信息面分×信息权重；信息面融合模式/前沿要闻映射较强时权重更高。",
             "前沿要闻": "全球/国内/商品/政策快讯先映射行业和产业链，再结合个股主营判断。降息、加息、原油、黄金、关税、地缘、出口管制、AI/芯片/新能源等会形成行业加减分，但不会替代公司公告。",
         }
 
     def _safe_global_news(self, force: bool = False) -> dict[str, Any]:
+        if not force and not getattr(self.news_service, "_global_news_cache", None):
+            return {
+                "items": [],
+                "cache_info": {
+                    "hit": False,
+                    "status": "deferred",
+                    "note": "个股普通刷新不阻塞等待全球流；全球要闻由独立短缓存后台更新",
+                },
+            }
         try:
             return self.news_service.fetch_global_news(limit=80, force=force, ttl_seconds=90)
         except Exception as exc:
@@ -183,12 +213,16 @@ class InfoAnalysisService:
                 score += 8; tags.append("动态PE处于可观察区间")
             elif pe > 80:
                 score -= 10; risks.append("动态PE偏高")
-            elif pe <= 0:
-                score -= 14; risks.append("动态PE异常或亏损")
+            elif pe < 0:
+                score -= 14; risks.append("动态PE为负，最近口径可能亏损")
+            else:
+                tags.append("动态PE字段缺失，不参与加减分")
             if 0 < pb <= 8:
                 score += 5; tags.append("PB未见明显异常")
             elif pb > 12:
                 score -= 6; risks.append("PB偏高")
+            else:
+                tags.append("PB字段缺失，不参与加减分")
             if cap >= 50_000_000_000:
                 score += 5; tags.append("市值规模较高")
             if amount >= 200_000_000:
@@ -216,7 +250,7 @@ class InfoAnalysisService:
                 elif rg < -10:
                     score -= 5; risks.append("营收同比承压")
         else:
-            tags.append("未启用AKShare财务摘要，当前以行情估值快照评估")
+            tags.append(str(ak.get("missing_reason") or ak.get("reason") or "未启用AKShare财务摘要，当前以行情估值快照评估"))
         return {
             "finance_score": round(max(0, min(100, score)), 2),
             "pe_dynamic": pe or None,
@@ -432,23 +466,64 @@ class InfoAnalysisService:
             "note": "news_negative 只统计新闻/公告文本情绪；finance_negative 单独统计估值、亏损等财报风险，因此财报亏损不会强行计入新闻负面条数，但会计入信息面负面证据。"
         }
 
-    def _info_score(self, news: dict[str, Any], finance: dict[str, Any], policy: dict[str, Any]) -> float:
-        # V3.12：信息面不再只是标题情绪。按“公司/公告事件、来源可信度、财报估值、前沿要闻行业映射、传闻噪声”综合。
-        ns = safe_float(news.get("news_score"), 50)
-        cred = safe_float(news.get("avg_credibility"), 50)
-        fs = safe_float(finance.get("finance_score"), 50)
-        ps = safe_float(policy.get("policy_score"), 50)
-        fake = safe_float(news.get("avg_fake_risk"), 20)
-        raw = ns * 0.30 + cred * 0.10 + fs * 0.16 + ps * 0.36 + max(0, 100 - fake) * 0.08
-        # 官方/高可信负面事件额外惩罚；全球/商品/国际事件若与行业直接相关，短线权重提高。
-        if int(news.get("official_negative_count") or 0) > 0:
-            raw -= min(12, 3.5 * int(news.get("official_negative_count") or 0))
+    def _info_score_detail(self, news: dict[str, Any], finance: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+        quality = dict(news.get("data_quality") or {})
+        current_count = int(safe_float(quality.get("current_scoring_count"), 0))
+        item_count = max(1, int(safe_float(quality.get("item_count"), len(news.get("items") or []))))
+        full_count = int(safe_float(quality.get("verified_full_text_count"), 0))
+        excerpt_count = int(safe_float(quality.get("structured_excerpt_count"), 0))
+        title_count = int(safe_float(quality.get("title_only_count"), 0))
+        rejected_count = int(safe_float(quality.get("boilerplate_rejected_count"), 0))
+        weighted_content = full_count + excerpt_count * 0.72 + title_count * 0.35
+        content_quality_coverage = min(1.0, weighted_content / item_count) if current_count else 0.0
+        news_confidence = min(1.0, 0.35 + content_quality_coverage * 0.65) if current_count else 0.0
+        finance_available = any(finance.get(key) not in (None, "", 0, 0.0) for key in ("pe_dynamic", "pb", "total_market_cap", "amount")) or bool((finance.get("akshare") or {}).get("available"))
+        policy_count = int(safe_float(policy.get("policy_count"), 0))
+        mapped_count = len(policy.get("macro_event_maps") or []) + len(policy.get("mapped_global_items") or [])
+        policy_confidence = min(1.0, (policy_count + mapped_count) / 6.0) if policy_count or mapped_count else 0.0
+        components = [
+            ("公司/公告事件", safe_float(news.get("news_score"), 50), 0.30, news_confidence),
+            ("来源可信度", safe_float(news.get("avg_credibility"), 50), 0.10, news_confidence),
+            ("财报/估值", safe_float(finance.get("finance_score"), 50), 0.16, 1.0 if finance_available else 0.0),
+            ("全球/行业映射", safe_float(policy.get("policy_score"), 50), 0.36, policy_confidence),
+            ("传闻噪声", max(0.0, 100.0 - safe_float(news.get("avg_fake_risk"), 50)), 0.08, news_confidence),
+        ]
+        raw = 50.0
+        rows: list[dict[str, Any]] = []
+        for name, score, weight, confidence in components:
+            contribution = (score - 50.0) * weight * confidence
+            raw += contribution
+            rows.append({
+                "name": name,
+                "score": round(score, 2),
+                "weight": weight,
+                "availability_confidence": round(confidence, 4),
+                "contribution_from_neutral": round(contribution, 4),
+                "available": confidence > 0,
+            })
+        official_negative_count = int(news.get("official_negative_count") or 0)
+        negative_penalty = min(12.0, 3.5 * official_negative_count) * news_confidence
+        raw -= negative_penalty
         direct_macro = [x for x in (policy.get("macro_event_maps") or []) if x.get("direction") in {"偏利好", "偏利空", "影响分化"}]
-        if direct_macro:
-            raw += 3.5 if ps >= 60 else -3.5 if ps <= 40 else 0
-        elif len(policy.get("macro_event_maps") or []) >= 3:
-            raw += 1.5 if ps >= 58 else -1.5 if ps <= 42 else 0
-        return round(max(0, min(100, raw)), 2)
+        if direct_macro and policy_confidence:
+            policy_score = safe_float(policy.get("policy_score"), 50)
+            raw += (3.5 if policy_score >= 60 else -3.5 if policy_score <= 40 else 0.0) * policy_confidence
+        available_weight = sum(weight * confidence for _, _, weight, confidence in components)
+        score_confidence = min(1.0, available_weight)
+        data_quality_score = round(max(0.0, min(100.0, content_quality_coverage * 100.0 - rejected_count * 2.0)), 2)
+        return {
+            "score": round(max(0.0, min(100.0, raw)), 2),
+            "components": rows,
+            "score_confidence": round(score_confidence, 4),
+            "data_quality_score": data_quality_score,
+            "content_quality_coverage": round(content_quality_coverage, 4),
+            "negative_penalty": round(negative_penalty, 4),
+            "score_eligible": bool(current_count and news_confidence >= 0.35),
+            "current_scoring_count": current_count,
+        }
+
+    def _info_score(self, news: dict[str, Any], finance: dict[str, Any], policy: dict[str, Any]) -> float:
+        return float(self._info_score_detail(news, finance, policy)["score"])
 
     def _summary(self, news: dict[str, Any], finance: dict[str, Any], policy: dict[str, Any], score: float) -> str:
         tc = news.get("time_counts") or []

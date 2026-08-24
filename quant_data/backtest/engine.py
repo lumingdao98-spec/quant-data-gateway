@@ -17,6 +17,7 @@ from quant_data.factors.score_provenance import ScoringPolicy, build_score_prove
 from quant_data.research.market_state_engine import MarketStateEngine
 from quant_data.research.stock_classifier import StockClassifier
 from quant_data.research.strategy_suitability import StrategySuitabilityEngine
+from quant_data.services.decision_dimension_service import DecisionDimensionService
 from quant_data.strategy.strategy_family import get_strategy_execution_profile
 
 
@@ -32,6 +33,7 @@ class BacktestEngine:
         self.market_engine = MarketStateEngine()
         self.stock_classifier = StockClassifier()
         self.suitability_engine = StrategySuitabilityEngine()
+        self.dimension_service = DecisionDimensionService()
 
     def run(
         self,
@@ -296,6 +298,38 @@ class BacktestEngine:
                 scoring_policy=policy,
             )
             data = provenance.to_dict()
+            dimension_readiness = self.dimension_service.evaluate(
+                mode="backtest",
+                strategy_family=suitability.strategy_family,
+                scores={
+                    "technical": factors.score,
+                    "information": None,
+                    "fund_flow": None,
+                    "market": None,
+                },
+                sources={
+                    "technical": {
+                        "source": "历史K线因子引擎",
+                        "available_at": current_date,
+                        "pit_status": "point_in_time",
+                        "quality_status": "available",
+                    }
+                },
+                freshness={"action": "allow", "stale_fields": [], "missing_fields": []},
+                provenance={**data, "no_lookahead": True, "mode": "backtest"},
+            )
+            data["mode"] = "backtest"
+            data["dimension_scores"] = {
+                "technical_score": factors.score,
+                "information_score": None,
+                "fund_flow_score": None,
+                "market_regime_score": None,
+            }
+            data["dimension_readiness"] = dimension_readiness
+            data["three_dimension_backtest_note"] = (
+                "本次历史回测仅使用决策日可见K线技术因子；没有历史PIT信息面和公开资金流快照，"
+                "因此两项明确排除，不用当前新闻或当前资金数据回填过去。"
+            )
             data["signal_action"] = signal.action
             data["signal_reason"] = signal.reason
             data["suitability"] = suitability.to_dict()

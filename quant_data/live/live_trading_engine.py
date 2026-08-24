@@ -364,6 +364,26 @@ class LiveTradingEngine:
                 "评分溯源已超过实盘允许时效，请重新生成实时评分",
                 required=order.side == "buy",
             )
+            dimension_readiness = (
+                dict((provenance or {}).get("dimension_readiness") or {})
+                if isinstance((provenance or {}).get("dimension_readiness"), dict)
+                else {}
+            )
+            dimension_ready = bool(dimension_readiness) and bool(
+                dimension_readiness.get("auto_entry_eligible", False)
+            )
+            dimension_reasons = "；".join(
+                str(value)
+                for value in (dimension_readiness.get("entry_block_reasons") or [])[:4]
+                if str(value)
+            )
+            gate(
+                "decision_dimensions_ready",
+                dimension_ready,
+                "三面决策门禁未通过或评分溯源版本过旧"
+                + (f"：{dimension_reasons}" if dimension_reasons else ""),
+                required=order.side == "buy",
+            )
 
             risk_check = self.store.get("risk_checks", order.risk_check_id) if order.risk_check_id else None
             risk_order = (risk_check or {}).get("order") if isinstance((risk_check or {}).get("order"), dict) else {}

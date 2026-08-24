@@ -6,7 +6,7 @@ import quant_data.api as api
 def test_auto_trading_workbench_page_visible():
     html = TestClient(api.app).get("/auto-trading").text
 
-    assert "自动交易总控台" in html
+    assert "V3.26 自动交易总控台" in html
     assert "首页总览 + 右侧覆盖模块" in html
     assert "交易工作流" in html
     assert "联网智能辅助" in html
@@ -32,6 +32,9 @@ def test_auto_trading_workbench_page_visible():
     assert "runConfigBacktest" in html
     assert "quote_hydrate_request" in html
     assert "/api/live-broker/status" in html
+    assert "/api/integrations/tonghuashun/status" in html
+    assert "同花顺委托提醒" in html
+    assert "不会自动点击下单" in html
     assert "/api/auto-trading/config" in html
     assert "/api/auto-trading/config/one-click" in html
     assert "/api/auto-trading/start-paper" in html
@@ -95,8 +98,21 @@ def test_auto_trading_workbench_page_visible():
     assert "核心状态已更新" in html
     assert "总控台已更新" in html
     assert "这个分数怎么来的" in html
+    assert "默认执行分目标权重" in html
+    assert "资金面" in html
+    assert 'id="flowScore"' in html
+    assert "scoreFreshness.status" in html
+    assert "缺失项不补 50 分" in html
+    assert "未参与" in html
+    assert "scoreFrom" in html
     assert "scoreExplain" in html
     assert "renderScoreExplain" in html
+    assert "基本/技术/信息/资金、大盘与自动入场门禁" in html
+    assert "真实性/新鲜度门禁剔除" in html
+    assert "dimensionReadiness" in html
+    assert "renderDimensionReadiness" in html
+    assert "/api/decision-framework/" in html
+    assert "只作审计对照，不与分项重复计票" in html
     assert "/api/market/event-factors/" in html
     assert "市场事件调整" in html
     assert "event-factor-list" in html
@@ -117,7 +133,10 @@ def test_auto_trading_workbench_page_visible():
     assert ".grid-main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))" in html
     assert ".grid-main>.stack{display:grid;gap:14px;align-content:start" in html
     assert "function arrangeDashboardPanels" in html
-    assert "const columns=[[6,0],[3,1,2],[4,5,7]]" in html
+    assert "layoutKey==='medium'?[[3,0,6],[4,1,2,5,7]]" in html
+    assert "dashboard-fold" in html
+    assert "展开自动复评、持仓复核和会话计数" in html
+    assert "展开券商预检查、同花顺提醒和持仓复核" in html
     assert ".sector-table-wrap{overflow:auto;max-width:100%;max-height:280px" in html
 
 
@@ -128,6 +147,14 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     assert "width:calc(100vw - 268px)" in html
     assert 'id="workspaceFrame"' in html
     assert html.count('class="workspace-frame"') == 1
+
+
+def test_workbench_shows_exact_score_snapshot_freshness_and_fundamental_gate():
+    html = TestClient(api.app).get("/auto-trading").text
+
+    assert "评分时效" in html
+    assert "snapshot_note" in html
+    assert "dm.fundamental?.ready" in html
     assert 'src="about:blank"' in html
     assert "openModule(" in html
     assert "closeWorkspace" in html

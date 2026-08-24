@@ -170,7 +170,10 @@ def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
     assert "parameter_schema" in data
     assert "strategy_matrix" in data
     assert "decision_policy" in data
-    assert data["decision_policy"]["action_source"] == "screener_signal_map_first_then_realtime_score"
+    assert data["decision_policy"]["action_source"] == "screener_dimensions_then_realtime_signal_fusion"
+    assert data["decision_policy"]["screening_score_policy"].startswith("筛选总分只作审计底座")
+    assert data["score_weights"]["screening"] == 0
+    assert round(sum(value for key, value in data["score_weights"].items() if key != "screening"), 6) == 1
     assert any(item["key"] == "fund_flow" for item in data["integrated_score_dimensions"])
     assert any(item["key"] == "half_year_reports" and item["enabled"] for item in data["key_event_watchlist"])
     matrix = {row["key"]: row for row in data["strategy_matrix"]}
@@ -179,6 +182,57 @@ def test_auto_trading_config_exposes_strategy_matrix_and_decision_policy():
     assert data["strategy_parameters"]["fund_flow_watch"]["take_profit_pct"] == 12.0
     assert matrix["vwap_reclaim"]["max_single_position_pct"] == 7.0
     assert matrix["vwap_reclaim"]["position_sizing"] == "atr_risk"
+
+
+def test_auto_backtest_profiles_do_not_fill_missing_scores_with_neutral_values():
+    cfg = api.V319BacktestConfig(symbols=["300750"])
+    effective = api._auto_backtest_effective_controls(
+        {
+            "auto_trading_config_applied": True,
+            "screener_signal_map": {
+                "300750": {
+                    "symbol": "300750",
+                    "final_score": 68,
+                    "technical_score": 72,
+                }
+            },
+        },
+        cfg,
+    )
+
+    profile = effective["screener_signal_profiles"]["300750"]
+    assert profile["final_score"] == 68.0
+    assert profile["technical_score"] == 72.0
+    assert profile["fundamental_score"] is None
+    assert profile["information_score"] is None
+    assert profile["fund_flow_score"] is None
+    assert profile["market_score"] is None
+
+
+def test_config_only_symbol_stays_watch_and_has_no_invented_dimension_scores():
+    profiles = api._auto_screener_signal_map(
+        [],
+        ["300750"],
+        {"max_single_position_pct": 20},
+    )
+
+    profile = profiles["300750"]
+    assert profile["action"] == "watch"
+    assert profile["target_weight_hint_pct"] == 0.0
+    assert profile["final_score"] is None
+    assert profile["technical_score"] is None
+    assert profile["fundamental_score"] is None
+    assert profile["information_score"] is None
+    assert profile["fund_flow_score"] is None
+    assert profile["market_score"] is None
+    assert {
+        "screening_score_missing",
+        "technical_score_missing",
+        "fundamental_score_missing",
+        "recent_information_score_missing",
+        "fund_flow_score_missing",
+        "market_score_missing",
+    } <= set(profile["missing_data"])
 
 
 def test_realtime_paper_tick_hydrates_quote_when_price_missing(monkeypatch):
@@ -222,7 +276,9 @@ def test_realtime_paper_tick_hydrates_quote_when_price_missing(monkeypatch):
     assert tick["signal"]["quote_price"] == 10.0
     assert tick["signal"]["name"] == "Hydrated"
     assert "quote_hydrated_from_market_service" in " ".join(tick["signal"]["evidence"])
-    assert tick["orders"]
+    assert tick["orders"] == []
+    assert tick["signal"]["auto_entry_eligible"] is False
+    assert "信息面未就绪" in "；".join(tick["signal"]["entry_block_reasons"])
 
 
 def test_auto_trading_reuses_screener_signal_profile_for_paper_tick(monkeypatch):
@@ -293,7 +349,8 @@ def test_auto_trading_reuses_screener_signal_profile_for_paper_tick(monkeypatch)
     assert tick["signal"]["fund_flow_score"] == 58.0
     assert tick["signal"]["event_watch_context"]["event_watch_enabled"] is True
     assert tick["signal"]["strategy_controls"]["stop_loss_pct"] == 6.0
-    assert "screener_target_hint" in " ".join(tick["signal"]["evidence"])
+    assert "screener_buy_audit_only" in " ".join(tick["signal"]["evidence"])
+    assert "screener_target_cap" in " ".join(tick["signal"]["evidence"])
 
 
 def test_auto_trading_reads_nested_screener_information_snapshot():

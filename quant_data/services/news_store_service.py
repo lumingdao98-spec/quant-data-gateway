@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from quant_data.utils import normalize_symbol
-from quant_data.services.news_cleaner import valid_news_item
+from quant_data.services.news_cleaner import is_page_chrome_summary, valid_news_item
 
 
 class NewsStoreService:
@@ -265,6 +265,11 @@ class NewsStoreService:
                 raw = json.loads(d.get("raw_json") or "{}")
                 if isinstance(raw, dict):
                     raw.update({k: d.get(k) for k in ["published_at_norm", "publish_time", "event_time", "crawl_time", "time_confidence", "time_basis", "event_type", "issuer", "period", "document_id", "event_key", "title", "url", "source", "source_type", "category", "summary"]})
+                    if is_page_chrome_summary(raw.get("summary")):
+                        raw["summary"] = ""
+                        raw["content_loaded"] = False
+                        raw["content_quality_status"] = "boilerplate_rejected"
+                        raw["content_missing_reason"] = "缓存正文仅包含网页导航或免责声明，已拒绝参与正文评分"
                     ok, _reason = valid_news_item(str(raw.get("title") or ""), str(raw.get("summary") or ""), source=str(raw.get("source") or ""), url=str(raw.get("url") or ""), symbol=symbol, name=str(raw.get("name") or ""), source_type=str(raw.get("source_type") or "news"), base_relevant=float(raw.get("relevance_score") or 0) >= 20, allow_macro=str(raw.get("source_type") or "") in {"macro", "policy", "global"})
                     if ok:
                         out.append(raw)
@@ -338,6 +343,11 @@ class NewsStoreService:
                 raw = json.loads(d.get("raw_json") or "{}")
                 if isinstance(raw, dict):
                     raw.update({k: d.get(k) for k in ["published_at_norm", "publish_time", "event_time", "crawl_time", "time_confidence", "time_basis", "event_type", "issuer", "period", "document_id", "event_key", "title", "url", "source", "source_type", "category", "summary", "duplicate_group", "first_seen_at", "last_seen_at"]})
+                    if is_page_chrome_summary(raw.get("summary")):
+                        raw["summary"] = ""
+                        raw["content_loaded"] = False
+                        raw["content_quality_status"] = "boilerplate_rejected"
+                        raw["content_missing_reason"] = "缓存正文仅包含网页导航或免责声明，已拒绝参与正文评分"
                     ok, _reason = valid_news_item(str(raw.get("title") or ""), str(raw.get("summary") or ""), source=str(raw.get("source") or ""), url=str(raw.get("url") or ""), symbol=symbol, name=str(raw.get("name") or ""), source_type=str(raw.get("source_type") or "news"), base_relevant=float(raw.get("relevance_score") or 0) >= 20, allow_macro=str(raw.get("source_type") or "") in {"macro", "policy", "global"})
                     if ok:
                         data.append(raw)

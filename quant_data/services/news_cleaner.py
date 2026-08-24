@@ -44,7 +44,7 @@ DATE_PATTERNS = [
 ]
 URL_DATE_RE = re.compile(r"/(20\d{2})[\-/]?(\d{2})[\-/]?(\d{2})(?:/|_|-|\.|$)")
 EVENT_DATE_HINT_RE = re.compile(
-    r"(?:将于|拟于|定于|计划于|召开时间[:：]?|会议时间[:：]?|生效日[:：]?|登记日[:：]?|除权除息日[:：]?|解禁日[:：]?|截止日[:：]?|实施|召开|生效|解禁|登记|派发|披露)"
+    r"(?:将于|拟于|定于|计划于|召开时间[:：]?|会议时间[:：]?|生效日[:：]?|登记日[:：]?|除权除息日[:：]?|解禁日[:：]?|截止日[:：]?|交割日[:：]?|到期日[:：]?|最后交易日[:：]?|实施|召开|生效|解禁|登记|派发|披露|交割|到期)"
     r".{0,18}?((?:20\d{2}|19\d{2})[年\-/\.]\d{1,2}[月\-/\.]\d{1,2}日?)"
 )
 PERIOD_RE = re.compile(r"((?:20\d{2}|19\d{2})\s*(?:年|年度|一季报|半年度|半年报|三季报|年报|第一季度|第三季度)|(?:20\d{2}|19\d{2})Q[1-4])")
@@ -59,6 +59,7 @@ EVENT_TYPE_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("regulatory", ("问询函", "监管函", "立案", "处罚", "纪律处分", "警示函")),
     ("contract_order", ("中标", "订单", "合同", "合作协议", "签约")),
     ("investment_project", ("投产", "扩产", "项目投资", "募投", "产能")),
+    ("derivatives_settlement", ("股指期货交割", "股指期权交割", "交割日", "最后交易日", "合约到期")),
     ("market_macro", ("降息", "加息", "降准", "美债", "原油", "黄金", "汇率", "关税", "出口管制")),
 ]
 
@@ -80,6 +81,24 @@ def strip_html_boilerplate(text: Any, max_len: int = 4000) -> str:
         s = s.replace(term, " ")
     s = SPACE_RE.sub(" ", s).strip()
     return s[:max_len]
+
+
+def is_page_chrome_summary(text: Any) -> bool:
+    """Detect page navigation/disclaimer text that is not article evidence."""
+    value = strip_html_boilerplate(text, max_len=2400)
+    if not value:
+        return False
+    boilerplate_markers = (
+        "股 港股 期货 外汇 黄金 银行 基金",
+        "数据中心 全球财经快讯 行情中心",
+        "东方财富网 > 数据中心 > 公告大全",
+        "个股公告查询",
+        "郑重声明 本网不保证其真实性和客观性",
+        "行情中心 指数 | 期指 | 期权 | 个股",
+    )
+    marker_hits = sum(1 for marker in boilerplate_markers if marker in value)
+    nav_terms = sum(value.count(term) for term in ("行情", "基金", "研报", "数据中心", "公告大全", "自选股"))
+    return marker_hits >= 1 or (nav_terms >= 8 and "本公司及董事会" not in value)
 
 
 def chinese_count(text: str) -> int:

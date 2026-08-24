@@ -64,6 +64,15 @@ def test_backtest_api_exposes_v321_report_fields(monkeypatch):
     assert "expectancy" in result["metrics"]
     assert "position_sizing_attribution" in result["metrics"]
     assert "filter_attribution" in result["metrics"]
+    attribution = result["metrics"]["filter_attribution"]
+    assert attribution["effective_backtest_weights"] == {
+        "fundamental": 0.0,
+        "technical": 1.0,
+        "information": 0.0,
+        "fund_flow": 0.0,
+        "market": 0.0,
+    }
+    assert "信息面" in result["params_cn"]["本次回测实际权重"]
     assert "horizon_attribution" in result["metrics"]
 
 
@@ -76,6 +85,8 @@ def test_v321_ui_entry_points_are_visible():
     assert "sizingMode" in backtest_html
     assert "compoundReturns" in backtest_html
     assert "position_sizing" in backtest_html
+    assert "fundFlowWeight" in backtest_html
+    assert "当前单票快速回测只有历史日K/量价" in backtest_html
     assert "backtestCurrentScreener" in screener_html
     assert "startRealtimeFromScreener" in screener_html
     assert "viewThreeDimSignal" in screener_html

@@ -23,6 +23,7 @@ from quant_data.services.news_store_service import NewsStoreService
 from quant_data.services.news_cleaner import (
     document_id_from_url,
     extract_time_fields,
+    is_page_chrome_summary,
     is_menu_or_table_fragment,
     strip_html_boilerplate,
     valid_news_item as _valid_news_item,
@@ -71,6 +72,14 @@ class NewsItem:
     target_relation: str = ""            # 当前标的在该信息中的真实关系：机构持仓上升/下降/公司公告/无明确关系
     relation_confidence: float = 0.0
     relation_note: str = ""
+    attachment_url: str = ""
+    content_source: str = ""
+    content_quality_status: str = "title_only"
+    content_missing_reason: str = ""
+    content_hash: str = ""
+    duplicate_count: int = 1
+    duplicate_sources: list[str] | None = None
+    duplicate_source_refs: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -161,6 +170,7 @@ class NewsAnalysisService:
         self._source_failures: dict[str, int] = {}
         self._source_circuit_opened_at: dict[str, float] = {}
         self._content_cache: dict[str, tuple[float, str]] = {}
+        self._announcement_detail_cache: dict[str, tuple[float, dict[str, str]]] = {}
         self._round_started_at: float = 0.0
         self._round_budget_seconds: float | None = None
         self._current_mode: str = "light"
@@ -184,6 +194,7 @@ class NewsAnalysisService:
             cached_saved_at = float((cached or {}).get("cache_info", {}).get("saved_at_ts") or 0)
             cached_age = time.time() - cached_saved_at if cached_saved_at else None
             if cached and (cached.get("items") or (cached_age is not None and cached_age <= 60)):
+                cached = self._normalize_cached_result(cached, symbol=symbol, name=name, limit=limit)
                 cached.setdefault("cache_info", {"hit": True, "ttl_seconds": self.cache_ttl_seconds})
                 self._log_progress(f"命中信息面缓存 {name}({symbol})，返回缓存结果")
                 return cached
@@ -212,13 +223,13 @@ class NewsAnalysisService:
         try:
             self._log_progress(f"多源抓取完成：新抓取 {len(items)} 条，开始正文/公告补充")
             try:
-                items = self._enrich_announcement_content(items, max_items=8 if mode == "light" else 12 if mode == "normal" else 16)
+                items = self._enrich_announcement_content(items, max_items=8 if mode == "light" else 8 if mode == "normal" else 16)
             except Exception as exc:
                 self._record_source("公告正文补充", 0, "降级为标题级证据", skipped_reason=str(exc)[:160])
             # V16.2：新浪/同花顺等股票专页在抓取入口已做候选链接准入+详情页正文准入；
             # 这里继续作为兜底补强，不再依赖“先抓一堆再清洗”的后置策略。
             try:
-                items = self._enrich_link_content(items, symbol=symbol, name=name, max_items=4 if mode == "light" else 12 if mode == "normal" else 20)
+                items = self._enrich_link_content(items, symbol=symbol, name=name, max_items=4 if mode == "light" else 6 if mode == "normal" else 20)
             except Exception as exc:
                 self._record_source("新闻正文补充", 0, "降级为标题级证据", skipped_reason=str(exc)[:160])
             merged_items = self._filter_valid_items(stored_items + items, symbol=symbol, name=name)
@@ -309,7 +320,7 @@ class NewsAnalysisService:
 
 
 
-    def fetch_global_news(self, limit: int = 80, force: bool = False, ttl_seconds: int = 45) -> dict[str, Any]:
+    def fetch_global_news(self, limit: int = 80, force: bool = False, ttl_seconds: int = 45, budget_seconds: float = 7.0) -> dict[str, Any]:
         """多源获取全球/国内/商品/政策要闻，并和个股新闻严格分开展示。
 
         V3.15 修复点：
@@ -328,13 +339,35 @@ class NewsAnalysisService:
 
         raw_rows: list[dict[str, Any]] = []
         status: list[dict[str, Any]] = []
+        started_at = time.monotonic()
+
+        def budget_left() -> float:
+            return max(0.0, float(budget_seconds or 0.0) - (time.monotonic() - started_at))
+
+        def can_continue() -> bool:
+            return budget_left() > 0.15
+
+        def budget_status(source: str) -> None:
+            status.append({
+                "source": source,
+                "count": 0,
+                "status": "总刷新时限已到，保留先完成的真实来源",
+                "skipped_reason": "budget_exhausted",
+            })
 
         # 东方财富全球财经快讯：优先作为国内可访问的 7x24 要闻源。
         for category, url in self._eastmoney_kuaixun_urls().items():
             if len(raw_rows) >= limit * 2:
                 break
+            if not can_continue():
+                budget_status(f"东方财富快讯:{category}")
+                break
             try:
-                rows = self._search_eastmoney_kuaixun(url, category, limit=min(60, limit))
+                rows = self._bounded_value(
+                    lambda url=url, category=category: self._search_eastmoney_kuaixun(url, category, limit=min(60, limit)),
+                    timeout=min(1.4, budget_left()),
+                    label=f"东方财富快讯:{category}",
+                )
                 raw_rows.extend(rows)
                 status.append({"source": f"东方财富快讯:{category}", "count": len(rows), "status": "ok" if rows else "无公开条目/页面结构变化"})
             except Exception as exc:
@@ -342,7 +375,13 @@ class NewsAnalysisService:
 
         # 金十/金十期货：全球7x24、期货宏观、黑色/农副/金属/能化快讯。
         try:
-            jin10_rows = self._search_jin10_flash(limit=min(limit, 100))
+            if not can_continue():
+                raise TimeoutError("总刷新时限已到")
+            jin10_rows = self._bounded_value(
+                lambda: self._search_jin10_flash(limit=min(limit, 100)),
+                timeout=min(1.8, budget_left()),
+                label="金十/金十期货快讯",
+            )
             raw_rows.extend(jin10_rows)
             status.append({"source": "金十/金十期货快讯", "count": len(jin10_rows), "status": "ok" if jin10_rows else "无公开数据或接口结构变化"})
         except Exception as exc:
@@ -366,7 +405,7 @@ class NewsAnalysisService:
                 return [x for x in df if isinstance(x, dict)]
             return []
 
-        if ak is not None:
+        if ak is not None and can_continue():
             calls = []
             if hasattr(ak, "stock_info_global_cls"):
                 calls.append(("财联社电报", lambda: ak.stock_info_global_cls(symbol="全部")))
@@ -375,8 +414,11 @@ class NewsAnalysisService:
             if hasattr(ak, "stock_info_global_sina"):
                 calls.append(("新浪财经7x24", lambda: ak.stock_info_global_sina()))
             for source_name, fn in calls:
+                if not can_continue():
+                    budget_status(source_name)
+                    break
                 try:
-                    rows = records(fn())
+                    rows = records(self._bounded_value(fn, timeout=min(1.8, budget_left()), label=source_name))
                     for r in rows:
                         r = dict(r)
                         r["_source_name"] = source_name
@@ -391,8 +433,15 @@ class NewsAnalysisService:
             ("财联社电报Web", "https://www.cls.cn/nodeapi/telegraphList", {"app": "CailianpressWeb", "category": "", "lastTime": "", "os": "web", "sv": "8.4.6"}),
         ]
         for source_name, url, params in api_calls:
+            if not can_continue():
+                budget_status(source_name)
+                break
             try:
-                resp = self.http.get(url, params=params, headers={"Referer": "https://wallstreetcn.com/" if "wallstcn" in url else "https://www.cls.cn/", "Accept": "application/json,text/plain,*/*"})
+                resp = self._bounded_value(
+                    lambda url=url, params=params: self.http.get(url, params=params, headers={"Referer": "https://wallstreetcn.com/" if "wallstcn" in url else "https://www.cls.cn/", "Accept": "application/json,text/plain,*/*"}),
+                    timeout=min(1.4, budget_left()),
+                    label=source_name,
+                )
                 data = self._decode_jsonish(resp.text)
                 rows = self._extract_global_json_rows(data, source_name, limit=min(limit, 100))
                 raw_rows.extend(rows)
@@ -446,6 +495,8 @@ class NewsAnalysisService:
             "market_category_counts": self._counts([x.category for x in deduped]),
             "sources_used": sorted(list({x.source for x in deduped})),
             "sources_status": status,
+            "refresh_elapsed_ms": round((time.monotonic() - started_at) * 1000, 2),
+            "refresh_budget_seconds": float(budget_seconds or 0.0),
             "source_policy": self.message_source_policy(),
             "cache_info": {"hit": False, "ttl_seconds": ttl_seconds, "force": force, "auto_refresh": True, "note": "全球/国内/商品/政策要闻短缓存，前端可自动刷新；个股公司信息仍按主动刷新/缓存策略处理。"},
             "note": "全球/国内要闻为多源快讯聚合，不等同于单只股票相关新闻；对个股影响通过公司主营、行业标签和产业链暴露进行映射。",
@@ -453,6 +504,37 @@ class NewsAnalysisService:
         self._global_news_cache = result
         self._global_news_cache_ts = now
         return result
+
+    def _bounded_value(self, fn, *, timeout: float, label: str = "外部来源") -> Any:
+        """Run an optional provider with a hard caller-side deadline.
+
+        Some third-party SDK functions do not honour requests timeouts.  A
+        daemon worker lets the caller keep the results that already completed;
+        any late value is discarded and cannot overwrite the response/cache.
+        """
+        import queue
+        import threading
+
+        result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+        def runner() -> None:
+            try:
+                result_queue.put_nowait((True, fn()))
+            except Exception as exc:  # pragma: no cover - provider specific
+                try:
+                    result_queue.put_nowait((False, exc))
+                except queue.Full:
+                    pass
+
+        worker = threading.Thread(target=runner, name=f"news-{label[:24]}", daemon=True)
+        worker.start()
+        try:
+            ok, value = result_queue.get(timeout=max(0.05, float(timeout or 0.05)))
+        except queue.Empty as exc:
+            raise TimeoutError(f"{label}超过{max(0.05, float(timeout or 0.05)):.1f}秒未返回") from exc
+        if not ok:
+            raise value
+        return value
 
 
     def _eastmoney_kuaixun_urls(self) -> dict[str, str]:
@@ -770,8 +852,23 @@ class NewsAnalysisService:
     def _item_from_dict(self, d: dict[str, Any]) -> NewsItem:
         title = self._clean_text(str(d.get("title") or ""))[:180]
         summary = self._clean_text(str(d.get("summary") or ""))[:300]
+        content_loaded = bool(d.get("content_loaded"))
+        content_quality_status = str(d.get("content_quality_status") or ("full_text" if content_loaded else "title_only"))
+        content_missing_reason = str(d.get("content_missing_reason") or "")
+        boilerplate_rejected = False
+        if self._looks_like_page_chrome(summary):
+            summary = ""
+            content_loaded = False
+            content_quality_status = "boilerplate_rejected"
+            content_missing_reason = "缓存正文仅包含网页导航或免责声明，已拒绝参与正文评分"
+            boilerplate_rejected = True
         source_type = str(d.get("source_type") or "news")
         meta = self._classify_event(f"{title} {summary}")
+        title_meta = self._classify_event(title)
+        title_sentiment, title_evidence = self._rule_sentiment(title, source_type, title_meta)
+        title_impact = min(100.0, sum(12 for word in self.IMPACT_WORDS if word in title))
+        if title_meta.get("event_label") not in {"一般资讯", "宏观政策"}:
+            title_impact = max(title_impact, 55.0)
         time_meta = extract_time_fields(d.get("published_at") or d.get("publish_time"), title, summary, str(d.get("url") or ""), source_type=source_type)
         return NewsItem(
             title=title,
@@ -792,28 +889,36 @@ class NewsAnalysisService:
             document_id=str(d.get("document_id") or time_meta.get("document_id") or document_id_from_url(str(d.get("url") or ""))),
             summary=summary,
             relevance_score=float(d.get("relevance_score") or 0),
-            sentiment_score=float(d.get("sentiment_score") or 50),
+            sentiment_score=round(title_sentiment, 2) if boilerplate_rejected else float(d.get("sentiment_score") or 50),
             credibility_score=float(d.get("credibility_score") or 40),
-            impact_score=float(d.get("impact_score") or 0),
+            impact_score=round(title_impact, 2) if boilerplate_rejected else float(d.get("impact_score") or 0),
             fake_risk_score=float(d.get("fake_risk_score") or 0),
-            category=str(d.get("category") or "其他信息"),
+            category=self._category(title, source_type) if boilerplate_rejected else str(d.get("category") or "其他信息"),
             message_dimension=str(d.get("message_dimension") or self._message_dimension(f"{title} {summary}", source_type, str(d.get("source") or ""))),
-            event_label=str(d.get("event_label") or meta.get("event_label") or "一般资讯"),
-            sentiment_label=str(d.get("sentiment_label") or meta.get("sentiment_label") or "中性"),
+            event_label=str(title_meta.get("event_label") or "一般资讯") if boilerplate_rejected else str(d.get("event_label") or meta.get("event_label") or "一般资讯"),
+            sentiment_label=str(title_meta.get("sentiment_label") or "中性") if boilerplate_rejected else str(d.get("sentiment_label") or meta.get("sentiment_label") or "中性"),
             impact_scope=str(d.get("impact_scope") or self._infer_impact_scope(f"{title} {summary}", source_type, str(d.get("source") or ""))),
-            impact_direction=str(d.get("impact_direction") or meta.get("impact_direction") or "中性/待观察"),
-            risk_tag=str(d.get("risk_tag") or meta.get("risk_tag") or ""),
+            impact_direction=str(title_meta.get("impact_direction") or "中性/待观察") if boilerplate_rejected else str(d.get("impact_direction") or meta.get("impact_direction") or "中性/待观察"),
+            risk_tag=str(title_meta.get("risk_tag") or "") if boilerplate_rejected else str(d.get("risk_tag") or meta.get("risk_tag") or ""),
             duplicate_group=str(d.get("duplicate_group") or self._fingerprint(title)),
             event_key=str(d.get("event_key") or ""),
             event_weight=float(d.get("event_weight") or 1.0),
             recency_weight=float(d.get("recency_weight") or 1.0),
             dedup_reason=str(d.get("dedup_reason") or ""),
             industry_tags=d.get("industry_tags") if isinstance(d.get("industry_tags"), list) else None,
-            evidence=d.get("evidence") if isinstance(d.get("evidence"), list) else None,
-            content_loaded=bool(d.get("content_loaded")),
+            evidence=title_evidence if boilerplate_rejected else d.get("evidence") if isinstance(d.get("evidence"), list) else None,
+            content_loaded=content_loaded,
             target_relation=str(d.get("target_relation") or ""),
             relation_confidence=float(d.get("relation_confidence") or 0),
             relation_note=str(d.get("relation_note") or ""),
+            attachment_url=str(d.get("attachment_url") or ""),
+            content_source=str(d.get("content_source") or ""),
+            content_quality_status=content_quality_status,
+            content_missing_reason=content_missing_reason,
+            content_hash=str(d.get("content_hash") or ""),
+            duplicate_count=max(1, int(d.get("duplicate_count") or 1)),
+            duplicate_sources=d.get("duplicate_sources") if isinstance(d.get("duplicate_sources"), list) else None,
+            duplicate_source_refs=d.get("duplicate_source_refs") if isinstance(d.get("duplicate_source_refs"), list) else None,
         )
 
     def _search_all(self, query: str, symbol: str, name: str, limit: int, mode: str = "light") -> list[NewsItem]:
@@ -1626,7 +1731,7 @@ class NewsAnalysisService:
         issuer = name or symbol or ""
         if doc_id:
             event_key = f"doc:{doc_id}"
-        elif event_type in {"shareholder_meeting", "board_meeting", "financial_report", "dividend", "holder_change", "regulatory", "contract_order", "investment_project"}:
+        elif event_type in {"shareholder_meeting", "board_meeting", "financial_report", "dividend", "holder_change", "regulatory", "contract_order", "investment_project", "derivatives_settlement"}:
             event_key = f"issuer:{issuer}:{event_type}:{period or 'na'}:{event_day}"
         else:
             dt_for_key = publish_dt or event_dt
@@ -1634,6 +1739,11 @@ class NewsAnalysisService:
         event_weight = self._event_weight(credibility, impact, fake_risk, recency_weight, source_type)
         group = event_key or self._fingerprint(title)
         industries = self._industry_tags(text)
+        initial_content_status = "title_only"
+        initial_missing_reason = "公开来源当前仅返回标题，尚未取得可核验正文"
+        if summary and not self._looks_like_page_chrome(summary):
+            initial_content_status = "structured_excerpt"
+            initial_missing_reason = ""
         return NewsItem(
             title=title[:180],
             url=url,
@@ -1673,6 +1783,8 @@ class NewsAnalysisService:
             target_relation=str(relation.get("relation") or ""),
             relation_confidence=float(relation.get("confidence") or 0.0),
             relation_note=str(relation.get("note") or ""),
+            content_quality_status=initial_content_status,
+            content_missing_reason=initial_missing_reason,
         )
 
 
@@ -1705,10 +1817,16 @@ class NewsAnalysisService:
                 "date_unknown_count": 0,
                 "event_family_counts": [],
                 "duplicate_groups": [],
-                "data_quality": {"date_unknown_count": 0, "official_count": 0, "stored_items_used": 0},
+                "data_quality": {"date_unknown_count": 0, "official_count": 0, "stored_items_used": 0, "verified_full_text_count": 0, "structured_excerpt_count": 0, "title_only_count": 0, "boilerplate_rejected_count": 0, "merged_duplicate_count": 0},
             }
         # 社区/论坛不作为核心利多利空证据；高疑似传闻降权但保留在明细里。
-        eligible_core_items = [x for x in items if x.source_type != "forum" and x.fake_risk_score < 75]
+        quality_excluded_count = sum(1 for x in items if x.content_quality_status == "boilerplate_rejected")
+        eligible_core_items = [
+            x for x in items
+            if x.source_type != "forum"
+            and x.fake_risk_score < 75
+            and x.content_quality_status != "boilerplate_rejected"
+        ]
         core_items = [x for x in eligible_core_items if self._is_current_scoring_item(x)]
         historical_excluded_count = len(eligible_core_items) - len(core_items)
         # 事件级聚合：同一财报亏损、同一监管事项、多源转载只计一次主权重。
@@ -1722,7 +1840,13 @@ class NewsAnalysisService:
                 event_best[key] = x
         unique_core = list(event_best.values())
         def w(x: NewsItem) -> float:
-            return max(0.18, float(x.event_weight or 1.0))
+            content_factor = {
+                "full_text": 1.0,
+                "structured_excerpt": 0.88,
+                "title_only": 0.68,
+                "boilerplate_rejected": 0.25,
+            }.get(str(x.content_quality_status or "title_only"), 0.60)
+            return max(0.12, float(x.event_weight or 1.0) * content_factor)
         if unique_core:
             total_w = sum(w(x) for x in unique_core) or 1.0
             avg_sent = sum(x.sentiment_score * w(x) for x in unique_core) / total_w
@@ -1753,6 +1877,8 @@ class NewsAnalysisService:
         risk_flags = []
         if not unique_core:
             risk_flags.append("近期计分窗口内无可核验信息，当前信息分保持中性")
+        if quality_excluded_count:
+            risk_flags.append(f"网页导航/免责声明正文 {quality_excluded_count} 条已排除，等待重新抓取")
         if weighted_neg >= max(1.3, weighted_pos + 0.6):
             risk_flags.append("负面事件权重偏高")
         if avg_cred < 45:
@@ -1774,13 +1900,18 @@ class NewsAnalysisService:
         date_unknown_count = sum(1 for x in items if not self._parse_item_date(x.published_at_norm or x.published_at))
         official_neg = len(official_neg_families)
         forum_count = sum(1 for x in items if x.source_type == "forum")
+        verified_full_text_count = sum(1 for x in items if x.content_quality_status == "full_text")
+        structured_excerpt_count = sum(1 for x in items if x.content_quality_status == "structured_excerpt")
+        title_only_count = sum(1 for x in items if x.content_quality_status == "title_only")
+        boilerplate_rejected_count = sum(1 for x in items if x.content_quality_status == "boilerplate_rejected")
+        merged_duplicate_count = sum(max(0, int(x.duplicate_count or 1) - 1) for x in items)
         duplicate_groups = [
             {"event_key": k, "count": c, "kept_title": event_best.get(k).title if event_best.get(k) else ""}
             for k, c in sorted(event_counts.items(), key=lambda kv: kv[1], reverse=True) if c > 1
         ][:12]
         event_family_counts = self._counts([x.event_label for x in unique_core])
         summary = (
-            f"中文信息 {len(items)} 条，近期事件级计分 {len(unique_core)} 组（社区舆情 {forum_count} 条不进核心计分，过期/日期缺失 {historical_excluded_count} 条仅供查阅）："
+            f"中文信息 {len(items)} 条，近期事件级计分 {len(unique_core)} 组（社区舆情 {forum_count} 条、网页壳 {quality_excluded_count} 条不进核心计分，过期/日期缺失 {historical_excluded_count} 条仅供查阅）："
             f"正面 {pos}组/权重{weighted_pos:.1f}，负面 {neg}组/权重{weighted_neg:.1f}，中性 {neu}组/权重{weighted_neu:.1f}；"
             f"近90天 {recent90_count} 条，官方/高可信 {official_count} 条，平均可信度 {avg_cred:.1f}，疑似噪声 {avg_fake:.1f}，未知日期 {date_unknown_count} 条。"
         )
@@ -1811,57 +1942,108 @@ class NewsAnalysisService:
             "summary": summary,
             "event_family_counts": event_family_counts,
             "duplicate_groups": duplicate_groups,
-            "data_quality": {"date_unknown_count": date_unknown_count, "official_count": official_count, "official_negative_count": official_neg, "item_count": len(items), "core_item_count": len(core_items), "event_core_count": len(unique_core), "current_scoring_count": len(core_items), "historical_excluded_count": historical_excluded_count, "forum_count": forum_count, "duplicate_group_count": len(duplicate_groups), "search_engine_evidence": 0},
+            "data_quality": {"date_unknown_count": date_unknown_count, "official_count": official_count, "official_negative_count": official_neg, "item_count": len(items), "core_item_count": len(core_items), "event_core_count": len(unique_core), "current_scoring_count": len(unique_core), "historical_excluded_count": historical_excluded_count, "quality_excluded_count": quality_excluded_count, "forum_count": forum_count, "duplicate_group_count": len(duplicate_groups), "merged_duplicate_count": merged_duplicate_count, "verified_full_text_count": verified_full_text_count, "structured_excerpt_count": structured_excerpt_count, "title_only_count": title_only_count, "boilerplate_rejected_count": boilerplate_rejected_count, "search_engine_evidence": 0},
             "credibility_method": "可信度为规则化来源权重：交易所/巨潮/公司公告最高，权威财经媒体较高，搜索聚合与社区较低；社区帖不作为核心利多利空证据。",
             "scoring_note": "V3.15/V16.2采用源头候选准入+详情正文准入+深度清洗+事件簇去重+实时全球要闻行业映射+时效权重：官方公告/交易所/巨潮为核心事实源，权威快讯进入宏观/行业映射，社区只作舆情，搜索引擎关键词页不参与评分；同一亏损/问询/减持/订单事件多源转载只计一次主权重。",
         }
 
 
     def _deduplicate(self, items: list[NewsItem]) -> list[NewsItem]:
-        """事件级去重：精确 event_key + 标题规范化 + 近似标题合并。
+        """Merge retransmissions while preserving dated event progress.
 
-        解决 V3.13 中股吧 table 摘要污染导致“同一个股东大会公告”在 F10 和股吧中重复展示/计分的问题。
+        Similar wording alone is not enough. A different announcement date or
+        document id is a separate point in an event series and must remain
+        visible.
         """
         groups: dict[str, list[NewsItem]] = {}
-        representatives: dict[str, str] = {}
+        representatives: dict[str, NewsItem] = {}
         for item in items:
             title_core = self._canonical_event_text(item.title)
-            text_core = self._canonical_event_text(f"{item.title} {item.summary}")
-            # event_key 优先；旧库可能 duplicate_group 与 event_key 不一致，统一以 event_key 为准。
-            key = item.event_key or item.duplicate_group or f"text:{self._dedup_fingerprint(title_core)}"
-            if item.document_id:
-                key = f"doc:{item.document_id}"
-            # 对普通 text hash 再按标题核心二次归并，避免摘要差异导致同一公告不同 key。
-            if key.startswith("text:"):
-                title_key = f"title:{self._dedup_fingerprint(title_core)}"
-                key = title_key
-            # V16.1：若识别出 document_id 或 issuer+event_type+period+event_date，
-            # 不再用标题指纹覆盖；这样媒体转载、F10、股吧讨论可挂到同一事件簇 evidence。
-            if not (key.startswith("doc:") or key.startswith("issuer:")):
-                if any(w in text_core for w in ["股东大会", "董事会", "监事会", "年度报告", "年报", "季报", "业绩说明会", "权益分派", "利润分配"]):
-                    day = self._extract_date_text(text_core) or "unknown"
-                    if "股东大会" in text_core:
-                        key = f"meeting:{day}:{self._dedup_fingerprint(title_core)}"
-                    elif any(w in text_core for w in ["年报", "年度报告", "季报"]):
-                        key = f"report:{self._extract_finance_period(text_core)}:{self._dedup_fingerprint(title_core)}"
-            # 近似合并：只在同一消息维度或社区/媒体转载场景下合并。
+            key = self._strict_duplicate_key(item, title_core)
             if key not in groups:
-                for gk, rep_title in representatives.items():
-                    if self._similar_title(title_core, rep_title):
+                for gk, representative in representatives.items():
+                    if self._can_merge_duplicate(item, representative):
                         key = gk
                         break
             groups.setdefault(key, []).append(item)
-            representatives.setdefault(key, title_core)
+            representatives.setdefault(key, item)
         kept: list[NewsItem] = []
         for key, arr in groups.items():
             arr.sort(key=self._item_priority, reverse=True)
             best = arr[0]
             if len(arr) > 1:
-                sources = "、".join(sorted({x.source for x in arr})[:4])
-                best = NewsItem(**{**best.to_dict(), "dedup_reason": f"同事件合并：{len(arr)} 条相近/转载信息，来源={sources}；仅最高可信版本进入主展示和主计分", "duplicate_group": key, "event_key": best.event_key or key})
+                source_list = sorted({x.source for x in arr if x.source})
+                source_refs = list(dict.fromkeys(x.url for x in arr if x.url))[:12]
+                sources = "、".join(source_list[:4])
+                best = NewsItem(**{
+                    **best.to_dict(),
+                    "dedup_reason": f"同事件合并：{len(arr)} 条相近/转载信息，来源={sources}；仅最高可信版本进入主展示和主计分",
+                    "duplicate_group": key,
+                    "event_key": best.event_key or key,
+                    "duplicate_count": len(arr),
+                    "duplicate_sources": source_list[:12],
+                    "duplicate_source_refs": source_refs,
+                })
             kept.append(best)
         kept.sort(key=self._item_priority, reverse=True)
         return kept
+
+    def _strict_duplicate_key(self, item: NewsItem, title_core: str | None = None) -> str:
+        if item.content_hash:
+            return f"content:{item.content_hash}"
+        if item.document_id:
+            return f"doc:{item.document_id}"
+        url = str(item.url or "").split("#", 1)[0].rstrip("/")
+        if url:
+            return "url:" + hashlib.sha1(url.encode("utf-8", "ignore")).hexdigest()[:18]
+        day = self._item_event_day(item) or "unknown"
+        core = title_core or self._canonical_event_text(item.title)
+        return f"title:{day}:{self._dedup_fingerprint(core)}"
+
+    def _item_event_day(self, item: NewsItem) -> str:
+        value = item.event_time or item.publish_time or item.published_at_norm or item.published_at or item.date_display
+        dt = self._parse_item_date(value)
+        return dt.date().isoformat() if dt else ""
+
+    def _can_merge_duplicate(self, item: NewsItem, representative: NewsItem) -> bool:
+        if item.content_hash and representative.content_hash and item.content_hash == representative.content_hash:
+            return True
+        if item.document_id and representative.document_id and item.document_id == representative.document_id:
+            return True
+        left_url = str(item.url or "").split("#", 1)[0].rstrip("/")
+        right_url = str(representative.url or "").split("#", 1)[0].rstrip("/")
+        if left_url and right_url and left_url == right_url:
+            return True
+        left_day = self._item_event_day(item)
+        right_day = self._item_event_day(representative)
+        if not left_day or left_day != right_day:
+            return False
+        left_type = str(item.event_type or "general_news")
+        right_type = str(representative.event_type or "general_news")
+        scheduled_types = {
+            "shareholder_meeting",
+            "board_meeting",
+            "financial_report",
+            "dividend",
+            "derivatives_settlement",
+        }
+        if item.event_time and representative.event_time and left_type == right_type and left_type in scheduled_types:
+            return True
+        exact_title = self._exact_title_key(item.title) == self._exact_title_key(representative.title)
+        if item.document_id and representative.document_id and item.document_id != representative.document_id:
+            left_host = urlparse(left_url).netloc.lower() if left_url else ""
+            right_host = urlparse(right_url).netloc.lower() if right_url else ""
+            if left_host and right_host and left_host == right_host:
+                return False
+            return exact_title
+        if item.source_type == "announcement" or representative.source_type == "announcement":
+            return exact_title
+        compatible_types = left_type == right_type or "announcement" in {left_type, right_type}
+        return compatible_types and self._similar_title(item.title, representative.title)
+
+    def _exact_title_key(self, title: str) -> str:
+        value = re.sub(r"[\W_]+", "", self._canonical_event_text(title).lower())
+        return value[:140]
 
     def _item_priority(self, x: NewsItem) -> tuple:
         dt = self._parse_item_date(x.published_at_norm or x.published_at or x.date_display)
@@ -1875,7 +2057,8 @@ class NewsAnalysisService:
                 # whole information refresh.
                 ts = float(dt.toordinal())
         official = 1 if x.source_type == "announcement" or x.credibility_score >= 85 else 0
-        return (official, x.relevance_score, x.credibility_score, x.impact_score, x.recency_weight, ts)
+        verified_content = 1 if x.content_loaded and x.content_quality_status == "full_text" else 0
+        return (official, verified_content, x.relevance_score, x.credibility_score, x.impact_score, x.recency_weight, ts)
 
     def _is_current_scoring_item(self, item: NewsItem) -> bool:
         """Limit live information scoring to dated, decision-relevant events."""
@@ -2223,9 +2406,21 @@ class NewsAnalysisService:
             return "持有人权益受损"
         if source_type == "macro":
             return "全球/国内要闻"
-        if source_type == "forum" or any(w in text for w in self.FORUM_WORDS):
+        if source_type == "forum":
             return "社区舆情"
-        if source_type == "research" or any(w in text for w in ["研报", "研究报告", "评级", "目标价"]):
+        if source_type == "research":
+            return "研报观点"
+        if source_type == "announcement":
+            if any(w in text for w in self.RISK_WORDS):
+                return "监管/风险"
+            if any(w in text for w in self.FINANCE_WORDS):
+                return "财报业绩"
+            if any(w in text for w in self.OPERATION_WORDS):
+                return "经营业务"
+            return "公司公告"
+        if any(w in text for w in self.FORUM_WORDS):
+            return "社区舆情"
+        if any(w in text for w in ["研报", "研究报告", "评级", "目标价"]):
             return "研报观点"
         if any(w in text for w in self.RISK_WORDS):
             return "监管/风险"
@@ -2235,8 +2430,6 @@ class NewsAnalysisService:
             return "政策行业"
         if any(w in text for w in self.OPERATION_WORDS):
             return "经营业务"
-        if source_type == "announcement":
-            return "公司公告"
         return "市场新闻"
 
     def _fake_risk(self, title: str, url: str, source: str, credibility: float) -> float:
@@ -2386,7 +2579,14 @@ class NewsAnalysisService:
             ok, _reason = self.valid_news_item(new_title, new_summary, source=item.source, url=item.url, symbol=symbol, name=name, source_type=item.source_type, base_relevant=item.relevance_score >= 20)
             if ok and new_summary and self._is_article_detail_text(new_title, new_summary, source=item.source, symbol=symbol, name=name, source_type=item.source_type) and len(new_summary) > len(item.summary or ""):
                 rescored = self._score_item(new_title, item.url, item.source, item.published_at, new_summary, symbol, name, source_type=item.source_type)
-                return idx, NewsItem(**{**rescored.to_dict(), "content_loaded": True})
+                return idx, NewsItem(**{
+                    **rescored.to_dict(),
+                    "content_loaded": True,
+                    "content_source": item.url,
+                    "content_quality_status": "full_text",
+                    "content_missing_reason": "",
+                    "content_hash": hashlib.sha256(new_summary.encode("utf-8", "ignore")).hexdigest(),
+                })
             return idx, None
 
         with ThreadPoolExecutor(max_workers=max(1, min(self.detail_workers, len(targets)))) as executor:
@@ -2415,12 +2615,46 @@ class NewsAnalysisService:
 
         def load(pair: tuple[int, NewsItem]) -> tuple[int, NewsItem | None]:
             idx, item = pair
-            text = self._fetch_text_excerpt(item.url, max_chars=1200)
+            detail = self._fetch_eastmoney_announcement_detail(item.url, max_chars=2400)
+            text = detail.get("text", "") if detail else ""
+            if not text:
+                text = self._fetch_text_excerpt(item.url, max_chars=1200)
+                if self._looks_like_page_chrome(text):
+                    text = ""
             if text and len(text) > len(item.summary or ""):
                 summary = self._clean_text(text)[:500]
-                score, ev = self._adjust_sentiment_by_evidence(item.sentiment_score, item.title + " " + summary, item.source_type)
-                return idx, NewsItem(**{**item.to_dict(), "summary": summary, "sentiment_score": round(score, 2), "evidence": list(dict.fromkeys((item.evidence or []) + ev)), "content_loaded": True})
-            return idx, None
+                rescored = self._score_item(
+                    item.title,
+                    item.url,
+                    item.source,
+                    item.publish_time or item.published_at,
+                    summary,
+                    "",
+                    item.issuer or "",
+                    source_type=item.source_type,
+                )
+                score, ev = self._adjust_sentiment_by_evidence(rescored.sentiment_score, item.title + " " + summary, item.source_type)
+                evidence = list(dict.fromkeys((rescored.evidence or []) + ev + (["已读取公开公告正文"] if detail else [])))
+                return idx, NewsItem(**{
+                    **rescored.to_dict(),
+                    "summary": summary,
+                    "sentiment_score": round(score, 2),
+                    "evidence": evidence,
+                    "content_loaded": True,
+                    "attachment_url": detail.get("attachment_url", "") if detail else item.attachment_url,
+                    "content_source": detail.get("content_source", "generic_public_page") if detail else "generic_public_page",
+                    "content_quality_status": "full_text",
+                    "content_missing_reason": "",
+                    "content_hash": hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest(),
+                })
+            usable_existing_summary = bool(item.summary and not self._looks_like_page_chrome(item.summary))
+            return idx, NewsItem(**{
+                **item.to_dict(),
+                "summary": item.summary if usable_existing_summary else "",
+                "content_loaded": False,
+                "content_quality_status": "structured_excerpt" if usable_existing_summary else "title_only",
+                "content_missing_reason": "" if usable_existing_summary else "公开正文接口未返回可验证正文，当前仅保留标题级证据",
+            })
 
         with ThreadPoolExecutor(max_workers=max(1, min(self.detail_workers, len(ordered_targets)))) as executor:
             futures = [executor.submit(load, pair) for pair in ordered_targets]
@@ -2432,6 +2666,66 @@ class NewsAnalysisService:
                 except Exception:
                     continue
         return out
+
+    def _looks_like_page_chrome(self, text: str) -> bool:
+        """Reject navigation/footer text that must never be treated as article evidence."""
+        return is_page_chrome_summary(text)
+
+    def _normalize_cached_result(self, cached: dict[str, Any], symbol: str, name: str, limit: int) -> dict[str, Any]:
+        """Migrate older cached rows through current truth, dedup and scoring rules."""
+        data = dict(cached or {})
+        raw_items = data.get("items") or []
+        normalized = [self._item_from_dict(row) for row in raw_items if isinstance(row, dict)]
+        normalized = self._filter_valid_items(normalized, symbol=symbol, name=name)
+        normalized = self._deduplicate(normalized)
+        aggregate = self._aggregate(symbol, name, normalized)
+        data.update(aggregate)
+        data["items"] = [item.to_dict() for item in normalized[:min(limit, 80)]]
+        data["count"] = len(normalized)
+        data.setdefault("cache_info", {})
+        data["cache_info"].update({"hit": True, "normalized_with_current_rules": True})
+        return data
+
+    def _eastmoney_announcement_art_code(self, url: str) -> str:
+        value = str(url or "")
+        match = re.search(r"\b(AN\d{12,24})\b", value, flags=re.I)
+        return match.group(1).upper() if match else ""
+
+    def _fetch_eastmoney_announcement_detail(self, url: str, max_chars: int = 2400) -> dict[str, str]:
+        """Read Eastmoney's public announcement-content endpoint, not the HTML shell."""
+        art_code = self._eastmoney_announcement_art_code(url)
+        if not art_code or "eastmoney.com" not in str(url or "").lower():
+            return {}
+        cached = self._announcement_detail_cache.get(art_code)
+        if cached and time.time() - cached[0] < self.cache_ttl_seconds:
+            return dict(cached[1])
+        endpoint = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+        try:
+            response = self.http.get(
+                endpoint,
+                params={"art_code": art_code, "client_source": "web", "page_index": "1"},
+                headers={"Referer": str(url), "User-Agent": "Mozilla/5.0"},
+            )
+            payload = response.json()
+            data = (payload or {}).get("data") or {}
+            if int((payload or {}).get("success") or 0) != 1 or str(data.get("art_code") or "").upper() != art_code:
+                return {}
+            text = self._clean_text(str(data.get("notice_content") or ""))
+            if len(text) < 80 or self._looks_like_page_chrome(text):
+                return {}
+            attachment_url = str(data.get("attach_url_web") or data.get("attach_url") or "")
+            result = {
+                "text": text[:max_chars],
+                "title": self._clean_text(str(data.get("notice_title") or ""))[:180],
+                "published_at": self._clean_text(str(data.get("notice_date") or data.get("eitime") or ""))[:19],
+                "attachment_url": attachment_url if attachment_url.startswith("https://") else "",
+                "content_source": endpoint,
+                "art_code": art_code,
+            }
+            self._announcement_detail_cache[art_code] = (time.time(), result)
+            return dict(result)
+        except Exception:
+            return {}
 
     def _fetch_text_excerpt(self, url: str, max_chars: int = 1200) -> str:
         if not url or not str(url).startswith("http"):

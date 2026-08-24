@@ -1,4 +1,4 @@
-# Quant Data Gateway V3.18.3 / Stable Recovery
+# Quant Data Gateway V3.26 / Decision Quality and Trading Integration
 
 ## V3.25 Market Intelligence / Position Review
 

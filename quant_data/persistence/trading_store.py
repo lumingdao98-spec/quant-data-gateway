@@ -25,6 +25,7 @@ TABLES = (
     "live_sessions",
     "position_reviews",
     "position_review_runs",
+    "tonghuashun_reminders",
 )
 
 NORMALIZED_TABLE_SCHEMAS = {

@@ -184,7 +184,7 @@ def test_realtime_information_uses_recent_dated_evidence_only():
 
     assert info["recent_count"] == 1
     assert info["excluded_count"] == 2
-    assert info["score"] > 60
+    assert info["score"] > 55
     assert info["items"][0]["source_ref"] == "https://example.com/recent"
     assert info["screening_score"] == 54
     assert info["score_delta_from_screening"] == round(info["score"] - 54, 4)
@@ -195,12 +195,86 @@ def test_realtime_information_uses_recent_dated_evidence_only():
     assert "screen-info-1" in result["score_breakdown"]["information_trace"]
 
 
+def test_realtime_information_quality_shrinks_title_only_evidence():
+    now = datetime.now()
+    base_item = {
+        "title": "重大订单获得正式公告确认",
+        "source": "巨潮资讯",
+        "source_type": "announcement",
+        "published_at": (now - timedelta(hours=3)).isoformat(),
+        "sentiment_score": 80,
+        "credibility_score": 95,
+        "impact_score": 85,
+    }
+    title_result = _service(info={"items": [{**base_item, "content_quality_status": "title_only"}]}).hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60},
+    )["recent_information"]
+    full_result = _service(info={"items": [{**base_item, "content_quality_status": "full_text"}]}).hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60},
+    )["recent_information"]
+
+    assert title_result["score"] < full_result["score"]
+    assert title_result["quality_coverage"] == 0.35
+    assert full_result["quality_coverage"] == 1.0
+
+
+def test_future_outcome_and_boilerplate_do_not_enter_current_information_score():
+    now = datetime.now()
+    result = _service(
+        info={
+            "items": [
+                {
+                    "title": "下周股东大会将审议方案",
+                    "source": "巨潮资讯",
+                    "source_type": "announcement",
+                    "published_at": (now - timedelta(hours=1)).isoformat(),
+                    "event_time": (now + timedelta(days=4)).isoformat(),
+                    "sentiment_score": 90,
+                    "credibility_score": 95,
+                    "impact_score": 80,
+                    "content_quality_status": "full_text",
+                },
+                {
+                    "title": "网站导航和免责声明",
+                    "source": "网页壳",
+                    "source_type": "announcement",
+                    "published_at": now.isoformat(),
+                    "sentiment_score": 99,
+                    "content_quality_status": "boilerplate_rejected",
+                },
+            ]
+        }
+    ).hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60},
+    )["recent_information"]
+
+    assert result["score"] is None
+    assert result["scoreable_count"] == 0
+    assert result["future_information_excluded"] == 1
+    assert result["excluded_count"] == 1
+    assert result["auto_buy_eligible"] is False
+
+
 def test_missing_orderbook_is_explicit_and_never_fabricated():
     result = _service().hydrate({"symbol": "600438", "quote": _quote().to_dict()}, profile={"final_score": 60})
 
     assert result["orderbook_snapshot"]["status"] == "missing"
     assert result["orderbook_snapshot"]["bid1"] is None
     assert "orderbook_missing" in result["missing_data"]
+
+
+def test_fund_flow_score_is_missing_without_traceable_volume_or_orderbook_evidence():
+    result = _service()._fund_flow_score(
+        {"change_pct": 1.2, "last": 12.0, "source": "unit_quote"},
+        [],
+    )
+
+    assert result["score"] is None
+    assert result["quality_status"] == "missing"
+    assert result["evidence_fields"] == []
 
 
 def test_traceable_pit_earnings_changes_realtime_information_and_trade_score(tmp_path):
@@ -236,6 +310,9 @@ def test_traceable_pit_earnings_changes_realtime_information_and_trade_score(tmp
         profile={"final_score": 60, "fundamental_score": 60, "fund_flow_score": 55, "market_score": 50},
     )
 
+    assert enriched["recent_information"]["event_only_baseline"] is True
+    assert enriched["recent_information"]["source"] == "可追溯结构化事件快照"
+
     def trade_score(row):
         return SignalFusionEngine().fuse(
             symbol="600438",
@@ -247,8 +324,10 @@ def test_traceable_pit_earnings_changes_realtime_information_and_trade_score(tmp
             market_score=row.get("market_score"),
         ).final_score
 
-    assert enriched["information_score"] > base["information_score"]
-    assert trade_score(enriched) > trade_score(base)
+    assert base["information_score"] is None
+    assert enriched["information_score"] > 50.0
+    assert trade_score(enriched) != trade_score(base)
+    assert enriched["auto_entry_eligible"] is True
     assert enriched["market_event_context"]["pit_input_status"]["datasets"]["earnings"]["status"] == "available"
     assert any(
         row["factor_key"] == "earnings_surprise"

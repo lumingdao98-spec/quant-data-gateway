@@ -64,6 +64,7 @@ class ScoreProvenanceV323:
     pit_status: str = "unknown"
     missing_data: list[str] = field(default_factory=list)
     stale_data: list[str] = field(default_factory=list)
+    excluded_dimensions: list[dict[str, Any]] = field(default_factory=list)
     policy_version: str = "v3.23-default"
     policy_hash: str = ""
     dimension_scores: dict[str, float] = field(default_factory=dict)
@@ -83,6 +84,7 @@ class ScoreProvenanceV323:
             "pit_status": self.pit_status,
             "missing_data": list(self.missing_data),
             "stale_data": list(self.stale_data),
+            "excluded_dimensions": list(self.excluded_dimensions),
             "policy_version": self.policy_version,
             "policy_hash": self.policy_hash,
             "dimension_scores": dict(self.dimension_scores),

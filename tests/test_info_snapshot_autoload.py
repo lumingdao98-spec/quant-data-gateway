@@ -54,7 +54,7 @@ def test_info_analyze_empty_snapshot_id_autoloads_latest(monkeypatch, tmp_path):
 
 def test_info_page_has_empty_cache_and_source_log_containers():
     html = TestClient(api.app).get("/info?symbol=300274&name=Sungrow").text
-    assert "V3.18" in html
+    assert "V3.26" in html
     assert "cacheStateBox" in html
     assert "sources" in html
     assert "暂无信息" in html

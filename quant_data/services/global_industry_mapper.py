@@ -243,12 +243,16 @@ class GlobalIndustryMapper:
     def map_item(self, item: dict[str, Any], symbol: str, exposure: dict[str, Any]) -> dict[str, Any]:
         text = " ".join(str(item.get(key) or "") for key in ("title", "summary", "content", "category")).lower()
         hit_rules = [rule for rule in RULES if any(keyword.lower() in text for keyword in rule["keywords"])]
+        symbol_rules = [rule for rule in hit_rules if not bool(rule.get("market_wide"))]
         industries = sorted({value for rule in hit_rules for value in rule["industries"]})
         concepts = sorted({value for rule in hit_rules for value in rule["concepts"]})
-        symbols = sorted({value for rule in hit_rules for value in rule["symbols"]})
+        symbols = sorted({value for rule in symbol_rules for value in rule["symbols"]})
         exposure_words = set(exposure.get("industries", []) + exposure.get("concepts", []) + exposure.get("chain_position", []))
-        overlap = exposure_words.intersection(set(industries + concepts))
-        direct = symbol in symbols
+        symbol_industries = {value for rule in symbol_rules for value in rule["industries"]}
+        symbol_concepts = {value for rule in symbol_rules for value in rule["concepts"]}
+        overlap = exposure_words.intersection(symbol_industries | symbol_concepts)
+        explicit_name = str(exposure.get("name") or "").strip().lower()
+        direct = symbol in symbols or symbol.lower() in text or (explicit_name and explicit_name != symbol.lower() and explicit_name in text)
         market_wide = any(bool(rule.get("market_wide")) for rule in hit_rules)
         rule_keys = [str(rule.get("key") or "") for rule in hit_rules]
         relevance = 18 if not hit_rules else 32 + len(hit_rules) * 10 + len(overlap) * 12 + (20 if direct else 0) + (5 if market_wide else 0)
@@ -263,6 +267,9 @@ class GlobalIndustryMapper:
             reasons.append("这是市场级宏观变量，只进入大盘环境分，不直接作为个股利多或利空。")
         elif not hit_rules:
             reasons.append("未命中当前标的行业、概念或产业链，不纳入个股评分。")
+        # Market-wide liquidity/risk events belong to the market-regime score.
+        # They enter an individual information score only when the text names
+        # the company/security or also matches a non-market industry rule.
         included = bool(relevance >= 55 and (overlap or direct))
         item_id = item.get("id") or item.get("url") or item.get("title") or f"global-{symbol}-{abs(hash(text)) % 1_000_000}"
         return {

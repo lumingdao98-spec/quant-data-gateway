@@ -32,6 +32,15 @@ def _evidence(store, *, side="buy", quantity=100, provenance_mode="realtime_pape
             "decision_time": now,
             "final_score": 68.0,
             "stale_data": [],
+            "dimension_readiness": {
+                "auto_entry_eligible": True,
+                "entry_block_reasons": [],
+                "dimensions": [
+                    {"key": "technical", "ready": True},
+                    {"key": "information", "ready": True},
+                    {"key": "fund_flow", "ready": True},
+                ],
+            },
         },
         mode=provenance_mode,
         symbol="300750",
@@ -120,6 +129,45 @@ def test_real_provider_rejects_backtest_score_provenance(tmp_path, monkeypatch):
 
     assert result["ok"] is False
     assert result["data"]["precheck"]["reason_code"] == "score_provenance_mode"
+    assert broker.get_orders() == []
+
+
+def test_real_provider_blocks_buy_when_decision_dimensions_are_not_ready(tmp_path, monkeypatch):
+    engine, broker, store = _engine(tmp_path)
+    monkeypatch.setattr(
+        live_engine_module,
+        "market_session_status",
+        lambda: {"is_trading_day": True, "is_trading_time": True},
+    )
+    evidence = _evidence(store)
+    provenance = store.get("score_provenance", evidence["provenance_id"])
+    provenance["dimension_readiness"] = {
+        "auto_entry_eligible": False,
+        "entry_block_reasons": ["信息面数据过期", "资金面仅有量价代理"],
+        "dimensions": [],
+    }
+    store.put(
+        "score_provenance",
+        provenance,
+        mode="realtime_paper",
+        symbol="300750",
+        record_id=evidence["provenance_id"],
+    )
+
+    result = engine.place_order(
+        {
+            "symbol": "300750",
+            "side": "buy",
+            "quantity": 100,
+            "limit_price": 10,
+            **evidence,
+        },
+        confirmed=True,
+    )
+
+    assert result["ok"] is False
+    assert result["data"]["precheck"]["reason_code"] == "decision_dimensions_ready"
+    assert "信息面数据过期" in result["data"]["precheck"]["reason"]
     assert broker.get_orders() == []
 
 

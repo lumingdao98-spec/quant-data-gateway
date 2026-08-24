@@ -111,3 +111,20 @@ def test_live_score_lookup_ignores_newer_backtest_provenance(monkeypatch):
     provenance = api._latest_score_provenance_for_live("300750")
 
     assert provenance["provenance_id"] == "paper-current"
+
+
+def test_live_payload_does_not_trust_client_risk_boolean_or_unknown_id():
+    prepared = api._prepare_live_order_payload(
+        {
+            "symbol": "300750",
+            "side": "buy",
+            "quantity": 100,
+            "limit_price": 10,
+            "risk_check_id": "browser-made-id",
+            "risk_approved": True,
+        }
+    )
+
+    assert prepared["risk_check_id"] != "browser-made-id"
+    assert prepared["client_risk_evidence_ignored"] is True
+    assert prepared["risk_approved"] is False

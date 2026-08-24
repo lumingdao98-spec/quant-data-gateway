@@ -7,6 +7,7 @@ def test_live_trading_page_visible():
     html = TestClient(api.app).get("/live-trading").text
 
     assert "真实自动交易 V3.23" in html
+    assert "真实自动交易 V3.26" in html
     assert "默认禁用" in html
     assert "多股票实盘观察池" in html
     assert "实盘策略目录" in html
@@ -39,3 +40,7 @@ def test_live_trading_page_visible():
     assert "display_cost_price" in html
     assert "未连接真实账户" in html
     assert "预检查不会计入这里" in html
+    assert "同花顺人工委托伴随" in html
+    assert "/api/integrations/tonghuashun/status" in html
+    assert "/api/integrations/tonghuashun/reminders" in html
+    assert "自动下单：不支持" in html

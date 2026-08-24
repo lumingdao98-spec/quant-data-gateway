@@ -46,7 +46,14 @@ def test_market_sentiment_is_small_visible_adjustment():
         _quote(),
         _bars(),
         kline_adjust="qfq",
-        market_regime={"score": 72, "regime": "震荡偏强", "sample_count": 200, "basis": "unit"},
+        market_regime={
+            "score": 72,
+            "regime": "震荡偏强",
+            "sample_count": 200,
+            "basis": "unit",
+            "valid_for_score": True,
+            "quality_status": "available",
+        },
     ).to_dict()
 
     assert data["market_sentiment_label"] in {"强势", "偏暖"}

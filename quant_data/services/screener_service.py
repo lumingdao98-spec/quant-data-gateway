@@ -194,7 +194,7 @@ class ScreenerResult:
     theme_strength: float | None
     theme_labels: list[str]
     market_regime: dict
-    market_sentiment_score: float
+    market_sentiment_score: float | None
     market_sentiment_adjustment: float
     market_sentiment_label: str
     market_cap_style: str
@@ -794,8 +794,11 @@ class ScreenerService:
             if "sector_strength" in strategies:
                 strategy_tags.append("策略:板块强度需行业/主题快照联动")
             if "market_breadth_filter" in strategies:
+                regime_valid = bool((market_regime or {}).get("valid_for_score"))
                 regime_score = float((market_regime or {}).get("score") or 50)
-                if regime_score >= 60:
+                if not regime_valid:
+                    strategy_tags.append("策略:大盘证据不足未参与")
+                elif regime_score >= 60:
                     total += 1.0; strategy_tags.append("策略:市场宽度过滤通过")
                 elif regime_score <= 42:
                     total -= 1.5; strategy_risks.append("策略:市场宽度偏弱")
@@ -813,7 +816,11 @@ class ScreenerService:
                 f"strategy adjustment capped from {raw_strategy_delta:+.1f} to {capped_strategy_delta:+.1f}"
             )
         market_sentiment = self._market_sentiment_adjustment(market_regime, q)
-        market_sentiment_score = float(market_sentiment.get("score") or 50)
+        market_sentiment_score = (
+            float(market_sentiment["score"])
+            if market_sentiment.get("score") is not None
+            else None
+        )
         market_sentiment_adjustment = float(market_sentiment.get("adjustment") or 0)
         market_sentiment_label = str(market_sentiment.get("label") or "中性")
         if market_sentiment_adjustment >= 0.8:
@@ -1059,7 +1066,7 @@ class ScreenerService:
             theme_strength=rf(theme_info.get("theme_score"), 2) if isinstance(theme_info.get("theme_score"), (int, float)) else None,
             theme_labels=theme_labels,
             market_regime=dict(market_regime or {}),
-            market_sentiment_score=round(market_sentiment_score, 2),
+            market_sentiment_score=round(market_sentiment_score, 2) if market_sentiment_score is not None else None,
             market_sentiment_adjustment=round(market_sentiment_adjustment, 2),
             market_sentiment_label=market_sentiment_label,
             market_cap_style=market_cap_style,
@@ -1110,6 +1117,16 @@ class ScreenerService:
 
     def _market_sentiment_adjustment(self, market_regime: dict | None, q: Quote) -> dict:
         data = market_regime or {}
+        if not data.get("valid_for_score"):
+            return {
+                "score": None,
+                "adjustment": 0.0,
+                "label": "大盘证据不足",
+                "sample_count": int(data.get("sample_count") or 0),
+                "index_count": int(data.get("index_count") or 0),
+                "quality_status": data.get("quality_status") or "insufficient_sample",
+                "missing_reasons": list(data.get("missing_reasons") or ["缺少有效指数趋势/市场宽度证据"]),
+            }
         try:
             score = float(data.get("score", 50) or 50)
         except Exception:
@@ -1132,6 +1149,8 @@ class ScreenerService:
             "index_count": index_count,
             "regime": data.get("regime"),
             "sample_scope": data.get("sample_scope"),
+            "quality_status": data.get("quality_status") or "available",
+            "missing_reasons": list(data.get("missing_reasons") or []),
         }
 
     def _grade_aware_technical_summary(

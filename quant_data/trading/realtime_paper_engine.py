@@ -196,12 +196,14 @@ class RealtimePaperEngine:
             self.audit_log.record("tick_rejected", {"symbol": symbol, "reason": "非交易时段禁止自动下单"})
             return {"ok": True, "message": "非交易时段，仅记录不下单", "state": self.state.to_dict(), "orders": []}
 
+        decision_hydrated = bool(payload.get("score_source") or payload.get("recent_information"))
+        compatibility_now = None if decision_hydrated else now.isoformat(timespec="seconds")
         timestamps = {
             "quote": quote.get("ts"),
             "intraday": payload.get("intraday_ts"),
-            "news": payload.get("news_ts") or now.isoformat(timespec="seconds"),
-            "technical": payload.get("technical_ts") or now.isoformat(timespec="seconds"),
-            "company_profile": payload.get("company_profile_ts") or now.isoformat(timespec="seconds"),
+            "news": payload.get("news_ts") or compatibility_now,
+            "technical": payload.get("technical_ts") or compatibility_now,
+            "company_profile": payload.get("company_profile_ts") or compatibility_now,
         }
         freshness = self.freshness_guard.check(timestamps, now=now)
         self.state.freshness_status = freshness.freshness_status
@@ -212,17 +214,32 @@ class RealtimePaperEngine:
         missing_data = list(payload.get("missing_data") or []) + list(event_context.get("missing_data") or [])
         evidence = list(payload.get("evidence") or anomaly.evidence or ["手动 tick 生成信号"])
         evidence.extend(event_context.get("evidence") or [])
+        raw_dimension_scores = {
+            "fundamental": self._optional(payload.get("fundamental_score")),
+            "technical": self._optional(payload.get("technical_score")),
+            "information": self._optional(payload.get("information_score")),
+            "fund_flow": self._optional(payload.get("fund_flow_score")),
+            "market": self._optional(payload.get("market_score")),
+        }
+        execution_scores: dict[str, float | None] = {}
+        excluded_by_readiness: list[dict[str, Any]] = []
+        for key in ("fundamental", "technical", "information", "fund_flow", "market"):
+            value, exclusion = self._execution_score(payload, key)
+            execution_scores[key] = value
+            if exclusion:
+                excluded_by_readiness.append(exclusion)
+                missing_data.append(f"{key}_excluded_by_readiness")
         signal = self.signal_fusion.fuse(
             symbol=symbol,
             horizon=str(payload.get("horizon") or self.state.config.horizon),
             screening_score=self._optional(payload.get("screening_score")),
             daily_k_score=self._optional(payload.get("daily_k_score")),
             intraday_score=self._optional(payload.get("intraday_score")),
-            fundamental_score=self._optional(payload.get("fundamental_score")),
-            technical_score=self._optional(payload.get("technical_score")),
-            information_score=self._optional(payload.get("information_score")),
-            fund_flow_score=self._optional(payload.get("fund_flow_score")),
-            market_score=self._optional(payload.get("market_score")),
+            fundamental_score=execution_scores["fundamental"],
+            technical_score=execution_scores["technical"],
+            information_score=execution_scores["information"],
+            fund_flow_score=execution_scores["fund_flow"],
+            market_score=execution_scores["market"],
             score_weights=payload.get("score_weights") if isinstance(payload.get("score_weights"), dict) else None,
             anomaly_score=anomaly.anomaly_score,
             anomaly_action=anomaly.action_suggestion,
@@ -234,6 +251,22 @@ class RealtimePaperEngine:
             missing_data=list(dict.fromkeys(missing_data)),
             now=now,
         )
+        if event_context.get("block_new_position") and signal.action in {"buy", "add"}:
+            signal.action = "hold"
+            signal.target_weight = 0.0
+            signal.requires_manual_confirm = True
+            block_reason = str(event_context.get("block_reason") or "信息质量或临近事件不满足自动新增仓位条件")
+            signal.reason = f"{signal.reason}；{block_reason}" if signal.reason else block_reason
+            signal.evidence = list(dict.fromkeys(signal.evidence + [block_reason]))
+        dimension_readiness = dict(payload.get("dimension_readiness") or {})
+        if dimension_readiness and not dimension_readiness.get("auto_entry_eligible", False) and signal.action in {"buy", "add"}:
+            signal.action = "hold"
+            signal.target_weight = 0.0
+            signal.requires_manual_confirm = True
+            reasons = [str(value) for value in (dimension_readiness.get("entry_block_reasons") or []) if str(value)]
+            block_reason = "三面决策门禁未通过" + (f"：{'；'.join(reasons[:4])}" if reasons else "")
+            signal.reason = f"{signal.reason}；{block_reason}" if signal.reason else block_reason
+            signal.evidence = list(dict.fromkeys(signal.evidence + reasons + [block_reason]))
         strategy_controls = self._apply_strategy_controls(signal, payload, price)
         self.signals.append(signal)
         previous_signal = next(
@@ -248,6 +281,9 @@ class RealtimePaperEngine:
         score_breakdown.update(signal_score_breakdown)
         if sources:
             score_breakdown["sources"] = sources
+        score_breakdown["raw_dimension_scores"] = raw_dimension_scores
+        score_breakdown["execution_dimension_scores"] = execution_scores
+        score_breakdown["excluded_by_readiness"] = excluded_by_readiness
         score_breakdown["final_score_delta"] = score_delta
         signal_row = signal.to_dict()
         signal_row.update(
@@ -267,6 +303,9 @@ class RealtimePaperEngine:
                 "paper_only": True,
                 "strategy_controls": strategy_controls,
                 "event_watch_context": event_context,
+                "dimension_readiness": dimension_readiness,
+                "auto_entry_eligible": bool(dimension_readiness.get("auto_entry_eligible", True)),
+                "entry_block_reasons": list(dimension_readiness.get("entry_block_reasons") or []),
                 "market_rule": rule.to_dict(),
             }
         )
@@ -495,15 +534,14 @@ class RealtimePaperEngine:
             signal.action = "reduce"
             signal.target_weight = min(signal.target_weight, cap * 0.35 if cap else signal.target_weight)
             hints.append("screener_action=reduce")
-        elif profile_action == "buy" and signal.action == "hold" and signal.final_score >= 55:
-            signal.action = "buy"
-            hints.append("screener_action=buy")
+        elif profile_action == "buy":
+            hints.append("screener_buy_audit_only")
 
         hint_pct = self._pct(profile.get("target_weight_hint_pct"), 0.0)
         if signal.action in {"buy", "add"}:
             if hint_pct > 0:
-                signal.target_weight = max(signal.target_weight, hint_pct / 100.0)
-                hints.append(f"screener_target_hint={hint_pct:.2f}%")
+                signal.target_weight = min(signal.target_weight, hint_pct / 100.0)
+                hints.append(f"screener_target_cap={hint_pct:.2f}%")
             if cap > 0:
                 signal.target_weight = min(signal.target_weight, cap)
                 hints.append(f"max_single_position={max_single_pct:.2f}%")
@@ -547,12 +585,49 @@ class RealtimePaperEngine:
 
     def _event_watch_context(self, payload: dict[str, Any]) -> dict[str, Any]:
         watch = dict(payload.get("event_watch") or {})
-        if not watch:
-            return {"enabled": False, "missing_data": [], "evidence": [], "veto": False}
         enabled_keys = [key for key, value in watch.items() if isinstance(value, bool) and value]
         evidence: list[str] = []
         missing: list[str] = []
         veto = False
+        block_new_position = False
+        block_reason = ""
+        recent_information = dict(payload.get("recent_information") or {})
+        future_calendar = recent_information.get("future_event_calendar") or payload.get("future_event_calendar") or {}
+        future_events = [dict(row) for row in (future_calendar.get("events") or []) if isinstance(row, dict)] if isinstance(future_calendar, dict) else []
+        confirmed_events = [
+            row for row in future_events
+            if row.get("confirmation_status") == "公开来源已确认"
+            and row.get("attention_level") == "高"
+        ]
+        inferred_events = [row for row in future_events if row.get("confirmation_status") == "规则推算待确认"]
+        lookahead_days = int(self._pct(watch.get("event_lookahead_days"), 7.0))
+        blackout_before_days = int(self._pct(watch.get("blackout_before_days"), 3.0))
+        upcoming_confirmed = [
+            row for row in confirmed_events
+            if 0 <= int(self._pct(row.get("days_until"), 999.0)) <= max(0, lookahead_days)
+        ]
+        blackout_events = [
+            row for row in upcoming_confirmed
+            if int(self._pct(row.get("days_until"), 999.0)) <= max(0, blackout_before_days)
+        ]
+        if recent_information:
+            if recent_information.get("stale"):
+                block_new_position = True
+                block_reason = "信息快照已过期，禁止自动新增仓位"
+                missing.append("recent_information_stale")
+            elif recent_information.get("auto_buy_eligible") is False:
+                block_new_position = True
+                block_reason = "近期信息正文质量或可核验证据不足，禁止自动新增仓位"
+                missing.append("recent_information_not_trade_eligible")
+            if blackout_events:
+                block_new_position = True
+                event_titles = "、".join(str(row.get("title") or row.get("event_type_cn") or "高关注事件") for row in blackout_events[:3])
+                block_reason = f"临近已确认高关注事件：{event_titles}；新增仓位需人工确认"
+                evidence.append("confirmed_future_event_blackout")
+            elif upcoming_confirmed:
+                evidence.append("confirmed_future_event_watch")
+            if inferred_events:
+                evidence.append("rule_inferred_calendar_watch_only")
         info_present = any(payload.get(key) for key in ("news_ts", "info_snapshot_ts", "announcement_ts", "financial_report_ts"))
         if enabled_keys and not info_present:
             missing.append("event_watch_snapshot_missing")
@@ -577,8 +652,12 @@ class RealtimePaperEngine:
             "missing_data": missing,
             "evidence": evidence,
             "veto": veto,
-            "lookahead_days": int(self._pct(watch.get("event_lookahead_days"), 0.0)),
-            "blackout_before_days": int(self._pct(watch.get("blackout_before_days"), 0.0)),
+            "block_new_position": block_new_position,
+            "block_reason": block_reason,
+            "confirmed_future_events": upcoming_confirmed,
+            "rule_inferred_events": inferred_events,
+            "lookahead_days": lookahead_days,
+            "blackout_before_days": blackout_before_days,
             "blackout_after_days": int(self._pct(watch.get("blackout_after_days"), 0.0)),
         }
 
@@ -586,6 +665,29 @@ class RealtimePaperEngine:
         if value in (None, "", "--"):
             return None
         return self._num(value)
+
+    def _execution_score(self, payload: dict[str, Any], key: str) -> tuple[float | None, dict[str, Any] | None]:
+        value = self._optional(payload.get(f"{key}_score"))
+        readiness = payload.get("dimension_readiness")
+        if not isinstance(readiness, dict):
+            return value, None
+        row: dict[str, Any] | None = None
+        if key == "market":
+            candidate = readiness.get("market_context")
+            row = dict(candidate) if isinstance(candidate, dict) else None
+        else:
+            for candidate in readiness.get("dimensions") or []:
+                if isinstance(candidate, dict) and str(candidate.get("key") or "") == key:
+                    row = dict(candidate)
+                    break
+        if not row or bool(row.get("ready")):
+            return value, None
+        return None, {
+            "key": key,
+            "raw_score": value,
+            "quality_status": str(row.get("quality_status") or "missing"),
+            "reason": str(row.get("reason") or "该维度本轮未通过真实性或新鲜度门禁"),
+        }
 
     def _num(self, value: Any, default: float = 0.0) -> float:
         try:

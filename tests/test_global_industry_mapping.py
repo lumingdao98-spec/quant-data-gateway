@@ -38,6 +38,24 @@ def test_unrelated_global_news_is_background_only():
     assert "\u4e0d\u7eb3\u5165\u4e2a\u80a1\u8bc4\u5206" in first["impact_reason"]
 
 
+def test_market_wide_rate_event_never_becomes_individual_score_from_style_overlap():
+    mapper = GlobalIndustryMapper()
+    exposure = mapper.company_exposure(
+        "300750",
+        profile={"industry": "动力电池", "concepts": ["利率敏感", "全球流动性"]},
+        name="宁德时代",
+    )
+    first = mapper.map_item(
+        {"title": "美国非农数据公布后美债收益率上升", "summary": "美联储利率路径仍有不确定性"},
+        "300750",
+        exposure,
+    )
+
+    assert first["market_wide"] is True
+    assert first["score_included"] is False
+    assert first["impact_scope_cn"] == "市场环境"
+
+
 def test_info_page_has_global_industry_mapping_tab():
     html = TestClient(api.app).get("/info?symbol=300274&name=Sungrow").text
     assert "\u5168\u7403/\u884c\u4e1a\u6620\u5c04" in html

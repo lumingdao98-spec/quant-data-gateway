@@ -8,10 +8,10 @@ import quant_data.api as api
 def test_ui_smoke_closed_loop_pages():
     client = TestClient(api.app)
     pages = [
-        ("/screener", ["V3.18", "cacheHint", "恢复上次筛选"]),
-        ("/info?symbol=300274&name=Sungrow", ["V3.18", "cacheStateBox", "sources"]),
-        ("/ui", ["V3.18", "quoteBody", "behaviorMarkerList"]),
-        ("/chart/300750?frame=1d", ["V3.18", "chartLabel", "behaviorMarkerList"]),
+        ("/screener", ["V3.26", "cacheHint", "恢复上次筛选"]),
+        ("/info?symbol=300274&name=Sungrow", ["V3.26", "cacheStateBox", "sources"]),
+        ("/ui", ["V3.26", "quoteBody", "behaviorMarkerList"]),
+        ("/chart/300750?frame=1d", ["V3.26", "chartLabel", "behaviorMarkerList"]),
         ("/wordsource", ["V3.18", "traceRows", "WordSource"]),
         ("/technical/300750", ["V3.18", "技术因子矩阵", "缓存状态"]),
         ("/health", ["V3.18", "数据源健康", "缓存状态"]),

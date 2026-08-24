@@ -128,6 +128,13 @@ def test_engine_optimizer_walk_forward_storage_and_paper(tmp_path: Path):
     assert result.run_id
     assert result.metrics["total_return"] > -1
     assert result.data_quality["no_lookahead"] is True
+    assert result.score_provenance
+    dimension = result.score_provenance[0]["dimension_readiness"]
+    dimension_rows = {row["key"]: row for row in dimension["dimensions"]}
+    assert dimension_rows["technical"]["ready"] is True
+    assert dimension_rows["information"]["ready"] is False
+    assert dimension_rows["fund_flow"]["ready"] is False
+    assert "当前新闻或当前资金数据回填过去" in result.score_provenance[0]["three_dimension_backtest_note"]
 
     optimizer = ParameterOptimizer(engine)
     ranked = optimizer.grid_search(cfg, {"buy_score": [55, 60]}, market_data={"600438": bars}, objective="total_return")

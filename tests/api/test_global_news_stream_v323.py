@@ -286,3 +286,28 @@ def test_company_earnings_flash_maps_to_issuer_before_macro_bucket():
     assert "半导体" in fields["affected_sectors"]
     assert fields["impact_level"] == "公司事件"
     assert fields["impact_targets"][0] == "中船特气 688146"
+
+
+def test_overseas_company_financial_amount_does_not_become_fx_event():
+    fields = api._global_impact_fields(
+        "小鹏集团(09868.HK)：第二季度净亏损为人民币13.4亿元",
+        "全球/国内要闻",
+        "公司消息",
+    )
+
+    assert fields["impact_level"] == "公司事件"
+    assert "小鹏集团 09868.HK" in fields["affected_companies"]
+    assert "汇率/美债" not in fields["impact_evidence"]
+    assert "美元指数" not in fields["affected_assets"]
+
+
+def test_overseas_company_buyback_keeps_named_company_without_invented_sector():
+    fields = api._global_impact_fields(
+        "据港交所文件：小米集团(01810.HK)回购180万股B类股份",
+        "全球/国内要闻",
+        "公司消息",
+    )
+
+    assert fields["impact_level"] == "公司事件"
+    assert fields["impact_targets"][0] == "小米集团 01810.HK"
+    assert fields["affected_sectors"] == []

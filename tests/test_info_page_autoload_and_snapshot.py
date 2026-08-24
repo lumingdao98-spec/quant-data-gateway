@@ -42,6 +42,7 @@ def test_info_page_uses_single_parallel_localized_render_pipeline():
     assert "处理中…" in html
     assert "document.hidden&&state.tab==='global'" in html
     assert "Array.isArray(state.analysis?.items)" in html
+    assert "本地信息库暂无条目" in html
     assert "!(state.analysis?.items||[]).length" not in html
 
     assert "当前信息分" in html

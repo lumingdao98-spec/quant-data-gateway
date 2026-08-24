@@ -18,5 +18,6 @@ def explain_score(provenance: ScoreProvenanceV323 | dict[str, Any]) -> dict[str,
         "blocking_gates": blocks,
         "missing_data": data.get("missing_data") or [],
         "stale_data": data.get("stale_data") or [],
+        "excluded_dimensions": data.get("excluded_dimensions") or [],
         "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
     }

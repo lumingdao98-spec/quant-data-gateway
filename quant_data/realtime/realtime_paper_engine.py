@@ -826,6 +826,9 @@ def _build_realtime_score_provenance(
             "score_breakdown": dict(item.get("score_breakdown") or {}),
             "screener_snapshot_id": screener_snapshot_id,
             "information_snapshot_id": str(recent_information.get("snapshot_id") or ""),
+            "dimension_readiness": dict(item.get("dimension_readiness") or {}),
+            "auto_entry_eligible": bool(item.get("auto_entry_eligible", True)),
+            "entry_block_reasons": list(item.get("entry_block_reasons") or []),
             "decision_policy_hash": _stable_id(
                 "decision-policy",
                 (session.config or {}).get("score_weights") if session else {},
@@ -950,7 +953,7 @@ def _merge_session_signal(payload: dict[str, Any], session: RealtimeSession) -> 
         "timing_score": merged.get("technical_score"),
         "technical_score": merged.get("technical_score"),
         "fund_flow_score": merged.get("fund_flow_score"),
-        "formula": existing_breakdown.get("formula") or "综合交易分=筛选底座+实时择时（日K55%+分时45%）+近期信息+资金+大盘-异常风险",
+        "formula": existing_breakdown.get("formula") or "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘-异常风险；筛选总分仅审计",
         "sources": existing_sources,
         "screener_snapshot_id": config.get("screener_snapshot_id"),
     })

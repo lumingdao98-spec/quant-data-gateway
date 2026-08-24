@@ -68,12 +68,15 @@ def build_backtest_ui() -> str:
       <label class="check"><input id="compoundReturns" type="checkbox" checked>收益进入下一次仓位计算</label>
       <label class="check"><input id="qualityFilter" type="checkbox" checked>启用质量过滤</label>
       <label class="check"><input id="anomalyFilter" type="checkbox" checked>启用异常波动过滤</label>
+      <div class="section">实时交易目标权重（只展示）</div>
       <div class="mini" style="margin-top:8px">
-        <div><div class="section">基本面权重</div><input id="fundamentalWeight" type="number" value="0.28" min="0" max="1" step="0.01"></div>
-        <div><div class="section">技术面权重</div><input id="technicalWeight" type="number" value="0.34" min="0" max="1" step="0.01"></div>
-        <div><div class="section">信息面权重</div><input id="informationWeight" type="number" value="0.24" min="0" max="1" step="0.01"></div>
-        <div><div class="section">大盘权重</div><input id="marketWeight" type="number" value="0.14" min="0" max="1" step="0.01"></div>
+        <div><div class="section">基本面</div><input id="fundamentalWeight" type="number" value="0.22" readonly></div>
+        <div><div class="section">技术面</div><input id="technicalWeight" type="number" value="0.30" readonly></div>
+        <div><div class="section">信息面</div><input id="informationWeight" type="number" value="0.20" readonly></div>
+        <div><div class="section">资金面</div><input id="fundFlowWeight" type="number" value="0.16" readonly></div>
+        <div><div class="section">大盘情绪</div><input id="marketWeight" type="number" value="0.12" readonly></div>
       </div>
+      <div class="param-cn">当前单票快速回测只有历史日K/量价的逐日可用证据，所以实际成交评分按技术/量价 100% 运行。基本面、信息面、资金面和大盘权重仅同步展示实时配置；没有 PIT 历史快照时不会拿今天的数据回填过去。</div>
     </div>
     <div class="auto-config-box">
       <div class="head"><b>V3.23 自动交易配置</b><button class="link-btn" onclick="loadAutoConfigForBacktest(true)">读取总控台</button></div>
@@ -177,6 +180,7 @@ function applyAutoConfigToBacktest(cfg){
   if(w.fundamental!=null)$('fundamentalWeight').value=w.fundamental;
   if(w.technical!=null)$('technicalWeight').value=w.technical;
   if(w.information!=null)$('informationWeight').value=w.information;
+  if(w.fund_flow!=null)$('fundFlowWeight').value=w.fund_flow;
   if(w.market_regime!=null)$('marketWeight').value=w.market_regime;
   toggleComboBox();renderAutoStrategyCatalog(cfg);renderAutoBacktestSummary(cfg);
 }
@@ -213,10 +217,11 @@ function params(){
   p.set('atr_risk_pct',$('atrRisk')?.value||'2');
   p.set('quality_filter',$('qualityFilter')?.checked?'true':'false');
   p.set('anomaly_filter',$('anomalyFilter')?.checked?'true':'false');
-  p.set('fundamental_weight',$('fundamentalWeight')?.value||'0.28');
-  p.set('technical_weight',$('technicalWeight')?.value||'0.34');
-  p.set('information_weight',$('informationWeight')?.value||'0.24');
-  p.set('market_weight',$('marketWeight')?.value||'0.14');
+  p.set('fundamental_weight',$('fundamentalWeight')?.value||'0.22');
+  p.set('technical_weight',$('technicalWeight')?.value||'0.30');
+  p.set('information_weight',$('informationWeight')?.value||'0.20');
+  p.set('fund_flow_weight',$('fundFlowWeight')?.value||'0.16');
+  p.set('market_weight',$('marketWeight')?.value||'0.12');
   return p
 }
 async function runBacktest(useAutoConfig=false){const btn=$('runBtn');btn.disabled=true;btn.textContent='运行中...';try{log(useAutoConfig?'开始回测（使用总控台自动交易配置）':'开始回测');const p=params();if(useAutoConfig)p.set('use_auto_config','true');const resp=await fetch('/api/backtest/run?'+p.toString(),{cache:'no-store'});const js=await resp.json();if(!resp.ok||!js.ok)throw new Error(js.message||('HTTP '+resp.status));render(js.data);log('完成：'+js.data.symbol+' '+js.data.strategy_name+(js.data.auto_trading_config_applied?' · 已接入自动交易配置':''))}catch(e){log('ERROR '+e);$('assumptions').innerHTML='<div class="warn">回测失败：'+esc(e)+'</div>'}finally{btn.disabled=false;btn.textContent='运行回测'}}
@@ -281,7 +286,7 @@ if(q.get('position_sizing')&&$('sizingMode'))$('sizingMode').value=q.get('positi
 if(q.get('sizing_mode')&&$('sizingMode'))$('sizingMode').value=q.get('sizing_mode');
 if(q.get('horizon')&&$('horizonMode'))$('horizonMode').value=q.get('horizon');
 if(q.get('compound_returns')&&$('compoundReturns'))$('compoundReturns').checked=q.get('compound_returns')!=='false';
-[['dcaAmount','dca_amount'],['pyramidStep','pyramid_step_pct'],['pyramidAdds','pyramid_max_adds'],['atrRisk','atr_risk_pct'],['fundamentalWeight','fundamental_weight'],['technicalWeight','technical_weight'],['informationWeight','information_weight'],['marketWeight','market_weight']].forEach(([id,key])=>{if(q.get(key)&&$(id))$(id).value=q.get(key)});
+[['dcaAmount','dca_amount'],['pyramidStep','pyramid_step_pct'],['pyramidAdds','pyramid_max_adds'],['atrRisk','atr_risk_pct'],['fundamentalWeight','fundamental_weight'],['technicalWeight','technical_weight'],['informationWeight','information_weight'],['fundFlowWeight','fund_flow_weight'],['marketWeight','market_weight']].forEach(([id,key])=>{if(q.get(key)&&$(id))$(id).value=q.get(key)});
 toggleComboBox();
 loadAutoConfigForBacktest(false).catch(e=>log('总控台配置初始化失败 '+e));
 window.addEventListener('resize',()=>{if(lastBacktest)render(lastBacktest)});

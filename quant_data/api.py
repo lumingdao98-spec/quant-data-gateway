@@ -36,6 +36,7 @@ from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
 from quant_data.services.market_ai_service import MarketAiService
 from quant_data.services.realtime_decision_service import RealtimeDecisionService
+from quant_data.services.decision_dimension_service import DecisionDimensionService
 from quant_data.services.sector_mainline_service import SectorMainlineService
 from quant_data.services.orderbook_behavior_service import OrderBookBehaviorService
 from quant_data.services.trading_framework_service import compute_indicator50_snapshot
@@ -105,6 +106,7 @@ from quant_data.trading import (
     TradingSignal,
 )
 from quant_data.trading.ledger import LedgerService
+from quant_data.trading.tonghuashun_companion import TonghuashunCompanion
 
 
 service = MarketDataService()
@@ -132,6 +134,7 @@ market_behavior_engine = MarketBehaviorEngine()
 orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
 realtime_decision_service = RealtimeDecisionService(service, cache_state_service, market_regime_service)
+decision_dimension_service = DecisionDimensionService()
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
 technical_factor_engine = TechnicalFactorEngine()
 backtest_service = BacktestService()
@@ -149,6 +152,7 @@ realtime_paper_engine_v321 = RealtimePaperEngine(
 )
 trading_store_v323 = TradingStore()
 ledger_service_v324 = LedgerService(trading_store_v323)
+tonghuashun_companion_v326 = TonghuashunCompanion(trading_store_v323)
 pit_store_v323 = PITStore()
 realtime_decision_service.market_event_factors.pit_store = pit_store_v323
 event_bus_v324 = EventBus(pit_store_v323)
@@ -321,6 +325,8 @@ def _render_chinese_api_docs() -> str:
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
                 ("GET", "/api/auto-trading/dashboard-overview", "一次读取总控台券商、模拟会话、账户持仓、交易记录、配置、调度器和数据中心状态；只读，不生成订单。"),
                 ("POST", "/api/auto-trading/start-paper", "使用保存的 V3.23 配置启动实时模拟 session，订单/成交/持仓/标注/审计落 SQLite。"),
+                ("GET", "/api/integrations/tonghuashun/status", "读取同花顺本地伴随状态；该通道只做客户端唤起和人工委托提醒，不自动操作界面。"),
+                ("POST", "/api/integrations/tonghuashun/reminders", "根据服务端行情、评分溯源和风控结果生成同花顺人工委托票据，不代表券商委托或成交。"),
                 ("GET", "/api/realtime-paper/scheduler/status", "查看服务端自动复评循环、活跃会话和交易时段；页面关闭后会话仍可运行，休市和午休不生成信号、订单或成交。"),
                 ("GET", "/api/market/event-factors/{symbol}", "读取可追溯市场事件因子，分别返回大盘环境与个股信息调整、来源链接、时间和传导链。"),
                 ("POST", "/api/earnings/ingest", "写入带公告时点与来源链接的业绩快照；用于当前和历史 PIT 评分，禁止回填未来数据。"),
@@ -343,6 +349,8 @@ def _render_chinese_api_docs() -> str:
                 ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
                 ("GET", "/api/market/regime", "大盘环境分析，可用于评分里的市场情绪权重。"),
                 ("GET", "/api/market/sectors/mainline", "主线板块、公开资金净流、板块强度和持续性。"),
+                ("GET", "/api/decision-framework", "查看技术面、信息面、资金面、大盘环境在回测/模拟/实盘/提醒中的统一使用规则。"),
+                ("GET", "/api/decision-framework/{symbol}", "查看单只标的本轮哪些分项有效、实际来源、PIT状态、自动入场阻断原因和执行分。"),
                 ("GET", "/api/screener/historical-snapshot?symbols=300750,600438", "按决策时点重建筛选快照，保证回测不偷看未来。"),
             ],
         ),
@@ -356,7 +364,7 @@ def _render_chinese_api_docs() -> str:
         ("stop_loss_pct / take_profit_pct", "止损 / 止盈百分比", "8 / 20；0 表示关闭固定止盈"),
         ("position_sizing", "仓位模式", "score_weighted、volatility_target、atr_risk、dca、pyramid"),
         ("horizon", "交易周期", "short_term、swing、position、dca、hybrid"),
-        ("market_weight", "大盘情绪权重", "0.14，可与其他三面权重一起调"),
+        ("market_weight", "大盘情绪权重", "默认0.12；只用有效指数/宽度证据，弱势时还会降低目标仓位"),
         ("force", "是否强制刷新", "false；休市确认后建议保持 false"),
     ]
     sections = []
@@ -473,6 +481,16 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _score_or_none(value: object) -> float | None:
+    try:
+        if value in (None, "", "--"):
+            return None
+        score = float(value)
+        return score if 0.0 <= score <= 100.0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_cny_amount(value) -> float | None:
@@ -783,6 +801,9 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         if any(token in source_type for token in ("forum", "community", "search", "股吧", "社区", "论坛", "搜索")):
             derived_historical_count += 1
             continue
+        if str(item.get("content_quality_status") or "").lower() == "boilerplate_rejected":
+            derived_historical_count += 1
+            continue
         try:
             published = datetime.fromisoformat(str(published_raw).replace("Z", "+00:00")).replace(tzinfo=None) if published_raw else None
         except (TypeError, ValueError):
@@ -794,6 +815,14 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         if age_days < -1 or age_days > max_days:
             derived_historical_count += 1
             continue
+        event_time_raw = item.get("event_time")
+        try:
+            event_time = datetime.fromisoformat(str(event_time_raw).replace("Z", "+00:00")).replace(tzinfo=None) if event_time_raw else None
+        except (TypeError, ValueError):
+            event_time = None
+        if event_time and event_time > now:
+            derived_historical_count += 1
+            continue
         event_key = str(item.get("event_key") or item.get("duplicate_group") or item.get("document_id") or f"{item.get('source')}|{published.date()}|{str(item.get('title') or '')[:80]}")
         derived_current_keys.add(event_key)
     quality_current = quality.get("current_scoring_count")
@@ -803,8 +832,16 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "historical_excluded_count": int(_safe_float(quality_historical) if quality_historical is not None else derived_historical_count),
         "unknown_date_count": int(_safe_float(quality.get("unknown_date_count")) or stats.get("unknown_date_count") or 0),
         "latest_published_at": latest_published_at,
-        "score_scope": "仅近期、可核验、事件级去重信息参与当前评分；历史信息和日期缺失条目只供查阅。",
+        "score_scope": "仅近期、可核验、事件级去重且正文质量合格的信息参与当前评分；历史信息、日期缺失条目和未来事件结果只供观察。",
     }
+    future_event_calendar = data.get("future_event_calendar")
+    if not isinstance(future_event_calendar, dict):
+        future_event_calendar = info_analysis_service.event_calendar.build(
+            symbol,
+            name or data.get("name") or symbol,
+            items=items,
+            global_items=global_items,
+        )
     created_at = data.get("created_at") or data.get("updated_at") or datetime.now().isoformat(timespec="seconds")
     data.update({
         "symbol": symbol,
@@ -827,6 +864,7 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "score_model": score_model,
         "data_quality": quality,
         "current_information_summary": current_information_summary,
+        "future_event_calendar": future_event_calendar,
         "diagnostics": diagnostics,
         "source_logs": source_logs,
         "errors": errors,
@@ -834,13 +872,13 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
     return data
 
 
-def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[dict, dict]:
+def _read_global_news_cached(limit: int = 120, *, force: bool = False, schedule_refresh: bool = True) -> tuple[dict, dict]:
     limit = max(30, min(int(limit or 120), 500))
     if not force:
         cached = cache_state_service.get("global_news_cache", f"global:{limit}", allow_stale=True)
         if cached.data and cached.data.get("items"):
             payload = dict(cached.data)
-            if cached.cache_status.get("stale"):
+            if cached.cache_status.get("stale") and schedule_refresh:
                 payload["refreshing"] = _submit_background_job(
                     f"global-news-{limit}",
                     lambda: _read_global_news_cached(limit=limit, force=True),
@@ -852,19 +890,19 @@ def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[
             payload["refreshing"] = _submit_background_job(
                 f"global-news-{limit}",
                 lambda: _read_global_news_cached(limit=limit, force=True),
-            )
+            ) if schedule_refresh else False
             return payload, latest.cache_status
         refreshing = _submit_background_job(
             f"global-news-{limit}",
             lambda: _read_global_news_cached(limit=limit, force=True),
-        )
+        ) if schedule_refresh else False
         return {
             "items": [],
-            "source_logs": [{"source": "global_news_cache", "status": "background_refreshing" if refreshing else "refresh_already_running", "count": 0}],
-            "cache_info": {"hit": False, "status": "background_refreshing", "refreshing": True},
-            "refreshing": True,
-            "missing_reason": "暂无全球要闻缓存，已在后台刷新真实来源；当前不生成替代新闻。",
-        }, cache_state_service.status("miss", key=f"global:{limit}", source="global_news_cache", error="background refresh scheduled")
+            "source_logs": [{"source": "global_news_cache", "status": "background_refreshing" if refreshing else "cache_miss", "count": 0}],
+            "cache_info": {"hit": False, "status": "background_refreshing" if refreshing else "miss", "refreshing": refreshing},
+            "refreshing": refreshing,
+            "missing_reason": "暂无全球要闻缓存，已在后台刷新真实来源；当前不生成替代新闻。" if refreshing else "暂无全球要闻缓存；本次只读请求未启动联网刷新。",
+        }, cache_state_service.status("miss", key=f"global:{limit}", source="global_news_cache", error="background refresh scheduled" if refreshing else "cache-only request")
     data = news_service.fetch_global_news(limit=limit, force=force)
     status = cache_state_service.put("global_news_cache", f"global:{limit}", {
         "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
@@ -877,7 +915,7 @@ def _read_global_news_cached(limit: int = 120, *, force: bool = False) -> tuple[
     return data, status
 
 
-def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limit: int, *, allow_history_fallback: bool = True) -> dict:
+def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limit: int, *, allow_history_fallback: bool = True, allow_background_global: bool = True) -> dict:
     data = dict(data or {})
     source_logs = list(data.get("source_logs") or [])
     errors = list(data.get("errors") or [])
@@ -904,7 +942,7 @@ def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limi
     global_status = None
     if not global_items:
         try:
-            global_data, global_status = _read_global_news_cached(limit=min(max(limit, 60), 180), force=False)
+            global_data, global_status = _read_global_news_cached(limit=min(max(limit, 60), 180), force=False, schedule_refresh=allow_background_global)
             global_items = list(global_data.get("items") or [])
             data["global_items"] = global_items
             source_logs.append({"source": "global_news_cache", "status": global_status.get("status") if global_status else "hit", "count": len(global_items), "mode": data.get("mode") or "snapshot"})
@@ -1990,12 +2028,12 @@ def _row_text_items(row: dict, *keys: str) -> list[str]:
     return out
 
 
-def _auto_score(row: dict, *keys: str, default: float = 50.0) -> float:
+def _auto_score(row: dict, *keys: str, default: float | None = None) -> float | None:
     for key in keys:
         value = row.get(key)
         if value not in (None, "", "--"):
-            return _as_float(value, default)
-    return float(default)
+            return _score_or_none(value)
+    return _score_or_none(default)
 
 
 def _auto_information_profile(row: dict) -> dict:
@@ -2015,7 +2053,9 @@ def _auto_information_profile(row: dict) -> dict:
     for value, candidate_source in candidates:
         if value in (None, "", "--"):
             continue
-        score = _as_float(value, 50.0)
+        score = _score_or_none(value)
+        if score is None:
+            continue
         source = candidate_source
         break
 
@@ -2055,6 +2095,51 @@ def _auto_information_profile(row: dict) -> dict:
         or news.get("latest_published_at")
         or ""
     )
+    quality = (
+        info.get("data_quality")
+        if isinstance(info.get("data_quality"), dict)
+        else news.get("data_quality")
+        if isinstance(news.get("data_quality"), dict)
+        else recent.get("quality_counts")
+        if isinstance(recent.get("quality_counts"), dict)
+        else {}
+    )
+    quality_metadata_present = bool(quality or recent or info.get("future_event_calendar") or info.get("score_eligible") is not None)
+    current_scoring_count = int(_as_float(
+        quality.get("current_scoring_count", recent.get("scoreable_count", recent_count)),
+        0.0,
+    ))
+    full_text_count = int(_as_float(quality.get("verified_full_text_count", quality.get("full_text", 0)), 0.0))
+    excerpt_count = int(_as_float(quality.get("structured_excerpt_count", quality.get("structured_excerpt", 0)), 0.0))
+    title_only_count = int(_as_float(quality.get("title_only_count", quality.get("title_only", 0)), 0.0))
+    rejected_count = int(_as_float(quality.get("boilerplate_rejected_count", quality.get("boilerplate_rejected", 0)), 0.0))
+    quality_coverage_raw = quality.get("content_quality_coverage", recent.get("quality_coverage"))
+    if quality_coverage_raw in (None, "", "--"):
+        quality_coverage = min(
+            1.0,
+            (full_text_count + excerpt_count * 0.72 + title_only_count * 0.35) / max(current_scoring_count, 1),
+        ) if current_scoring_count else 0.0
+    else:
+        quality_coverage = max(0.0, min(1.0, _as_float(quality_coverage_raw, 0.0)))
+    score_confidence = max(0.0, min(1.0, _as_float(
+        info.get("score_confidence", quality.get("score_confidence", quality_coverage)),
+        quality_coverage,
+    )))
+    score_eligible = bool(info.get("score_eligible", quality.get("score_eligible", current_scoring_count > 0))) if quality_metadata_present else score is not None
+    future_calendar = info.get("future_event_calendar") or row.get("future_event_calendar") or recent.get("future_event_calendar") or {}
+    future_events = [dict(item) for item in (future_calendar.get("events") or []) if isinstance(item, dict)] if isinstance(future_calendar, dict) else []
+    confirmed_high_attention = [
+        item for item in future_events
+        if item.get("confirmation_status") == "公开来源已确认"
+        and item.get("attention_level") == "高"
+        and 0 <= int(_as_float(item.get("days_until"), 999)) <= 7
+    ]
+    stale = bool(recent.get("stale") or (info.get("cache_info") or {}).get("stale"))
+    trade_eligible = (
+        bool(score is not None)
+        if not quality_metadata_present
+        else bool(score is not None and score_eligible and current_scoring_count > 0 and quality_coverage >= 0.35 and not stale)
+    )
     return {
         "score": round(score, 4) if score is not None else None,
         "source": source,
@@ -2062,14 +2147,32 @@ def _auto_information_profile(row: dict) -> dict:
         "recent_count": recent_count,
         "latest_published_at": latest_published_at,
         "missing": score is None,
+        "current_scoring_count": current_scoring_count,
+        "full_text_count": full_text_count,
+        "structured_excerpt_count": excerpt_count,
+        "title_only_count": title_only_count,
+        "boilerplate_rejected_count": rejected_count,
+        "quality_coverage": round(quality_coverage, 4),
+        "score_confidence": round(score_confidence, 4),
+        "score_eligible": score_eligible,
+        "trade_eligible": trade_eligible,
+        "quality_status": "available" if trade_eligible else "unusable" if score is not None else "missing",
+        "quality_metadata_present": quality_metadata_present,
+        "stale": stale,
+        "future_event_calendar": future_calendar,
+        "confirmed_high_attention_events": confirmed_high_attention,
     }
 
 
-def _auto_action_from_screener(row: dict, final_score: float, risk_flags: list[str]) -> str:
+def _auto_action_from_screener(row: dict, final_score: float | None, risk_flags: list[str]) -> str:
     grade = str(row.get("grade") or row.get("level") or "").upper()
     risk_text = " ".join(risk_flags + _row_text_items(row, "risk_summary", "missing_data_hints", "missing_data"))
     hard_risk_words = ("退市", "ST", "重大负面", "监管", "诉讼", "处罚", "数据不足", "缺失", "stale")
-    if any(word in risk_text for word in hard_risk_words) or grade.startswith("D") or final_score < 45:
+    if any(word in risk_text for word in hard_risk_words) or grade.startswith("D"):
+        return "avoid"
+    if final_score is None:
+        return "watch"
+    if final_score < 45:
         return "avoid"
     if final_score >= 70:
         return "buy"
@@ -2085,36 +2188,89 @@ def _auto_screener_signal_map(rows: list[dict], symbols: list[str], risk_control
     for symbol in symbols:
         row = dict(row_map.get(symbol) or {"symbol": symbol})
         information = _auto_information_profile(row)
-        final_score = _auto_score(row, "final_trade_score", "total_score", "manual_review_score", "script_score", default=50.0)
+        final_score = _auto_score(row, "final_trade_score", "total_score", "manual_review_score", "script_score")
+        technical_score = _auto_score(row, "technical_score", "technical_factor_score")
+        fundamental_score = _auto_score(row, "fundamental_score", "basic_score")
+        fund_flow_score = _auto_score(row, "fund_flow_score", "capital_score", "flow_score")
+        market_score = _auto_score(row, "market_score", "market_mood_score", "market_sentiment_score")
         risk_flags = _row_text_items(row, "risk_flags", "risk_tags", "risk_warnings", "missing_data_hints", "missing_data")
         tags = _row_text_items(row, "tags", "hit_tags", "core_tags", "upgrade_reasons", "strategy_tags")
         missing_data = _row_text_items(row, "missing_data_hints", "missing_data")
         if information["missing"]:
             missing_data.append("recent_information_score_missing")
+        for key, value in (
+            ("screening_score_missing", final_score),
+            ("technical_score_missing", technical_score),
+            ("fundamental_score_missing", fundamental_score),
+            ("fund_flow_score_missing", fund_flow_score),
+            ("market_score_missing", market_score),
+        ):
+            if value is None:
+                missing_data.append(key)
+        if information["quality_metadata_present"] and not information["trade_eligible"]:
+            missing_data.append("recent_information_not_trade_eligible")
+            risk_flags.append("近期信息正文质量不足或快照过期，仅观察不自动新增仓位")
+        if information["confirmed_high_attention_events"]:
+            risk_flags.append("未来7日存在已确认高关注事件，新增仓位需人工确认")
         evidence = list(tags)
         evidence.append(
             "信息快照 "
             f"{information['snapshot_id'] or '缺失'}："
             f"筛选信息分 {information['score'] if information['score'] is not None else '--'}，"
-            f"近期 {information['recent_count']} 条"
+            f"近期计分 {information['current_scoring_count']} 组，"
+            f"正文质量覆盖 {information['quality_coverage'] * 100:.0f}%"
         )
         action = _auto_action_from_screener(row, final_score, risk_flags)
-        target_weight_hint = 0.0 if action == "avoid" else max(0.0, min(max_single, (final_score - 45.0) * 0.55))
+        target_weight_hint = (
+            0.0
+            if action in {"avoid", "watch"} or final_score is None
+            else max(0.0, min(max_single, (final_score - 45.0) * 0.55))
+        )
         by_symbol[symbol] = {
             "symbol": symbol,
             "name": str(row.get("name") or row.get("asset_name") or symbol),
             "action": action,
-            "final_score": round(final_score, 4),
-            "technical_score": _auto_score(row, "technical_score", "technical_factor_score", "total_score", default=final_score),
-            "fundamental_score": _auto_score(row, "fundamental_score", "manual_review_score", "total_score", default=55.0),
-            "information_score": information["score"] if information["score"] is not None else 50.0,
+            "final_score": round(final_score, 4) if final_score is not None else None,
+            "technical_score": technical_score,
+            "fundamental_score": fundamental_score,
+            "fundamental_source": row.get("fundamental_source")
+            or row.get("fundamentals_source")
+            or "",
+            "fundamental_source_ref": row.get("fundamental_source_ref") or row.get("screener_snapshot_id") or "",
+            "fundamental_available_at": row.get("fundamental_available_at") or row.get("updated_at") or "",
+            "fundamental_quality_status": row.get("fundamental_quality_status")
+            or row.get("fundamental_quality")
+            or (
+                "snapshot"
+                if fundamental_score is not None
+                and bool(row.get("fundamental_source") or row.get("fundamentals_source"))
+                else "missing"
+            ),
+            "fundamental_stale": bool(row.get("fundamental_stale") or ((row.get("cache_status") or {}).get("stale") if isinstance(row.get("cache_status"), dict) else False)),
+            "information_score": information["score"],
             "information_source": information["source"],
+            "information_quality_status": information["quality_status"],
+            "information_stale": information["stale"],
             "information_snapshot_id": information["snapshot_id"],
             "information_recent_count": information["recent_count"],
             "information_latest_published_at": information["latest_published_at"],
             "information_missing": information["missing"],
-            "fund_flow_score": _auto_score(row, "fund_flow_score", "strength_score", "amount_score", default=50.0),
-            "market_score": _auto_score(row, "market_score", "market_mood_score", "market_sentiment_score", default=50.0),
+            "information_trade_eligible": information["trade_eligible"],
+            "information_score_confidence": information["score_confidence"],
+            "information_quality_coverage": information["quality_coverage"],
+            "information_full_text_count": information["full_text_count"],
+            "information_structured_excerpt_count": information["structured_excerpt_count"],
+            "information_title_only_count": information["title_only_count"],
+            "information_rejected_count": information["boilerplate_rejected_count"],
+            "future_event_calendar": information["future_event_calendar"],
+            "confirmed_high_attention_events": information["confirmed_high_attention_events"],
+            "fund_flow_score": fund_flow_score,
+            "fund_flow_source": row.get("fund_flow_source") or ("筛选公开资金/量价字段" if fund_flow_score is not None else "资金面数据缺失"),
+            "fund_flow_quality_status": row.get("fund_flow_quality_status") or ("proxy_available" if fund_flow_score is not None else "missing"),
+            "market_score": market_score,
+            "market_source": row.get("market_source") or ("筛选大盘环境快照" if market_score is not None else "大盘环境数据缺失"),
+            "market_quality_status": row.get("market_quality_status") or ("snapshot" if market_score is not None else "missing"),
+            "market_stale": bool(row.get("market_stale") or ((row.get("market_regime") or {}).get("stale") if isinstance(row.get("market_regime"), dict) else False)),
             "target_weight_hint_pct": round(target_weight_hint, 4),
             "risk_flags": risk_flags[:12],
             "strategy_tags": tags[:16],
@@ -2215,10 +2371,12 @@ def _auto_strategy_matrix(strategy_parameters: dict) -> list[dict]:
 
 def _auto_decision_policy(risk_controls: dict, score_weights: dict) -> dict:
     return {
-        "action_source": "screener_signal_map_first_then_realtime_score",
-        "buy_rule": "筛选画像为 buy/watch 且综合交易分达到买入阈值，数据新鲜且风控通过，才允许新增仓位。",
+        "action_source": "screener_dimensions_then_realtime_signal_fusion",
+        "buy_rule": "筛选画像提供基本面/信息面/资金面底座，日K和分时更新技术择时；三面就绪、综合交易分达到阈值、数据新鲜且风控通过后才允许新增仓位。",
         "sell_rule": "筛选画像为 reduce/avoid/sell、分数跌破卖出阈值、止损/最大回撤/重大负面触发时减仓或卖出。",
         "hold_rule": "评分处于观察区间、缺少关键数据或事件窗口未确认时只观察，不自动新增仓位。",
+        "screening_score_policy": "筛选总分只作审计底座；其分项进入实时融合，避免筛选总分与分项重复计票。",
+        "missing_score_policy": "缺失或无效分项不填50分，剩余有效权重重新归一化；必需维度缺失仍由三面门禁阻断新增仓位。",
         "global_buy_threshold": 62.0,
         "global_sell_threshold": 45.0,
         "risk_controls": risk_controls,
@@ -2343,12 +2501,12 @@ def _auto_backtest_effective_controls(payload: dict, cfg: V319BacktestConfig) ->
             "symbol": symbol,
             "name": profile.get("name") or symbol,
             "action": profile.get("action") or "watch",
-            "final_score": _as_float(profile.get("final_score"), 50.0),
-            "technical_score": _as_float(profile.get("technical_score"), 50.0),
-            "fundamental_score": _as_float(profile.get("fundamental_score"), 50.0),
-            "information_score": _as_float(profile.get("information_score"), 50.0),
-            "fund_flow_score": _as_float(profile.get("fund_flow_score"), 50.0),
-            "market_score": _as_float(profile.get("market_score"), 50.0),
+            "final_score": _score_or_none(profile.get("final_score")),
+            "technical_score": _score_or_none(profile.get("technical_score")),
+            "fundamental_score": _score_or_none(profile.get("fundamental_score")),
+            "information_score": _score_or_none(profile.get("information_score")),
+            "fund_flow_score": _score_or_none(profile.get("fund_flow_score")),
+            "market_score": _score_or_none(profile.get("market_score")),
             "risk_flags": list(profile.get("risk_flags") or [])[:12],
             "missing_data": list(profile.get("missing_data") or [])[:12],
             "evidence": list(profile.get("evidence") or [])[:10],
@@ -2491,13 +2649,20 @@ def _build_auto_trading_config(
         "atr_risk_pct": _as_float(risk_in.get("atr_risk_pct"), 1.5),
         "cooldown_days": int(_as_float(risk_in.get("cooldown_days"), 2.0)),
     }
+    score_weight_raw = {
+        "technical": max(0.0, _as_float(score_in.get("technical"), 0.30)),
+        "fundamental": max(0.0, _as_float(score_in.get("fundamental"), 0.22)),
+        "information": max(0.0, _as_float(score_in.get("information"), 0.20)),
+        "fund_flow": max(0.0, _as_float(score_in.get("fund_flow"), 0.16)),
+        "market_regime": max(0.0, _as_float(score_in.get("market_regime", score_in.get("market")), 0.12)),
+    }
+    score_weight_total = sum(score_weight_raw.values())
+    if score_weight_total <= 0:
+        score_weight_raw = {"technical": 0.30, "fundamental": 0.22, "information": 0.20, "fund_flow": 0.16, "market_regime": 0.12}
+        score_weight_total = 1.0
     score_weights = {
-        "screening": _as_float(score_in.get("screening"), 0.30),
-        "technical": _as_float(score_in.get("technical"), 0.30),
-        "fundamental": _as_float(score_in.get("fundamental"), 0.22),
-        "information": _as_float(score_in.get("information"), 0.20),
-        "fund_flow": _as_float(score_in.get("fund_flow"), 0.16),
-        "market_regime": _as_float(score_in.get("market_regime"), 0.12),
+        "screening": 0.0,
+        **{key: round(value / score_weight_total, 6) for key, value in score_weight_raw.items()},
     }
     event_watch = {
         "financial_reports": _as_bool(event_in.get("financial_reports"), True),
@@ -2890,7 +3055,176 @@ def score_latest_v323(symbol: str) -> dict:
         key=lambda row: str(row.get("decision_time") or row.get("created_at") or ""),
         reverse=True,
     )
-    return {"ok": True, "data": rows[0] if rows else None, "missing_reason": "" if rows else "暂无评分溯源，请先运行筛选/回测/模拟。"}
+    latest = rows[0] if rows else None
+    freshness = _score_provenance_freshness(latest)
+    return {
+        "ok": True,
+        "data": latest,
+        "freshness": freshness,
+        "missing_reason": "" if rows else "暂无评分溯源，请先运行筛选/回测/模拟。",
+    }
+
+
+def _score_provenance_freshness(provenance: dict[str, Any] | None) -> dict[str, Any]:
+    max_age_seconds = int(getattr(live_trading_engine_v323.config, "live_score_max_age_seconds", 300) or 300)
+    raw = (provenance or {}).get("decision_time") or (provenance or {}).get("created_at")
+    age_seconds: float | None = None
+    if raw:
+        try:
+            decision_time = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            current = datetime.now(decision_time.tzinfo) if decision_time.tzinfo else datetime.now()
+            age_seconds = max(0.0, (current - decision_time).total_seconds())
+        except (TypeError, ValueError):
+            age_seconds = None
+    recent = age_seconds is not None and age_seconds <= max_age_seconds
+    return {
+        "decision_time": raw or "",
+        "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+        "max_age_seconds": max_age_seconds,
+        "recent_for_live": recent,
+        "status": "可用于当前实盘预检查" if recent else "仅供历史复盘/已过期",
+    }
+
+
+@app.get("/api/decision-framework")
+def decision_framework_v326() -> dict:
+    return {
+        "ok": True,
+        "data": decision_dimension_service.framework(),
+        "disclaimer": "研究辅助，不构成投资建议；真实交易需用户自行确认合规与风险。",
+    }
+
+
+@app.get("/api/decision-framework/{symbol}")
+def decision_framework_symbol_v326(
+    symbol: str,
+    mode: str = "realtime_paper",
+    strategy_family: str = "",
+) -> dict:
+    symbol = normalize_symbol(symbol)
+    config = _build_auto_trading_config()
+    profile = dict((config.get("screener_signal_map") or {}).get(symbol) or {})
+    rows = [
+        dict(row)
+        for row in list(score_provenance_memory_v323.values())
+        + trading_store_v323.list("score_provenance", symbol=symbol, limit=500)
+        if str(row.get("symbol") or "") == symbol
+        and (mode != "backtest" or str(row.get("mode") or "") == "backtest")
+    ]
+    rows.sort(
+        key=lambda row: str(row.get("decision_time") or row.get("created_at") or ""),
+        reverse=True,
+    )
+    provenance = rows[0] if rows else {}
+    dimensions = dict(provenance.get("dimension_scores") or {})
+    scores = {
+        "fundamental": dimensions.get("fundamental_score", profile.get("fundamental_score")),
+        "technical": dimensions.get("technical_score", profile.get("technical_score")),
+        "information": dimensions.get("information_score", profile.get("information_score")),
+        "fund_flow": dimensions.get("fund_flow_score", profile.get("fund_flow_score")),
+        "market": dimensions.get("market_regime_score", dimensions.get("market_score", profile.get("market_score"))),
+    }
+    sources: dict[str, Any] = {
+        "fundamental": {
+            "source": profile.get("fundamental_source") or "",
+            "source_ref": profile.get("fundamental_source_ref") or "",
+            "available_at": profile.get("fundamental_available_at") or "",
+            "quality_status": profile.get("fundamental_quality_status") or "missing",
+            "stale": bool(profile.get("fundamental_stale")),
+        },
+        "technical": profile.get("source") or "筛选快照",
+        "information": profile.get("information_source") or "信息快照缺失",
+        "fund_flow": profile.get("fund_flow_source") or "量价资金代理",
+        "market": {
+            "source": profile.get("market_source") or "筛选大盘环境快照",
+            "quality_status": (
+                (profile.get("market_regime") or {}).get("quality_status")
+                if isinstance(profile.get("market_regime"), dict)
+                else None
+            )
+            or "snapshot",
+        },
+    }
+    for source in provenance.get("data_sources") or []:
+        if not isinstance(source, dict):
+            continue
+        supports = set(source.get("supports") or source.get("fields") or [])
+        if "fundamental_score" in supports:
+            sources["fundamental"] = source
+        if "technical_score" in supports:
+            sources["technical"] = source
+        if "information_score" in supports:
+            sources["information"] = source
+        if "fund_flow_score" in supports:
+            sources["fund_flow"] = source
+        if "market_regime_score" in supports or "market_score" in supports:
+            sources["market"] = source
+    recent_information = {
+        "snapshot_id": profile.get("information_snapshot_id"),
+        "quality_status": profile.get("information_quality_status") or "snapshot",
+        "auto_buy_eligible": profile.get("information_trade_eligible"),
+        "stale": bool(profile.get("information_stale")),
+    }
+    normalized_mode = decision_dimension_service._mode(mode)
+    provenance_mode = decision_dimension_service._mode(str(provenance.get("mode") or ""))
+    persisted_readiness = provenance.get("dimension_readiness")
+    reuse_persisted = (
+        isinstance(persisted_readiness, dict)
+        and bool(persisted_readiness.get("dimensions"))
+        and provenance_mode == normalized_mode
+    )
+    if reuse_persisted:
+        result = dict(persisted_readiness)
+        result["snapshot_reused"] = True
+        result["snapshot_note"] = "展示该评分落库时实际使用的分项门禁，未用当前摘要重新推算。"
+    else:
+        result = decision_dimension_service.evaluate(
+            mode=mode,
+            strategy_family=strategy_family or str(config.get("strategy_family") or "hybrid"),
+            scores=scores,
+            sources=sources,
+            freshness=dict(provenance.get("data_freshness") or {}),
+            recent_information=recent_information,
+            provenance=provenance,
+        )
+        result["snapshot_reused"] = False
+        result["snapshot_note"] = "没有同模式完整决策快照，按当前可追溯摘要重建，仅供解释。"
+    provenance_freshness = _score_provenance_freshness(provenance if provenance else None)
+    if normalized_mode in {"realtime_paper", "live"} and provenance_freshness.get("recent_for_live") is not True:
+        result["snapshot_auto_entry_eligible"] = bool(result.get("auto_entry_eligible"))
+        result["snapshot_alert_eligible"] = bool(result.get("alert_eligible"))
+        result["auto_entry_eligible"] = False
+        result["alert_eligible"] = False
+        block_reasons = list(result.get("entry_block_reasons") or [])
+        block_reasons.append("评分溯源已过期或缺少决策时间，仅供历史复盘")
+        result["entry_block_reasons"] = list(dict.fromkeys(block_reasons))
+        warnings = list(result.get("warnings") or [])
+        warnings.append("当前页面展示的是历史快照；重新计算并通过数据新鲜度检查前，不得自动下单或生成委托提醒。")
+        result["warnings"] = list(dict.fromkeys(warnings))
+        result["effective_entry_gate"] = "blocked_stale_score_provenance"
+    else:
+        result["effective_entry_gate"] = "ready" if result.get("auto_entry_eligible") else "blocked_by_dimension_readiness"
+    result.update(
+        {
+            "symbol": symbol,
+            "name": profile.get("name") or provenance.get("name") or symbol,
+            "execution_score": provenance.get("final_trade_score", provenance.get("final_score", profile.get("final_score"))),
+            "audit_policy_score": provenance.get("policy_score"),
+            "provenance_id": provenance.get("provenance_id") or provenance.get("score_provenance_id"),
+            "decision_time": provenance.get("decision_time") or profile.get("updated_at"),
+            "provenance_freshness": provenance_freshness,
+            "score_breakdown": dict(provenance.get("score_breakdown") or {}),
+            "raw_dimension_scores": dict(provenance.get("raw_dimension_scores") or {}),
+            "execution_dimension_scores": dict(provenance.get("execution_dimension_scores") or {}),
+            "excluded_by_readiness": list(provenance.get("excluded_by_readiness") or []),
+        }
+    )
+    return {
+        "ok": True,
+        "data": result,
+        "framework": decision_dimension_service.framework(),
+        "missing_reason": "" if provenance or profile else "暂无筛选画像或评分溯源，请先运行筛选/回测/模拟。",
+    }
 
 
 @app.get("/api/score/provenance/{provenance_id}")
@@ -3157,10 +3491,11 @@ def backtest_run(
     atr_risk_pct: float = 2.0,
     anomaly_filter: bool = True,
     quality_filter: bool = True,
-    fundamental_weight: float = 0.28,
-    technical_weight: float = 0.34,
-    information_weight: float = 0.24,
-    market_weight: float = 0.14,
+    fundamental_weight: float = 0.22,
+    technical_weight: float = 0.30,
+    information_weight: float = 0.20,
+    fund_flow_weight: float = 0.16,
+    market_weight: float = 0.12,
     use_auto_config: bool = False,
 ) -> dict:
     symbol = str(symbol or "300750").strip()
@@ -3243,6 +3578,7 @@ def backtest_run(
                     "fundamental": fundamental_weight,
                     "technical": technical_weight,
                     "information": information_weight,
+                    "fund_flow": fund_flow_weight,
                     "market": market_weight,
                 },
             )
@@ -3303,6 +3639,7 @@ def backtest_run(
                 "fundamental": fundamental_weight,
                 "technical": technical_weight,
                 "information": information_weight,
+                "fund_flow": fund_flow_weight,
                 "market": market_weight,
             },
         )
@@ -3538,10 +3875,33 @@ def _augment_v321_backtest_payload(
         "reinvestment_basis": "equity" if compound_returns else "initial_cash",
         "atr_risk_pct": atr_risk_pct,
     }
+    requested_weights = {key: max(0.0, float(value or 0.0)) for key, value in weights.items()}
+    requested_total = sum(requested_weights.values()) or 1.0
+    normalized_requested = {
+        key: round(value / requested_total, 6)
+        for key, value in requested_weights.items()
+    }
+    # This GET endpoint only receives historical K lines. It must not imply
+    # that current fundamentals, news, fund-flow or market snapshots were
+    # available at each historical decision time.
+    effective_backtest_weights = {
+        "fundamental": 0.0,
+        "technical": 1.0,
+        "information": 0.0,
+        "fund_flow": 0.0,
+        "market": 0.0,
+    }
     metrics["filter_attribution"] = {
         "quality_filter": bool(quality_filter),
         "anomaly_filter": bool(anomaly_filter),
-        "weights": weights,
+        "requested_realtime_weights": normalized_requested,
+        "effective_backtest_weights": effective_backtest_weights,
+        "excluded_dimensions": {
+            "fundamental": "缺少逐日可用时点基本面快照",
+            "information": "缺少逐日可用时点公告/新闻快照",
+            "fund_flow": "缺少逐日可用时点公开资金流快照",
+            "market": "缺少逐日可用时点大盘环境快照",
+        },
     }
     metrics["horizon_attribution"] = horizon_cfg.resolved_rules()
     data["metrics"] = metrics
@@ -3574,7 +3934,9 @@ def _augment_v321_backtest_payload(
             "atr_risk_pct": atr_risk_pct,
             "quality_filter": bool(quality_filter),
             "anomaly_filter": bool(anomaly_filter),
-            "three_dimension_weights": weights,
+            "requested_realtime_weights": normalized_requested,
+            "effective_backtest_weights": effective_backtest_weights,
+            "backtest_weight_policy": "本入口只用历史K线技术/量价因子；其他维度无PIT快照时不回填、不参与成交。",
         }
     )
     data.setdefault("params_cn", {})
@@ -3586,7 +3948,12 @@ def _augment_v321_backtest_payload(
             "定投金额": dca_amount,
             "金字塔加仓": f"{pyramid_step_pct}% / {pyramid_max_adds}次",
             "ATR风险": f"{atr_risk_pct}%",
-            "三面权重": f"基本{weights.get('fundamental')} / 技术{weights.get('technical')} / 信息{weights.get('information')} / 大盘{weights.get('market')}",
+            "实时目标权重": (
+                f"基本{normalized_requested.get('fundamental')} / 技术{normalized_requested.get('technical')} / "
+                f"信息{normalized_requested.get('information')} / 资金{normalized_requested.get('fund_flow')} / "
+                f"大盘{normalized_requested.get('market')}"
+            ),
+            "本次回测实际权重": "技术/量价 1.0；基本面、信息面、资金面、大盘均因缺少PIT快照排除",
         }
     )
     return data
@@ -6001,6 +6368,28 @@ def _prepare_live_order_payload(payload: dict | None) -> dict[str, Any]:
     out = dict(payload or {})
     symbol = normalize_symbol(str(out.get("symbol") or ""))
     out["symbol"] = symbol
+    # Browser-provided booleans are never proof of a completed risk check. A
+    # supplied id is reused only when it resolves to an approved server record
+    # for this symbol; otherwise the order intent is evaluated again below.
+    client_risk_id = str(out.get("risk_check_id") or "")
+    out.pop("risk_approved", None)
+    stored_risk: dict[str, Any] = {}
+    if client_risk_id:
+        try:
+            candidate = trading_store_v323.get("risk_checks", client_risk_id) or {}
+        except Exception:
+            candidate = {}
+        if (
+            str(candidate.get("symbol") or "") == symbol
+            and str(candidate.get("mode") or "") == "live"
+            and bool(candidate.get("approved", candidate.get("allowed", False)))
+        ):
+            stored_risk = candidate
+            out["risk_check_id"] = client_risk_id
+            out["risk_approved"] = True
+        else:
+            out.pop("risk_check_id", None)
+            out["client_risk_evidence_ignored"] = True
     quote: dict[str, Any] = {}
     try:
         quote_obj = service.cache.get_quote(symbol, max_age_seconds=None) if symbol else None
@@ -6037,7 +6426,7 @@ def _prepare_live_order_payload(payload: dict | None) -> dict[str, Any]:
             )
         )
 
-    if not out.get("risk_check_id"):
+    if not stored_risk:
         account: dict[str, Any] = {}
         positions: dict[str, dict[str, Any]] = {}
         try:
@@ -6133,6 +6522,48 @@ def live_order_confirm(payload: dict = Body(default_factory=dict)) -> dict:
 @app.post("/api/live/orders/place")
 def live_order_place(payload: dict = Body(default_factory=dict)) -> dict:
     return live_trading_engine_v323.place_order(_prepare_live_order_payload(payload), confirmed=False)
+
+
+@app.get("/api/integrations/tonghuashun/status")
+def tonghuashun_companion_status() -> dict:
+    return tonghuashun_companion_v326.status()
+
+
+@app.post("/api/integrations/tonghuashun/configure")
+def tonghuashun_companion_configure(payload: dict = Body(default_factory=dict)) -> dict:
+    return tonghuashun_companion_v326.configure(payload)
+
+
+@app.post("/api/integrations/tonghuashun/launch")
+def tonghuashun_companion_launch(payload: dict = Body(default_factory=dict)) -> dict:
+    return tonghuashun_companion_v326.launch(str(payload.get("target") or "launcher"))
+
+
+@app.get("/api/integrations/tonghuashun/reminders")
+def tonghuashun_companion_reminders(status: str = "", limit: int = 100) -> dict:
+    rows = tonghuashun_companion_v326.list_reminders(limit=limit, status=status)
+    return {"ok": True, "data": rows, "count": len(rows)}
+
+
+@app.post("/api/integrations/tonghuashun/reminders")
+def tonghuashun_companion_create_reminder(payload: dict = Body(default_factory=dict)) -> dict:
+    prepared = _prepare_live_order_payload(payload)
+    risk_id = str(prepared.get("risk_check_id") or "")
+    risk_row = next(
+        (
+            row for row in trading_store_v323.list("risk_checks", mode="live", symbol=str(prepared.get("symbol") or ""), limit=200)
+            if str(row.get("id") or row.get("risk_check_id") or "") == risk_id
+        ),
+        {},
+    )
+    prepared["risk_reasons"] = list(risk_row.get("reasons") or risk_row.get("warnings") or [])
+    prepared["reason"] = str(payload.get("reason") or "评分/策略信号触发人工委托提醒")
+    return tonghuashun_companion_v326.create_reminder(prepared)
+
+
+@app.post("/api/integrations/tonghuashun/reminders/{reminder_id}/status")
+def tonghuashun_companion_update_reminder(reminder_id: str, payload: dict = Body(default_factory=dict)) -> dict:
+    return tonghuashun_companion_v326.update_reminder(reminder_id, str(payload.get("status") or "acknowledged"))
 
 
 @app.post("/api/live/orders/{order_id}/cancel")
@@ -6355,6 +6786,7 @@ def auto_trading_dashboard_overview(records_limit: int = 30) -> dict:
         "queue": {"ok": False, "data": [], "count": 0},
         "live_reviews": {"ok": False, "data": [], "count": 0, "broker_submitted": False},
         "review_schedule": {"ok": False, "data": {}, "last_run": {}, "order_execution": False},
+        "tonghuashun": {"ok": False, "enabled": False, "ready_to_launch": False, "missing_reasons": ["状态读取失败"]},
     }
     factories = {
         "broker": live_broker_status,
@@ -6365,6 +6797,7 @@ def auto_trading_dashboard_overview(records_limit: int = 30) -> dict:
         "queue": live_confirm_queue,
         "live_reviews": lambda: live_position_reviews(limit=50),
         "review_schedule": position_review_scheduler_status,
+        "tonghuashun": tonghuashun_companion_status,
     }
     # These readers share the same SQLite store. Serial reads avoid lock contention
     # and are faster here because the aggregate reuses their snapshots below.
@@ -6405,6 +6838,7 @@ def auto_trading_dashboard_overview(records_limit: int = 30) -> dict:
         ),
         "live_reviews": base["live_reviews"],
         "review_schedule": base["review_schedule"],
+        "tonghuashun": base["tonghuashun"],
         "paper_schedule": capture(
             "paper_schedule",
             lambda: _realtime_paper_scheduler_status(
@@ -6694,6 +7128,10 @@ def screener_run(
                     "risk_flags": ir.get("risk_flags", []),
                     "evidence_counts": ir.get("evidence_counts", {}),
                     "data_quality": ir.get("data_quality", {}),
+                    "score_confidence": ir.get("score_confidence"),
+                    "data_quality_score": ir.get("data_quality_score"),
+                    "score_eligible": ir.get("score_eligible"),
+                    "future_event_calendar": ir.get("future_event_calendar", {}),
                     "cache_info": ir.get("cache_info", {}),
                     "reuse_note": ir.get("reuse_note"),
                     "message_framework": ir.get("message_framework", {}),
@@ -6703,15 +7141,35 @@ def screener_run(
                     "profile": profile,
                 }
                 base = float(item.get("total_score") or 0)
-                info_score = float(ir.get("info_score") or 50)
-                usable_info = bool(
-                    item.get("info_effective_count")
-                    or nr.get("count")
-                    or ir.get("items")
-                    or ir.get("industry_mapped_items")
+                info_score = _score_or_none(ir.get("info_score"))
+                quality = ir.get("data_quality") if isinstance(ir.get("data_quality"), dict) else {}
+                quality_metadata_present = bool(
+                    quality
+                    or ir.get("score_eligible") is not None
+                    or ir.get("score_confidence") is not None
                 )
-                effective_info_weight = calc_info_weight if usable_info else 0.0
-                info_delta_raw = (info_score - base) * effective_info_weight
+                if quality_metadata_present:
+                    current_scoring_count = int(_safe_float(quality.get("current_scoring_count")) or 0)
+                    quality_coverage = max(0.0, min(1.0, _safe_float(quality.get("content_quality_coverage")) or 0.0))
+                    score_confidence = max(0.0, min(1.0, _safe_float(ir.get("score_confidence")) or _safe_float(quality.get("score_confidence")) or quality_coverage))
+                    usable_info = bool(info_score is not None and ir.get("score_eligible") and current_scoring_count > 0 and quality_coverage >= 0.35)
+                    quality_policy = "V3.26正文质量口径"
+                else:
+                    # Migration path for snapshots created before content-quality
+                    # metadata existed. Preserve their historical behavior only
+                    # when an explicit event count and information score exist.
+                    current_scoring_count = int(
+                        _safe_float((ir.get("evidence_counts") or {}).get("news_items"))
+                        or _safe_float(nr.get("count"))
+                        or 0
+                    )
+                    quality_coverage = 1.0 if current_scoring_count > 0 else 0.0
+                    score_confidence = 1.0 if current_scoring_count > 0 else 0.0
+                    usable_info = bool(info_score is not None and current_scoring_count > 0)
+                    quality_policy = "旧快照兼容口径（待后台刷新为正文质量口径）"
+                quality_factor = quality_coverage * score_confidence if usable_info else 0.0
+                effective_info_weight = calc_info_weight * quality_factor
+                info_delta_raw = (info_score - base) * effective_info_weight if info_score is not None else 0.0
                 info_delta_cap = 12.0 if calc_info_weight >= 0.45 else 8.0
                 info_delta = max(-info_delta_cap, min(info_delta_raw, info_delta_cap))
                 item["technical_score"] = round(base, 2)
@@ -6720,12 +7178,20 @@ def screener_run(
                 item["info_score_delta_cap"] = info_delta_cap if effective_info_weight else 0.0
                 item["total_score_with_info"] = round(max(0, min(100, base + info_delta)), 2)
                 item["info_weight"] = effective_info_weight
+                item["info_configured_weight"] = calc_info_weight
+                item["info_quality_factor"] = round(quality_factor, 4)
+                item["info_quality_coverage"] = round(quality_coverage, 4)
+                item["info_score_confidence"] = round(score_confidence, 4)
+                item["info_quality_policy"] = quality_policy
                 item["score_formula"] = (
-                    f"技术/量价底分×{1-effective_info_weight:.2f} + 信息面分×{effective_info_weight:.2f}"
-                    + (f"；信息面单次调分限制±{info_delta_cap:.0f}" if usable_info else "；信息面无有效证据，本轮不改写评分")
+                    f"技术/量价底分 + (信息面分-底分)×配置权重{calc_info_weight:.2f}×质量系数{quality_factor:.2f}"
+                    + (f"；单次调分限制±{info_delta_cap:.0f}；{quality_policy}" if usable_info else "；近期正文证据不足/过期，本轮不改写评分")
                 )
                 if usable_info and abs(info_delta_raw - info_delta) > 0.001:
                     item.setdefault("risk_flags", []).append("信息面调分已限幅，避免单次抓取过度扰动")
+                if not usable_info:
+                    item.setdefault("missing_data_hints", []).append("近期信息正文质量不足或无事件级计分证据")
+                    item.setdefault("risk_flags", []).append("信息面仅观察，本轮未参与筛选调分")
                 item["total_score_with_news"] = item["total_score_with_info"]
                 item["total_score"] = item["total_score_with_info"]
                 if nr.get("sentiment") == "positive":
@@ -7160,10 +7626,10 @@ def _screener_row_for_signal(symbol: str, payload: dict | None = None) -> dict:
             "change_pct": getattr(q, "change_pct", None),
             "turnover": getattr(q, "turnover", None),
             "volume_ratio": getattr(q, "volume_ratio", None),
-            "total_score": payload.get("score", 50),
+            "total_score": _score_or_none(payload.get("score")),
         }
     except Exception:
-        return {"symbol": symbol, "total_score": payload.get("score", 50)}
+        return {"symbol": symbol, "total_score": _score_or_none(payload.get("score"))}
 
 
 def _screener_anomaly_features(row: dict) -> dict:
@@ -7199,31 +7665,69 @@ def _screener_signal_preview(symbol: str, payload: dict | None = None) -> dict:
     )
     anomaly = realtime_paper_engine_v321.anomaly_guard.check(_screener_anomaly_features(row))
     now = datetime.now()
-    freshness = realtime_paper_engine_v321.freshness_guard.check(
-        {
-            "quote": now,
-            "intraday": now,
-            "news": now,
-            "technical": now,
-            "company_profile": now,
-        },
-        now=now,
-        missing_fields=list(row.get("missing_data_hints") or row.get("missing_data") or []),
-    )
+    preview_missing = list(dict.fromkeys(missing_data))
+    freshness_payload = {
+        "status": "preview_only",
+        "fresh": False,
+        "action": "block",
+        "message": "筛选信号是快照预览，不冒充实时新鲜行情；进入模拟或实盘后重新检查。",
+        "missing_fields": preview_missing,
+        "stale_fields": [],
+    }
+    fundamental_score = _score_or_none(row.get("fundamental_score"))
+    technical_score = _score_or_none(row.get("technical_score"))
+    information_score = _score_or_none(information.get("score"))
+    fund_flow_score = _score_or_none(row.get("fund_flow_score") or row.get("capital_score") or row.get("flow_score"))
+    market_score = _score_or_none(row.get("market_score") or row.get("market_mood_score"))
     signal = realtime_paper_engine_v321.signal_fusion.fuse(
         symbol=symbol,
         horizon=str((payload or {}).get("horizon") or "swing"),
-        fundamental_score=_safe_float(row.get("fundamental_score"), _safe_float(row.get("manual_review_score"), 55.0)),
-        technical_score=_safe_float(row.get("technical_score"), _safe_float(row.get("total_score"), 50.0)),
-        information_score=information["score"] if information["score"] is not None else 50.0,
-        market_score=_safe_float(row.get("market_score"), _safe_float(row.get("market_mood_score"), 50.0)),
+        screening_score=_score_or_none(row.get("total_score") or row.get("final_score")),
+        fundamental_score=fundamental_score,
+        technical_score=technical_score,
+        information_score=information_score,
+        fund_flow_score=fund_flow_score,
+        market_score=market_score,
         anomaly_score=anomaly.anomaly_score,
         anomaly_action=anomaly.action_suggestion,
         evidence=evidence,
-        data_freshness=freshness.to_dict(),
-        missing_data=list(dict.fromkeys(missing_data)),
+        data_freshness=freshness_payload,
+        missing_data=preview_missing,
         now=now,
     )
+    dimension_readiness = decision_dimension_service.evaluate(
+        mode="realtime_paper",
+        strategy_family=str((payload or {}).get("strategy_family") or (payload or {}).get("horizon") or "hybrid"),
+        scores={
+            "fundamental": fundamental_score,
+            "technical": technical_score,
+            "information": information_score,
+            "fund_flow": fund_flow_score,
+            "market": market_score,
+        },
+        sources={
+            "fundamental": {
+                "source": row.get("fundamental_source") or row.get("fundamentals_source") or "",
+                "source_ref": row.get("fundamental_source_ref") or row.get("screener_snapshot_id") or "",
+                "available_at": row.get("fundamental_available_at") or row.get("updated_at") or "",
+                "quality_status": row.get("fundamental_quality_status")
+                or (
+                    "snapshot"
+                    if fundamental_score is not None
+                    and bool(row.get("fundamental_source") or row.get("fundamentals_source"))
+                    else "missing"
+                ),
+                "stale": bool(row.get("fundamental_stale")),
+            },
+            "technical": {"source": row.get("technical_source") or "筛选技术快照", "quality_status": "snapshot" if technical_score is not None else "missing"},
+            "information": {"source": information.get("source") or "筛选信息快照", "quality_status": information.get("quality_status") or ("snapshot" if information_score is not None else "missing")},
+            "fund_flow": {"source": row.get("fund_flow_source") or "筛选资金快照", "quality_status": row.get("fund_flow_quality_status") or ("proxy_available" if fund_flow_score is not None else "missing")},
+            "market": {"source": row.get("market_source") or "筛选大盘快照", "quality_status": row.get("market_quality_status") or ("snapshot" if market_score is not None else "missing")},
+        },
+        freshness=freshness_payload,
+        recent_information=information,
+    )
+    signal.score_breakdown["dimension_readiness"] = dimension_readiness
     return {
         "ok": True,
         "symbol": symbol,
@@ -7231,7 +7735,8 @@ def _screener_signal_preview(symbol: str, payload: dict | None = None) -> dict:
         "signal": signal.to_dict(),
         "information_trace": information,
         "anomaly": anomaly.to_dict(),
-        "freshness": freshness.to_dict(),
+        "freshness": freshness_payload,
+        "dimension_readiness": dimension_readiness,
         "paper_only": True,
     }
 
@@ -7515,12 +8020,48 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
         add_many(sectors, [str(x) for x in (issuer.get("concepts") or [])])
     if issuer_hits:
         evidence.append("公司名称/证券代码直接命中")
+    # Global feeds also contain HK/US company disclosures that are outside the
+    # A-share issuer dictionary. Preserve the named company as the direct
+    # impact target, but do not invent an A-share industry mapping for it.
+    generic_company_hits: list[tuple[str, str]] = []
+    for raw_name, raw_code in re.findall(r"([\u4e00-\u9fffA-Za-z0-9·]{2,36})[（(]([A-Za-z0-9.]{2,18})[)）]", str(text or "")):
+        company_name = re.split(r"[：:，,。；;]", raw_name)[-1].strip()
+        company_code = raw_code.strip().upper()
+        if company_name and company_code and not any(company_code == str(x.get("symbol") or "").upper() for x in issuer_hits):
+            generic_company_hits.append((company_name, company_code))
+            add_many(affected_companies, [f"{company_name} {company_code}"])
+            add_many(mapped_symbols, [company_code])
+    company_event_words = ["营收", "净利润", "净亏损", "业绩", "财报", "回购", "增持", "减持", "分红", "订单", "中标"]
+    generic_company_event = bool(generic_company_hits) and (
+        "公司消息" in str(dimension or "") or any(word in str(text or "") for word in company_event_words)
+    )
+    if generic_company_event:
+        evidence.append("公司名称/海外证券代码直接命中")
     macro_hit = False
     if matched(["非农", "就业", "失业率", "初请", "ADP", "CPI", "PPI", "PMI", "ISM", "FOMC", "美联储", "降息", "加息", "通胀", "利率决议"], "宏观/利率"):
         macro_hit = True
         add_many(sectors, ["银行", "券商", "成长股估值", "出口链"])
         add_many(assets, ["A股指数", "美元指数", "美债收益率", "人民币汇率"])
-    if matched(["美元", "美债", "汇率", "外汇", "人民币", "日元", "欧元"], "汇率/美债"):
+    fx_context_hit = any(
+        word in t
+        for word in [
+            "汇率",
+            "外汇",
+            "美元指数",
+            "美债",
+            "人民币兑",
+            "离岸人民币",
+            "在岸人民币",
+            "中间价",
+            "日元汇率",
+            "欧元汇率",
+        ]
+    ) or (
+        "美元" in t and any(word in t for word in ["兑", "走强", "走弱", "升值", "贬值", "利率", "指数", "美债"])
+    )
+    if fx_context_hit:
+        if "汇率/美债" not in evidence:
+            evidence.append("汇率/美债")
         macro_hit = True
         add_many(sectors, ["出口链", "航空运输", "贵金属"])
         add_many(assets, ["美元指数", "人民币汇率", "黄金"])
@@ -7544,7 +8085,10 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
         macro_hit = True
         add_many(sectors, ["农业种植", "饲料养殖", "农产品加工", "化肥农药"])
         add_many(assets, ["农产品期货", "大豆", "玉米", "棉花"])
-    if matched(["AI", "芯片", "半导体", "算力", "光伏", "储能", "新能源汽车"], "科技/新能源"):
+    ai_token_hit = bool(re.search(r"(?<![A-Za-z0-9])AI(?![A-Za-z0-9])", t, flags=re.IGNORECASE))
+    if ai_token_hit or matched(["芯片", "半导体", "算力", "光伏", "储能", "新能源汽车"], "科技/新能源"):
+        if ai_token_hit and "科技/新能源" not in evidence:
+            evidence.append("科技/新能源")
         add_many(sectors, ["半导体/算力", "新能源", "光伏储能"])
         add_many(assets, ["成长股", "科技主题"])
     if not macro_hit:
@@ -7564,7 +8108,7 @@ def _global_impact_fields(text: str, category: str = "", dimension: str = "", ex
         "affected_assets": assets[:8],
         "affected_companies": affected_companies[:6],
         "mapped_symbols": mapped_symbols[:6],
-        "impact_level": "公司事件" if issuer_hits else "宏观/行业事件",
+        "impact_level": "公司事件" if issuer_hits or generic_company_event else "宏观/行业事件",
         "impact_targets": targets,
         "impact_note": note,
         "impact_evidence": evidence[:6],
@@ -8232,6 +8776,7 @@ def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], s
             exposure_terms = [term for term in exposure_terms if term not in ai_noise_terms]
             matching_terms = [term for term in matching_terms if term not in ai_noise_terms]
         related: list[dict] = []
+        market_context: list[dict] = []
         exposure_set = set(matching_terms)
         for item in mapped:
             targets = _unique_text(
@@ -8274,9 +8819,23 @@ def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], s
             )
             if supply_chain_text_hit and any(x in exposure_set for x in ["光伏", "新能源", "芯片", "半导体", "出口链"]):
                 broad_hits.append("贸易政策/供应链风险")
-            is_related = bool(direct_symbol_hit or overlap or broad_hits)
+            is_related = bool(direct_symbol_hit or overlap)
+            if broad_hits and not is_related:
+                market_context.append(
+                    {
+                        "title": item.get("title"),
+                        "published_at": item.get("published_at"),
+                        "source": item.get("source"),
+                        "source_ref": item.get("source_ref") or item.get("source_url") or item.get("url") or item.get("source_page"),
+                        "matched_terms": _unique_text(broad_hits, limit=8),
+                        "score_included": False,
+                        "mapping_policy": "market_context_only_v326",
+                        "impact_scope_cn": "大盘/行业背景",
+                    }
+                )
             if not is_related:
                 continue
+            matched_terms = _unique_text(overlap + broad_hits, limit=8)
             related.append(
                 {
                     "title": item.get("title"),
@@ -8286,8 +8845,9 @@ def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], s
                     "source_api": item.get("source_api"),
                     "source_page": item.get("source_page"),
                     "impact_note": item.get("impact_note") or item.get("impact_reason") or "全球事件规则映射，仅用于信息面和风控解释。",
-                    "impact_targets": targets[:10],
-                    "matched_terms": _unique_text(overlap + broad_hits, limit=8),
+                    "impact_targets": matched_terms,
+                    "source_impact_targets": targets[:10],
+                    "matched_terms": matched_terms,
                     "relevance_score": round(_as_float(item.get("relevance_score"), 0.0), 2),
                     "mapping_policy": "global_event_to_symbol_exposure_v323",
                 }
@@ -8302,6 +8862,8 @@ def _agent_symbol_global_impacts(symbols: list[str], stream_items: list[dict], s
                 "exposure_terms": exposure_terms[:14],
                 "related_count": len(related),
                 "related_events": related,
+                "market_context_count": len(market_context),
+                "market_context_events": market_context[:5],
                 "explain": "命中时仅表示宏观/商品/政策事件可能影响该标的产业链或估值环境，不直接构成买卖建议。"
                 if related
                 else "当前真实全球快讯未直接命中该标的产业链；仍作为大盘环境观察。",
@@ -8820,7 +9382,15 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
     if data is None:
         sid = sid or _make_snapshot_id(symbol, limit)
         try:
-            raw = info_analysis_service.analyze(symbol, name=qname, limit=limit, force=force or deep_refresh, mode=use_mode, deep_refresh=deep_refresh)
+            raw = info_analysis_service.analyze(
+                symbol,
+                name=qname,
+                limit=limit,
+                force=force or deep_refresh,
+                mode=use_mode,
+                deep_refresh=deep_refresh,
+                allow_network=bool(force or deep_refresh),
+            )
             cache_status = cache_state_service.status("refreshed", key=sid, source=f"info_{use_mode}")
             data = _normalize_info_payload(raw, symbol, qname, sid, cache_status, used_snapshot=False, mode=use_mode)
             news_service.store.save_analysis(symbol, f"snapshot:{sid}", data, name=qname)
@@ -8837,7 +9407,14 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
         else:
             data["snapshot_notice"] = "当前使用筛选页快照；如需深挖请点击深度刷新。" if used_snapshot else "当前使用最近信息快照。"
     allow_history_fallback = bool(not errors and str((data.get("cache_status") or cache_status or {}).get("status") or "") != "error")
-    data = _ensure_info_visible_content(data, symbol, qname, limit, allow_history_fallback=allow_history_fallback)
+    data = _ensure_info_visible_content(
+        data,
+        symbol,
+        qname,
+        limit,
+        allow_history_fallback=allow_history_fallback,
+        allow_background_global=bool(force or deep_refresh),
+    )
     data = _normalize_info_payload(data, symbol, qname, str(data.get("snapshot_id") or sid or ""), data.get("cache_status") or cache_status, used_snapshot=used_snapshot, mode=str(data.get("mode") or use_mode), errors=data.get("errors") or errors)
     if data.get("snapshot_id"):
         try:
@@ -8875,6 +9452,27 @@ def info_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
 @app.get("/api/news/search")
 def news_search(keyword: str, limit: int = 80, force: bool = False) -> dict:
     data = news_service.search_keyword(keyword, limit=limit, force=force)
+    return {"ok": True, "data": data}
+
+
+@app.get("/api/info/calendar/{symbol}")
+def info_future_calendar(symbol: str, name: str | None = None, horizon_days: int = 120) -> dict:
+    """Read future event observations from the latest local snapshot without starting a crawl."""
+    cached = cache_state_service.latest_info_snapshot(symbol)
+    snapshot = cached.data or {}
+    items = snapshot.get("items") or (snapshot.get("news") or {}).get("items") or []
+    global_items = snapshot.get("global_items") or []
+    if not items:
+        items = news_service.store.list_items(symbol, limit=240, include_history_days=3650)
+    data = info_analysis_service.event_calendar.build(
+        symbol,
+        name or snapshot.get("name") or symbol,
+        items=items,
+        global_items=global_items,
+        horizon_days=horizon_days,
+    )
+    data["snapshot_id"] = snapshot.get("snapshot_id") or ""
+    data["cache_status"] = cached.cache_status
     return {"ok": True, "data": data}
 
 

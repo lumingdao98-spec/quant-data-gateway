@@ -74,3 +74,17 @@ def test_market_regime_falls_back_to_shrunk_breadth_when_indices_missing():
     assert result["confidence"] == "low"
     assert result["score"] < 60
     assert "仅用市场宽度兜底" in result["basis"]
+
+
+def test_single_index_and_tiny_breadth_are_not_enough_for_automatic_score():
+    quotes = [_quote(1, 1.0), _quote(2, -1.0)]
+
+    result = MarketRegimeService().analyze_market(
+        quotes,
+        index_bars={"shanghai": _bars("sh000001", step=0.25)},
+    )
+
+    assert result["index_count"] == 1
+    assert result["valid_for_score"] is False
+    assert result["quality_status"] == "insufficient_sample"
+    assert any("两类独立证据" in reason for reason in result["missing_reasons"])

@@ -19,7 +19,16 @@ def test_connected_market_agent_brief_uses_real_stream_shape_and_safety(monkeypa
                         "affected_sectors": ["成长股估值"],
                         "affected_assets": ["美元指数", "美债收益率"],
                         "impact_note": "非农和利率预期可能影响成长股估值与市场风险偏好。",
-                    }
+                    },
+                    {
+                        "title": "宁德时代发布储能系统新品并获得海外订单",
+                        "source": "交易所公告",
+                        "published_at": "2026-07-04 08:02:00",
+                        "source_ref": "https://example.com/300750-announcement",
+                        "impact_targets": ["储能系统", "动力电池"],
+                        "affected_sectors": ["储能系统"],
+                        "impact_note": "公司和产业链直接命中。",
+                    },
                 ],
                 "stream_mode": "test_live_fetch",
                 "sources_status": [{"source": "金十期货快讯", "count": 1, "status": "ok"}],
@@ -51,14 +60,16 @@ def test_connected_market_agent_brief_uses_real_stream_shape_and_safety(monkeypa
     brief = data["data"]
     assert brief["agent_id"] == "connected_market_agent_v323"
     assert brief["mode"] == "evidence_only_online_agent"
-    assert brief["global_flash_count"] == 1
+    assert brief["global_flash_count"] == 2
     assert brief["source_link_count"] >= 1
     assert brief["recommended_action"] == "paper_then_precheck"
     impacts = brief["symbol_global_impacts"]
     assert impacts[0]["symbol"] == "300750"
     assert impacts[0]["related_events"]
-    assert impacts[0]["related_events"][0]["source_ref"] == "https://qihuo.jin10.com/"
-    assert "成长股估值/利率敏感" in impacts[0]["related_events"][0]["matched_terms"]
+    assert impacts[0]["related_events"][0]["source_ref"] == "https://example.com/300750-announcement"
+    assert "储能系统" in impacts[0]["related_events"][0]["matched_terms"]
+    assert impacts[0]["market_context_events"][0]["source_ref"] == "https://qihuo.jin10.com/"
+    assert impacts[0]["market_context_events"][0]["score_included"] is False
     assert brief["symbol_decisions"][0]["action"] == "模拟验证/实盘预检查"
     assert "LIVE_TRADING_ENABLED=false" in "；".join(brief["risk_flags"])
     assert "不能直接下单" in brief["llm_status"]

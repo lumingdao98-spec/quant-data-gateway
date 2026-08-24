@@ -5,6 +5,8 @@ from typing import Any, Iterable
 
 from quant_data.models import Bar, IntradayPoint, Quote
 
+from .decision_dimension_service import DecisionDimensionService
+from .information_event_calendar_service import InformationEventCalendarService
 from .market_event_factor_service import MarketEventFactorService
 
 
@@ -70,6 +72,8 @@ class RealtimeDecisionService:
         self.cache_state = cache_state
         self.market_regime = market_regime
         self.market_event_factors = market_event_factors or MarketEventFactorService(cache_state)
+        self.information_event_calendar = InformationEventCalendarService()
+        self.dimension_service = DecisionDimensionService()
 
     def hydrate(
         self,
@@ -105,6 +109,15 @@ class RealtimeDecisionService:
 
         flow = self._fund_flow_score(quote, intraday)
         profile_flow = _number(profile.get("fund_flow_score"))
+        profile_flow_quality = str(profile.get("fund_flow_quality_status") or "").strip().lower()
+        profile_flow_source = str(profile.get("fund_flow_source") or "").strip()
+        profile_flow_traceable = bool(
+            profile_flow is not None
+            and profile_flow_source
+            and profile_flow_quality not in {"missing", "unavailable", "unsupported", "unusable", "invalid", "error"}
+        )
+        if not profile_flow_traceable:
+            profile_flow = None
         live_flow = flow.get("score")
         fund_flow_score = None
         if live_flow is not None and profile_flow is not None:
@@ -120,12 +133,31 @@ class RealtimeDecisionService:
             name=str(out.get("name") or profile.get("name") or symbol),
             profile=profile,
         )
+        direct_event_factors = [
+            row
+            for row in (event_context.get("factors") or [])
+            if row.get("scope") == "个股信息"
+            and (row.get("source_ref") or row.get("source"))
+            and row.get("adjustment") is not None
+        ]
+        information_input = _number(info.get("score"))
+        if information_input is None and direct_event_factors:
+            # A traceable PIT event can establish its own neutral baseline.
+            # This is not a missing-data default: without direct evidence the
+            # dimension remains None and is excluded by the execution gate.
+            information_input = 50.0
+            info["event_only_baseline"] = True
+            info["scoreable_count"] = len(direct_event_factors)
+            info["quality_coverage"] = 1.0
+            info["quality_status"] = "可用于自动交易"
+            info["auto_buy_eligible"] = not bool(event_context.get("negative_veto"))
+            info["source"] = "可追溯结构化事件快照"
         adjusted = self.market_event_factors.apply_scores(
             event_context,
             market_score=_number(market.get("score")),
-            information_score=_number(info.get("score")),
+            information_score=information_input,
         )
-        info["base_score"] = info.get("score")
+        info["base_score"] = information_input
         info["score"] = adjusted.get("information_score")
         info["event_adjustment"] = adjusted.get("information_adjustment")
         info["screening_score"] = screening_information_score
@@ -162,6 +194,7 @@ class RealtimeDecisionService:
                 "info_snapshot_ts": info.get("snapshot_at"),
                 "news_ts": info.get("latest_published_at"),
                 "recent_information": info,
+                "future_event_calendar": info.get("future_event_calendar"),
                 "market_regime": market,
                 "market_event_context": event_context,
                 "orderbook_snapshot": self._orderbook_summary(quote),
@@ -177,6 +210,7 @@ class RealtimeDecisionService:
             ("daily_k_cache_missing", daily_score),
             ("intraday_cache_missing", intraday_score),
             ("recent_information_missing", info.get("has_recent")),
+            ("recent_information_unusable", info.get("auto_buy_eligible")),
             ("orderbook_missing", self._best_price(quote, "bid")),
         ):
             if value is None or value is False:
@@ -185,17 +219,83 @@ class RealtimeDecisionService:
 
         existing = dict(out.get("score_breakdown") or {})
         existing_sources = dict(existing.get("sources") or {})
+        fundamental_score = _number(out.get("fundamental_score"))
+        prior_fundamental_source = existing_sources.get("fundamental")
+        fundamental_source = str(
+            profile.get("fundamental_source")
+            or (prior_fundamental_source.get("source") if isinstance(prior_fundamental_source, dict) else "")
+            or ""
+        ).strip()
         existing_sources.update(
             {
                 "screening": profile.get("source") or "筛选快照",
-                "daily_k": daily.get("source"),
-                "intraday": intraday_result.get("source"),
-                "information": info.get("source"),
-                "fund_flow": flow.get("source"),
-                "market": market.get("source"),
+                "fundamental": {
+                    "source": fundamental_source,
+                    "source_ref": profile.get("fundamental_source_ref") or profile.get("screener_snapshot_id") or "",
+                    "available_at": profile.get("fundamental_available_at") or profile.get("updated_at") or "",
+                    "quality_status": profile.get("fundamental_quality_status")
+                    or ("snapshot" if fundamental_score is not None and fundamental_source else "missing"),
+                    "stale": bool(profile.get("fundamental_stale")),
+                },
+                "technical": {
+                    "source": f"{daily.get('source') or '日K缺失'} + {intraday_result.get('source') or '分时缺失'}",
+                    "available_at": intraday_result.get("latest_at") or daily.get("latest_at"),
+                    "quality_status": "available" if technical_score is not None else "missing",
+                },
+                "daily_k": {
+                    "source": daily.get("source"),
+                    "available_at": daily.get("latest_at"),
+                    "quality_status": "available" if daily_score is not None else "missing",
+                },
+                "intraday": {
+                    "source": intraday_result.get("source"),
+                    "available_at": intraday_result.get("latest_at"),
+                    "quality_status": "available" if intraday_score is not None else "missing",
+                },
+                "information": {
+                    "source": info.get("source"),
+                    "source_ref": info.get("snapshot_id") or profile.get("information_snapshot_id"),
+                    "available_at": info.get("snapshot_at") or info.get("latest_published_at"),
+                    "quality_status": info.get("quality_status") or ("available" if info.get("auto_buy_eligible") else "unusable"),
+                    "stale": bool(info.get("stale")),
+                },
+                "fund_flow": {
+                    "source": flow.get("source"),
+                    "available_at": flow.get("latest_at"),
+                    "quality_status": flow.get("quality_status") or ("proxy_available" if fund_flow_score is not None else "missing"),
+                    "evidence_fields": list(flow.get("evidence_fields") or []),
+                },
+                "market": {
+                    "source": market.get("source"),
+                    "quality_status": market.get("quality_status") or ("available" if market.get("valid_for_score") else "insufficient_sample"),
+                    "stale": bool(market.get("stale")),
+                },
                 "market_events": "全球要闻/IPO/板块真实缓存",
             }
         )
+        dimension_readiness = self.dimension_service.evaluate(
+            mode=str(out.get("mode") or "realtime_paper"),
+            strategy_family=str(
+                out.get("strategy_family")
+                or out.get("horizon")
+                or profile.get("strategy_family")
+                or "hybrid"
+            ),
+            scores={
+                "fundamental": out.get("fundamental_score"),
+                "technical": out.get("technical_score"),
+                "information": out.get("information_score"),
+                "fund_flow": out.get("fund_flow_score"),
+                "market": out.get("market_score"),
+            },
+            sources=existing_sources,
+            freshness=dict(out.get("data_freshness") or {}),
+            recent_information=info,
+            provenance=dict(out.get("score_provenance") or {}),
+        )
+        out["dimension_readiness"] = dimension_readiness
+        out["auto_entry_eligible"] = bool(dimension_readiness.get("auto_entry_eligible"))
+        out["entry_block_reasons"] = list(dimension_readiness.get("entry_block_reasons") or [])
         existing.update(
             {
                 "screening_score": screening_score,
@@ -210,7 +310,7 @@ class RealtimeDecisionService:
                 "screening_information_source": profile.get("information_source"),
                 "fund_flow_score": out.get("fund_flow_score"),
                 "market_score": out.get("market_score"),
-                "formula": "综合交易分=筛选底座+实时择时（日K55%+分时45%）+近期信息+资金+大盘-异常风险",
+                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘-异常风险；筛选总分仅审计，不重复计票",
                 "sources": existing_sources,
                 "recent_information_count": info.get("recent_count", 0),
                 "recent_information_latest": info.get("latest_published_at"),
@@ -219,6 +319,8 @@ class RealtimeDecisionService:
                 "information_event_adjustment": adjusted.get("information_adjustment"),
                 "event_factor_count": event_context.get("factor_count", 0),
                 "event_factors": event_context.get("factors", []),
+                "dimension_readiness": dimension_readiness,
+                "execution_score_policy": dimension_readiness.get("execution_score_policy"),
             }
         )
         if screening_information_score is not None and info.get("score") is not None:
@@ -362,17 +464,22 @@ class RealtimeDecisionService:
         }
 
     def _fund_flow_score(self, quote: dict[str, Any], points: list[IntradayPoint]) -> dict[str, Any]:
-        change = _number(quote.get("change_pct")) or 0.0
+        change_value = _number(quote.get("change_pct"))
+        change = change_value or 0.0
         volume_ratio = _number(quote.get("volume_ratio"))
         turnover = _number(quote.get("turnover") or quote.get("turnover_rate"))
         order_ratio = _number(quote.get("order_ratio"))
         score = 50.0 + max(-12.0, min(12.0, change * 2.5))
+        evidence_fields: list[str] = []
         if volume_ratio is not None:
+            evidence_fields.append("volume_ratio")
             pulse = max(-8.0, min(10.0, (volume_ratio - 1.0) * 6.0))
             score += pulse if change >= 0 else -abs(pulse)
         if turnover is not None:
+            evidence_fields.append("turnover_rate")
             score += min(6.0, max(0.0, turnover) * 0.45)
         if order_ratio is not None:
+            evidence_fields.append("order_ratio")
             score += max(-7.0, min(7.0, order_ratio / 14.0))
         amounts = [_number(getattr(point, "amount", None)) for point in points]
         amounts = [value for value in amounts if value is not None and value >= 0]
@@ -380,8 +487,29 @@ class RealtimeDecisionService:
             recent = sum(amounts[-5:]) / 5
             prior = sum(amounts[-12:-5]) / 7
             if prior > 0:
+                evidence_fields.append("intraday_amount_momentum")
                 score += max(-5.0, min(5.0, (recent / prior - 1.0) * 4.0))
-        return {"score": round(_clamp(score), 2), "source": "真实量价/盘口快照（非主力资金伪估算）"}
+        latest_at = ""
+        if points:
+            latest = getattr(points[-1], "ts", None)
+            latest_at = latest.isoformat(timespec="seconds") if isinstance(latest, datetime) else str(latest or "")
+        if not latest_at:
+            latest_at = str(quote.get("ts") or quote.get("timestamp") or "")
+        if not evidence_fields or not latest_at:
+            return {
+                "score": None,
+                "source": "量比/换手率/盘口/分时成交额证据缺失",
+                "latest_at": latest_at or None,
+                "quality_status": "missing",
+                "evidence_fields": evidence_fields,
+            }
+        return {
+            "score": round(_clamp(score), 2),
+            "source": "真实量价/盘口快照（非主力资金伪估算）",
+            "latest_at": latest_at,
+            "quality_status": "proxy_available",
+            "evidence_fields": evidence_fields,
+        }
 
     def _market_score(self, symbols: Iterable[str], profile: dict[str, Any]) -> dict[str, Any]:
         quotes: list[Quote] = []
@@ -396,19 +524,43 @@ class RealtimeDecisionService:
             if quote is not None:
                 quotes.append(quote)
         live = self.market_regime.analyze_market(quotes, index_bars={}) if quotes else {}
-        live_score = _number(live.get("score")) if quotes else None
-        baseline = _number(profile.get("market_score"))
+        live_score = _number(live.get("score")) if quotes and live.get("valid_for_score") else None
+        baseline_quality = str(profile.get("market_quality_status") or "").strip().lower()
+        baseline_stale = bool(profile.get("market_stale"))
+        baseline_allowed = bool(baseline_quality) and baseline_quality not in {
+            "missing",
+            "unavailable",
+            "unsupported",
+            "unusable",
+            "rejected",
+            "invalid",
+            "error",
+            "insufficient_sample",
+        } and not baseline_stale
+        baseline = _number(profile.get("market_score")) if baseline_allowed else None
         if live_score is not None and baseline is not None:
             score = baseline * 0.55 + live_score * 0.45
         else:
             score = live_score if live_score is not None else baseline
         return {
             "score": round(score, 2) if score is not None else None,
-            "source": "股票池缓存宽度+筛选大盘底座" if quotes else "筛选大盘底座/指数缓存缺失",
+            "source": "有效市场宽度+筛选大盘底座" if live_score is not None and baseline is not None else "筛选大盘底座" if baseline is not None else "市场宽度/指数证据不足",
             "sample_count": len(quotes),
             "confidence": live.get("confidence") if quotes else "low",
             "regime": live.get("regime") if quotes else "unknown",
             "basis": live.get("basis") if quotes else "没有可用实时指数/宽度快照，未伪造大盘分。",
+            "quality_status": "available" if score is not None else str(live.get("quality_status") or "missing"),
+            "valid_for_score": score is not None,
+            "live_width_used": live_score is not None,
+            "screening_baseline_used": baseline is not None,
+            "baseline_quality_status": baseline_quality or "missing",
+            "baseline_stale": baseline_stale,
+            "missing_reasons": (
+                list(live.get("missing_reasons") or [])
+                + ([] if baseline_allowed else ["筛选大盘底座缺失、过期或质量不足"])
+            )
+            if score is None
+            else [],
         }
 
     def _recent_information(self, symbol: str, profile: dict[str, Any]) -> dict[str, Any]:
@@ -433,6 +585,13 @@ class RealtimeDecisionService:
         excluded = 0
         now = datetime.now()
         global_unmapped_excluded = 0
+        quality_counts = {
+            "full_text": 0,
+            "structured_excerpt": 0,
+            "title_only": 0,
+            "boilerplate_rejected": 0,
+        }
+        future_information_excluded = 0
         for bucket_name, item in items:
             if bucket_name in {"global", "mapped_global"} and not bool(
                 item.get("included_in_score") or item.get("score_included") or item.get("is_related_to_symbol")
@@ -442,6 +601,13 @@ class RealtimeDecisionService:
                 continue
             source_type = str(item.get("source_type") or item.get("type") or "news").lower()
             if source_type in {"forum", "community", "search"}:
+                excluded += 1
+                continue
+            quality_status = str(item.get("content_quality_status") or "title_only").strip().lower()
+            if quality_status not in quality_counts:
+                quality_status = "title_only"
+            quality_counts[quality_status] += 1
+            if quality_status == "boilerplate_rejected":
                 excluded += 1
                 continue
             published = _parse_time(
@@ -459,6 +625,8 @@ class RealtimeDecisionService:
             if age_days < -1 or age_days > max_days:
                 excluded += 1
                 continue
+            event_time = _parse_time(item.get("event_time"))
+            is_future_event = bool(event_time and event_time > now)
             title = str(item.get("title") or item.get("summary") or "").strip()
             source = str(item.get("source") or item.get("source_name") or "").strip()
             key = str(item.get("event_key") or item.get("document_id") or f"{source}|{published.date()}|{title[:80]}")
@@ -476,40 +644,86 @@ class RealtimeDecisionService:
                 "credibility_score": _number(item.get("credibility_score")) or 50.0,
                 "impact_score": _number(item.get("impact_score")) or 50.0,
                 "source_type": source_type,
+                "content_quality_status": quality_status,
+                "event_time": event_time.isoformat(timespec="seconds") if event_time else None,
+                "future_event": is_future_event,
+                "score_included": not is_future_event,
+                "duplicate_count": int(_number(item.get("duplicate_count")) or 1),
             }
             unique[key] = normalized
             recent.append(normalized)
+            if is_future_event:
+                future_information_excluded += 1
         recent.sort(key=lambda item: item["published_at"], reverse=True)
-        scored = [item for item in recent if item.get("sentiment_score") is not None]
+        scored = [
+            item for item in recent
+            if item.get("sentiment_score") is not None and item.get("score_included")
+        ]
+        content_weights = {"full_text": 1.0, "structured_excerpt": 0.72, "title_only": 0.35}
+        scoreable_count = len(scored)
+        quality_coverage = (
+            sum(content_weights.get(str(item.get("content_quality_status")), 0.0) for item in scored)
+            / scoreable_count
+            if scoreable_count
+            else 0.0
+        )
         if scored:
             weighted = []
             for item in scored:
-                weight = max(0.25, min(1.5, (item["credibility_score"] / 100.0) * 0.8 + (item["impact_score"] / 100.0) * 0.7))
+                evidence_weight = content_weights.get(str(item.get("content_quality_status")), 0.0)
+                weight = evidence_weight * max(
+                    0.25,
+                    min(1.5, (item["credibility_score"] / 100.0) * 0.8 + (item["impact_score"] / 100.0) * 0.7),
+                )
                 weighted.append((float(item["sentiment_score"]), weight))
-            score = sum(value * weight for value, weight in weighted) / (sum(weight for _, weight in weighted) or 1.0)
+            evidence_score = sum(value * weight for value, weight in weighted) / (sum(weight for _, weight in weighted) or 1.0)
+            score = 50.0 + (evidence_score - 50.0) * quality_coverage
         else:
-            quality = data.get("data_quality") or (data.get("news") or {}).get("data_quality") or {}
-            current_count = int(_number(quality.get("current_scoring_count")) or 0)
-            snapshot_score = self._first_score(data)
-            score = snapshot_score if current_count > 0 and snapshot_score is not None else 50.0
+            score = None
+        future_calendar = data.get("future_event_calendar")
+        if not isinstance(future_calendar, dict):
+            source_items = [dict(item) for _, item in items]
+            future_calendar = self.information_event_calendar.build(
+                symbol,
+                str(data.get("name") or profile.get("name") or symbol),
+                items=source_items,
+                now=now,
+            )
+        future_events = [dict(row) for row in (future_calendar.get("events") or []) if isinstance(row, dict)]
+        confirmed_high_attention = [
+            row for row in future_events
+            if row.get("confirmation_status") == "公开来源已确认"
+            and row.get("attention_level") == "高"
+            and 0 <= int(_number(row.get("days_until")) or 0) <= 7
+        ]
+        cache_stale = bool(cache_status.get("stale"))
+        auto_buy_eligible = bool(scoreable_count and quality_coverage >= 0.35 and not cache_stale)
         high_conf_negative = [
             item for item in scored
             if float(item.get("sentiment_score") or 50) <= 32 and float(item.get("credibility_score") or 0) >= 80
         ]
         latest = recent[0]["published_at"] if recent else None
         return {
-            "score": round(_clamp(score), 2),
+            "score": round(_clamp(score), 2) if score is not None else None,
             "has_recent": bool(recent),
             "recent_count": len(recent),
+            "scoreable_count": scoreable_count,
             "excluded_count": excluded,
             "global_unmapped_excluded": global_unmapped_excluded,
+            "future_information_excluded": future_information_excluded,
             "latest_published_at": latest,
             "snapshot_id": data.get("snapshot_id") or cache_status.get("snapshot_id"),
             "snapshot_at": data.get("created_at") or cache_status.get("created_at"),
             "cache_status": cache_status.get("status") or "miss",
-            "stale": bool(cache_status.get("stale")),
-            "source": "近期可核验信息快照" if recent else "近期可核验信息缺失/中性",
+            "stale": cache_stale,
+            "source": "近期可核验信息快照" if scoreable_count else "近期可核验信息缺失/不进入交易分",
             "negative_veto": bool(high_conf_negative),
+            "quality_counts": quality_counts,
+            "quality_coverage": round(quality_coverage, 4),
+            "quality_status": "可用于自动交易" if auto_buy_eligible else "仅观察/需刷新",
+            "auto_buy_eligible": auto_buy_eligible,
+            "future_event_calendar": future_calendar,
+            "confirmed_high_attention_events": confirmed_high_attention,
             "items": recent[:6],
         }
 

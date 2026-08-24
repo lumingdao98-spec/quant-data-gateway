@@ -62,6 +62,100 @@ def test_v322_readiness_and_market_rules_endpoints():
     assert rules["resolved"]["profile_id"] == "SZSE_CHINEXT"
 
 
+def test_v326_decision_framework_explains_dimensions_and_market_context():
+    client = TestClient(api.app)
+
+    framework = client.get("/api/decision-framework").json()
+    symbol = client.get("/api/decision-framework/300750?mode=realtime_paper&strategy_family=short_term").json()
+
+    assert framework["ok"] is True
+    assert [row["label"] for row in framework["data"]["dimensions"]] == ["基本面", "技术面", "信息面", "资金面"]
+    assert symbol["ok"] is True
+    assert "market_context" in symbol["data"]
+    assert "execution_score_policy" in symbol["data"]
+    assert "provenance_freshness" in symbol["data"]
+
+
+def test_decision_framework_reuses_exact_persisted_dimension_snapshot(monkeypatch):
+    now = datetime.now().isoformat(timespec="seconds")
+    persisted = {
+        "provenance_id": "exact-v326",
+        "symbol": "300750",
+        "mode": "realtime_paper",
+        "decision_time": now,
+        "final_trade_score": 66.5,
+        "dimension_readiness": {
+            "mode": "realtime_paper",
+            "strategy_family": "short_term",
+            "dimensions": [
+                {"key": "technical", "label": "技术面", "ready": True, "score": 71.0},
+                {"key": "information", "label": "信息面", "ready": False, "score": None},
+            ],
+            "auto_entry_eligible": False,
+            "entry_block_reasons": ["信息面未就绪：证据质量不足"],
+        },
+        "excluded_by_readiness": ["information"],
+    }
+    monkeypatch.setattr(api, "score_provenance_memory_v323", {"exact-v326": persisted})
+    monkeypatch.setattr(api.trading_store_v323, "list", lambda *args, **kwargs: [])
+
+    payload = TestClient(api.app).get(
+        "/api/decision-framework/300750?mode=realtime_paper&strategy_family=short_term"
+    ).json()["data"]
+
+    assert payload["snapshot_reused"] is True
+    assert payload["auto_entry_eligible"] is False
+    assert payload["dimensions"] == persisted["dimension_readiness"]["dimensions"]
+    assert payload["excluded_by_readiness"] == ["information"]
+    assert payload["provenance_freshness"]["recent_for_live"] is True
+
+
+def test_invalid_information_text_is_missing_instead_of_neutral_score():
+    profile = api._auto_information_profile(
+        {
+            "information_score": "抓取失败",
+            "info": {
+                "score_eligible": False,
+                "data_quality": {"current_scoring_count": 0, "content_quality_coverage": 0},
+            },
+        }
+    )
+
+    assert profile["score"] is None
+    assert profile["missing"] is True
+    assert profile["trade_eligible"] is False
+
+
+def test_decision_framework_blocks_expired_snapshot_for_current_trading(monkeypatch):
+    persisted = {
+        "provenance_id": "expired-v326",
+        "symbol": "300750",
+        "mode": "realtime_paper",
+        "decision_time": "2025-01-01T10:00:00",
+        "final_trade_score": 72.0,
+        "dimension_readiness": {
+            "mode": "realtime_paper",
+            "strategy_family": "short_term",
+            "dimensions": [{"key": "technical", "ready": True, "score": 72.0}],
+            "auto_entry_eligible": True,
+            "alert_eligible": True,
+            "entry_block_reasons": [],
+        },
+    }
+    monkeypatch.setattr(api, "score_provenance_memory_v323", {"expired-v326": persisted})
+    monkeypatch.setattr(api.trading_store_v323, "list", lambda *args, **kwargs: [])
+
+    payload = TestClient(api.app).get(
+        "/api/decision-framework/300750?mode=realtime_paper&strategy_family=short_term"
+    ).json()["data"]
+
+    assert payload["snapshot_auto_entry_eligible"] is True
+    assert payload["auto_entry_eligible"] is False
+    assert payload["alert_eligible"] is False
+    assert payload["effective_entry_gate"] == "blocked_stale_score_provenance"
+    assert any("评分溯源已过期" in reason for reason in payload["entry_block_reasons"])
+
+
 def test_historical_snapshot_endpoint_uses_service_bars(monkeypatch):
     monkeypatch.setattr(api.service, "get_kline", lambda symbol, *a, **k: _bars(symbol, 100))
 

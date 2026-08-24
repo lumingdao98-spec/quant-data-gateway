@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from math import isfinite
 from typing import Any, Literal
+
+from quant_data.scoring.execution_policy import EXECUTION_SCORE_THRESHOLDS, EXECUTION_SCORE_WEIGHTS
 
 
 SignalAction = Literal["buy", "sell", "hold", "reduce", "add", "avoid"]
@@ -41,15 +44,18 @@ class UnifiedSignal:
 
 @dataclass(slots=True)
 class SignalFusionConfig:
-    screening_weight: float = 0.30
-    fundamental_weight: float = 0.28
-    technical_weight: float = 0.34
-    information_weight: float = 0.24
-    fund_flow_weight: float = 0.16
-    market_weight: float = 0.14
-    buy_threshold: float = 62.0
-    sell_threshold: float = 45.0
-    add_threshold: float = 72.0
+    # The screener total already contains several dimensions below. It is an
+    # audit prior, not another vote, otherwise technical/information/fund flow
+    # would be counted twice. It is used only when every component is missing.
+    screening_weight: float = 0.0
+    fundamental_weight: float = EXECUTION_SCORE_WEIGHTS["fundamental"]
+    technical_weight: float = EXECUTION_SCORE_WEIGHTS["technical"]
+    information_weight: float = EXECUTION_SCORE_WEIGHTS["information"]
+    fund_flow_weight: float = EXECUTION_SCORE_WEIGHTS["fund_flow"]
+    market_weight: float = EXECUTION_SCORE_WEIGHTS["market"]
+    buy_threshold: float = EXECUTION_SCORE_THRESHOLDS["buy"]
+    sell_threshold: float = EXECUTION_SCORE_THRESHOLDS["reduce_or_sell"]
+    add_threshold: float = EXECUTION_SCORE_THRESHOLDS["add"]
     max_target_weight: float = 0.25
     weak_market_cut: float = 0.65
 
@@ -83,7 +89,7 @@ class SignalFusionEngine:
         now: datetime | None = None,
     ) -> UnifiedSignal:
         cfg = self.config
-        scores = {
+        raw_scores = {
             "screening": screening_score,
             "fundamental": fundamental_score,
             "technical": technical_score,
@@ -119,11 +125,47 @@ class SignalFusionEngine:
                     if value > 0:
                         weights[key] = value
                     break
-        usable = {k: v for k, v in scores.items() if v is not None}
-        # screening_score is a V3.23 baseline. Older callers remain valid and
-        # are not marked incomplete only because they do not provide it.
-        missing = list(missing_data or []) + [k for k in scores if k != "screening" and scores[k] is None]
-        total_w = sum(weights[k] for k in usable) or 1.0
+        scores: dict[str, float | None] = {}
+        invalid_dimensions: list[dict[str, Any]] = []
+        for key, value in raw_scores.items():
+            if value is None:
+                scores[key] = None
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                parsed = float("nan")
+            if not isfinite(parsed) or not 0.0 <= parsed <= 100.0:
+                scores[key] = None
+                invalid_dimensions.append({"key": key, "value": value, "reason": "分值必须是0到100之间的有限数"})
+            else:
+                scores[key] = parsed
+
+        invalid_risk_inputs: list[dict[str, Any]] = []
+        try:
+            anomaly_value = float(anomaly_score or 0.0)
+        except (TypeError, ValueError):
+            anomaly_value = float("nan")
+        if not isfinite(anomaly_value) or anomaly_value < 0.0:
+            invalid_risk_inputs.append({"key": "anomaly_score", "value": anomaly_score, "reason": "异常分无效，按高风险处理"})
+            anomaly_value = 80.0
+        anomaly_score = min(anomaly_value, 100.0)
+
+        component_keys = ("fundamental", "technical", "information", "fund_flow", "market")
+        component_usable = {key: scores[key] for key in component_keys if scores[key] is not None}
+        screening_fallback = not component_usable and scores["screening"] is not None
+        usable = component_usable or ({"screening": scores["screening"]} if screening_fallback else {})
+        # screening_score remains in the provenance for comparison, but is not
+        # allowed to double count its own component scores.
+        audit_only_dimensions = ["screening"] if scores["screening"] is not None and not screening_fallback else []
+        missing = list(missing_data or []) + [key for key in component_keys if scores[key] is None]
+        missing.extend(f"invalid_{row['key']}_score" for row in invalid_dimensions)
+        total_w = sum(max(0.0, weights[k]) for k in usable)
+        if usable and total_w <= 0:
+            total_w = float(len(usable))
+            effective_weights = {key: 1.0 for key in usable}
+        else:
+            effective_weights = {key: max(0.0, weights[key]) for key in usable}
         contributions = []
         labels = {
             "screening": "筛选底座",
@@ -134,7 +176,7 @@ class SignalFusionEngine:
             "market": "大盘环境",
         }
         for key, value in usable.items():
-            normalized_weight = weights[key] / total_w
+            normalized_weight = effective_weights[key] / (total_w or 1.0)
             contributions.append(
                 {
                     "key": key,
@@ -150,15 +192,28 @@ class SignalFusionEngine:
         final_score = score_before_risk - anomaly_deduction
         final_score = max(0.0, min(100.0, final_score))
         score_breakdown = {
-            "formula": "综合交易分 = 各可用维度按有效权重归一化后的贡献之和 - 异常风险扣分",
+            "formula": "综合交易分 = 基本面/实时技术/近期信息/资金面/大盘环境按有效权重归一化 - 异常风险扣分；筛选总分只作审计底座，不重复计票",
             "timing_formula": "实时择时分 = 日K结构55% + 当日分时45%",
             "contributions": contributions,
             "available_weight_total": round(total_w if usable else 0.0, 6),
+            "normalized_weight_total": round(sum(effective_weights[key] / (total_w or 1.0) for key in usable), 6),
             "score_before_risk": round(score_before_risk, 4),
             "anomaly_score": round(float(anomaly_score or 0.0), 4),
             "anomaly_deduction": round(anomaly_deduction, 4),
             "final_score": round(final_score, 4),
-            "missing_dimensions": [labels[key] for key, value in scores.items() if value is None],
+            "missing_dimensions": [labels[key] for key in component_keys if scores[key] is None],
+            "invalid_dimensions": invalid_dimensions,
+            "invalid_risk_inputs": invalid_risk_inputs,
+            "audit_only_dimensions": [labels[key] for key in audit_only_dimensions],
+            "screening_score_audit": scores.get("screening"),
+            "screening_fallback_used": screening_fallback,
+            "weight_policy": "缺失或无效分项不参与；剩余有效分项重新归一化到100%。筛选总分仅在所有分项都缺失时作低置信兜底。",
+            "configured_weights": {key: round(float(weights[key]), 6) for key in component_keys},
+            "thresholds": {
+                "buy": cfg.buy_threshold,
+                "add": cfg.add_threshold,
+                "reduce_or_sell": cfg.sell_threshold,
+            },
         }
         action: SignalAction = "hold"
         reason_parts: list[str] = []
@@ -194,8 +249,10 @@ class SignalFusionEngine:
             base_weight = 0.0
         elif action == "reduce":
             base_weight = min(base_weight, cfg.max_target_weight * 0.35)
-        expected_dims = (5.0 if fund_flow_score is not None else 4.0) + (1.0 if screening_score is not None else 0.0)
-        confidence = min(1.0, max(0.0, len(usable) / expected_dims * (1.0 - min(anomaly_score, 80) / 120.0)))
+        coverage = len(component_usable) / float(len(component_keys))
+        confidence = min(1.0, max(0.0, coverage * (1.0 - min(anomaly_score, 80) / 120.0)))
+        if screening_fallback:
+            confidence = min(confidence or 0.25, 0.25)
         risk_level = "low" if anomaly_score < 20 and final_score >= 65 else "high" if anomaly_score >= 45 or final_score < 45 else "medium"
         freshness = data_freshness or {}
         requires_confirm = bool(missing or freshness.get("action") in {"reduce", "refresh_required"} or anomaly_action == "manual_confirm")
