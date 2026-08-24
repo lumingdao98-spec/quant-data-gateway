@@ -106,7 +106,12 @@ class MarketRegimeService:
             "score_definition": "宽度分不是大盘总分；正式大盘分还需要上证、深成指、创业板、沪深300等指数趋势确认。",
         }
 
-    def analyze_market(self, quotes: list[Quote], index_bars: dict[str, list[Bar]] | None = None) -> dict:
+    def analyze_market(
+        self,
+        quotes: list[Quote],
+        index_bars: dict[str, list[Bar]] | None = None,
+        global_context: dict | None = None,
+    ) -> dict:
         breadth = self.analyze_quotes(quotes)
         index_items = []
         total_weight = 0.0
@@ -146,13 +151,40 @@ class MarketRegimeService:
                     "reason": "有效涨跌幅样本少于20只，宽度分只供诊断，不进入大盘执行分",
                 }
             )
-        effective_total = sum(float(row["configured_weight"]) for row in components)
-        for row in components:
-            row["normalized_weight"] = float(row["configured_weight"]) / effective_total if effective_total > 0 else 0.0
-            row["contribution"] = float(row["score"]) * float(row["normalized_weight"])
-        score = sum(float(row["contribution"]) for row in components) if components else 50.0
         evidence_units = len(index_items) + (1 if breadth_valid else 0)
         valid_for_score = evidence_units >= 2
+        global_context = dict(global_context or {})
+        global_score = _n(global_context.get("score"), -1.0)
+        global_valid = bool(global_context.get("valid_for_score")) and 0 <= global_score <= 100
+        global_used = bool(global_valid and valid_for_score and components)
+        effective_total = sum(float(row["configured_weight"]) for row in components)
+        domestic_scale = 0.85 if global_used else 1.0
+        for row in components:
+            domestic_weight = float(row["configured_weight"]) / effective_total if effective_total > 0 else 0.0
+            row["normalized_weight"] = domestic_weight * domestic_scale
+            row["contribution"] = float(row["score"]) * float(row["normalized_weight"])
+        if global_used:
+            components.append(
+                {
+                    "key": "global_technology_context",
+                    "label": "全球科技时段情绪",
+                    "score": global_score,
+                    "configured_weight": 0.15,
+                    "normalized_weight": 0.15,
+                    "contribution": global_score * 0.15,
+                }
+            )
+        elif global_context:
+            excluded_components.append(
+                {
+                    "key": "global_technology_context",
+                    "label": "全球科技时段情绪",
+                    "raw_score": global_context.get("score"),
+                    "reason": "；".join(global_context.get("missing_reasons") or [])
+                    or ("A股本地市场证据不足" if not valid_for_score else "全球科技证据不足或过期"),
+                }
+            )
+        score = sum(float(row["contribution"]) for row in components) if components else 50.0
         quality_status = (
             "available"
             if len(index_items) >= 3 and breadth_valid
@@ -168,11 +200,15 @@ class MarketRegimeService:
             else "low"
         )
         if index_score is not None and breadth_valid:
-            basis = "大盘总分=70%指数趋势 + 30%市场宽度；指数缺失按可用指数权重重算。"
+            basis = "A股本地分=70%指数趋势 + 30%市场宽度；指数缺失按可用指数权重重算。"
         elif index_score is not None:
             basis = "市场宽度样本无效，本次只使用可用指数趋势并归一化；不会把中性50分混入执行分。"
         else:
             basis = "未取到指数K线，本次仅用市场宽度兜底；样本不足时不会把大盘分顶满。"
+        if global_used:
+            basis += " 全球科技时段情绪以15%上限并入，本地环境占85%；相关指数已去重。"
+        elif global_context:
+            basis += " 全球科技证据不足、过期或本地证据未就绪，本轮不并入。"
         score = round(_clamp(score, 5, 95), 2)
         return {
             **breadth,
@@ -183,6 +219,10 @@ class MarketRegimeService:
             "indices": index_items,
             "index_count": len(index_items),
             "index_weight_coverage": round(total_weight, 4),
+            "global_context": global_context,
+            "global_score": round(global_score, 2) if global_score >= 0 else None,
+            "global_score_used": global_used,
+            "global_weight": 0.15 if global_used else 0.0,
             "components": [
                 {
                     **row,
@@ -200,7 +240,7 @@ class MarketRegimeService:
             + ([] if total_weight > 0 else ["指数K线不足，当前没有指数趋势确认"])
             + ([] if valid_for_score else ["大盘评分至少需要两类独立证据（指数趋势或有效市场宽度）"]),
             "basis": basis,
-            "score_definition": "大盘环境分：50中性；60以上偏暖；72以上强势；45以下偏弱。它只影响筛选排序小幅调分，不构成交易信号。",
+            "score_definition": "大盘环境分：50中性；60以上偏暖；72以上强势；45以下偏弱。A股本地证据是主体，全球科技情绪最多占15%，不构成独立交易信号。",
         }
 
     def _score_index(self, spec: MarketIndexSpec, bars: list[Bar]) -> dict | None:

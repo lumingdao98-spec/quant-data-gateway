@@ -34,6 +34,7 @@ from quant_data.services.source_registry import SourceRegistryService
 from quant_data.services.technical_factor_registry import TechnicalFactorRegistryService
 from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
+from quant_data.services.global_market_sentiment_service import GlobalMarketSentimentService
 from quant_data.services.market_ai_service import MarketAiService
 from quant_data.services.realtime_decision_service import RealtimeDecisionService
 from quant_data.services.decision_dimension_service import DecisionDimensionService
@@ -133,7 +134,14 @@ sector_mainline_service = SectorMainlineService()
 market_behavior_engine = MarketBehaviorEngine()
 orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
-realtime_decision_service = RealtimeDecisionService(service, cache_state_service, market_regime_service)
+global_market_sentiment_service = GlobalMarketSentimentService(cache_state_service, calendar=market_calendar)
+screener_service.global_market_sentiment_service = global_market_sentiment_service
+realtime_decision_service = RealtimeDecisionService(
+    service,
+    cache_state_service,
+    market_regime_service,
+    global_market_sentiment=global_market_sentiment_service,
+)
 decision_dimension_service = DecisionDimensionService()
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
 technical_factor_engine = TechnicalFactorEngine()
@@ -317,7 +325,7 @@ def _render_chinese_api_docs() -> str:
             ],
         ),
         (
-            "自动交易 V3.23",
+            "自动交易 V3.27",
             [
                 ("GET", "/auto-trading", "自动交易总控台入口，汇总筛选、详情、回测、实时模拟、真实交易、记录和数据中心。"),
                 ("GET", "/api/auto-trading/config", "读取当前自动交易配置，包含股票池、策略组合、仓位模型、止盈止损、最大回撤和事件监控。"),
@@ -348,6 +356,7 @@ def _render_chinese_api_docs() -> str:
             [
                 ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
                 ("GET", "/api/market/regime", "大盘环境分析，可用于评分里的市场情绪权重。"),
+                ("GET", "/api/market/global-sentiment", "全球科技/风险情绪：按各市场交易时段区分实时、期货和前收盘，并按相关资产族去重，避免纳指/费城半导体/美股宽基重复放大。"),
                 ("GET", "/api/market/sectors/mainline", "主线板块、公开资金净流、板块强度和持续性。"),
                 ("GET", "/api/decision-framework", "查看技术面、信息面、资金面、大盘环境在回测/模拟/实盘/提醒中的统一使用规则。"),
                 ("GET", "/api/decision-framework/{symbol}", "查看单只标的本轮哪些分项有效、实际来源、PIT状态、自动入场阻断原因和执行分。"),
@@ -426,6 +435,7 @@ def chinese_api_docs() -> str:
             ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
             ("GET", "/api/wordsource/report/{symbol}", "信息面/技术面/资金面映射报告。"),
             ("GET", "/api/market/regime", "大盘环境分析，用于评分中的市场情绪权重。"),
+            ("GET", "/api/market/global-sentiment", "全球科技/风险情绪，按交易时段和相关性去重后给出可追溯背景分。"),
             ("GET", "/api/source-knowledge", "数据源知识库和覆盖说明。"),
         ]),
         ("系统与缓存", [
@@ -998,12 +1008,18 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
     q = None
     cached = cache_state_service.get_kline_cache(key)
     session = _market_session("CN")
+    cached_bars = list((cached.data or {}).get("bars") or (cached.data or {}).get("data") or [])
+    # A previous upstream timeout may have persisted only a tiny fallback slice
+    # under the same request key.  Do not let that slice permanently mask a
+    # later full-history response.  Small explicit requests remain cache hits.
+    min_cached_bars = min(max(1, int(limit or 260)), 30 if frame == "1d" else 12)
+    cache_is_complete = len(cached_bars) >= min_cached_bars
     # UI/chart pages pass force=true during active sessions. Keep the API-level
     # cache contract predictable for background callers and tests: force=false
     # may hit fresh cache, stale cache is used only when the market is closed
     # or the live source fails.
     effective_force = bool(force)
-    if cached.data and not effective_force and not cached.cache_status.get("stale"):
+    if cached.data and cache_is_complete and not effective_force and not cached.cache_status.get("stale"):
         payload = dict(cached.data)
         payload.update({
             "ok": True,
@@ -1012,7 +1028,7 @@ def _safe_kline_payload(symbol: str, frame: str = "1d", limit: int = 260, adjust
             "fallback_chain": list(dict.fromkeys((payload.get("fallback_chain") or []) + ["cache_state_fresh_hit"])),
         })
         return payload
-    if cached.data and not effective_force and not session.get("can_refresh"):
+    if cached.data and cache_is_complete and not effective_force and not session.get("can_refresh"):
         payload = dict(cached.data)
         payload.update({
             "ok": True,
@@ -2914,19 +2930,35 @@ def wordsource_candidates(max_pages: int = 2, page_size: int = 100, max_items: i
         block = service.get_market_snapshot(page=page, page_size=max(20, min(int(page_size or 100), 500)))
         quotes.extend(block or [])
     pool = candidate_pool_service.build(quotes, max_items=max(20, min(int(max_items or 120), 300)))
-    regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
+    global_context = global_market_sentiment_service.snapshot(allow_network=False)
+    regime = market_regime_service.analyze_market(
+        quotes,
+        index_bars=_market_index_bars(),
+        global_context=global_context,
+    )
     return {"ok": True, "market_regime": regime, "candidate_pool": pool}
 
 
+@app.get("/api/market/global-sentiment")
+def market_global_sentiment(force: bool = False) -> dict:
+    data = global_market_sentiment_service.snapshot(force=force, allow_network=True)
+    return {"ok": True, "data": data, "global_market_sentiment": data}
+
+
 @app.get("/api/market/regime")
-def market_regime(max_pages: int = 2, page_size: int = 100) -> dict:
+def market_regime(max_pages: int = 2, page_size: int = 100, force_global: bool = False) -> dict:
     quotes = []
     for page in range(1, max(1, min(int(max_pages or 2), 10)) + 1):
         try:
             quotes.extend(service.get_market_snapshot(page=page, page_size=max(20, min(int(page_size or 100), 500))) or [])
         except Exception:
             break
-    regime = market_regime_service.analyze_market(quotes, index_bars=_market_index_bars())
+    global_context = global_market_sentiment_service.snapshot(force=force_global, allow_network=True)
+    regime = market_regime_service.analyze_market(
+        quotes,
+        index_bars=_market_index_bars(),
+        global_context=global_context,
+    )
     return {"ok": True, "data": regime, "market_regime": regime, "count": len(quotes)}
 
 

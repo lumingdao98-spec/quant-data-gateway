@@ -39,6 +39,15 @@ class _InfoCache:
         )
 
 
+class _GlobalContext:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def snapshot(self, **kwargs):
+        assert kwargs.get("allow_network") is False
+        return dict(self.payload)
+
+
 def _bars():
     now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     rows = []
@@ -264,6 +273,37 @@ def test_missing_orderbook_is_explicit_and_never_fabricated():
     assert result["orderbook_snapshot"]["status"] == "missing"
     assert result["orderbook_snapshot"]["bid1"] is None
     assert "orderbook_missing" in result["missing_data"]
+
+
+def test_realtime_market_score_uses_valid_global_context_with_a_fifteen_percent_cap():
+    cache = _Cache(bars=_bars(), points=_points(12.0), quotes={"600438": _quote()})
+    service = RealtimeDecisionService(
+        SimpleNamespace(cache=cache),
+        _InfoCache(),
+        MarketRegimeService(),
+        global_market_sentiment=_GlobalContext({
+            "score": 70,
+            "valid_for_score": True,
+            "quality_status": "available",
+            "selected_evidence": [{"name": "恒生科技指数", "session_phase": "实时交易"}],
+            "missing_reasons": [],
+        }),
+    )
+
+    result = service.hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={
+            "final_score": 60,
+            "market_score": 50,
+            "market_quality_status": "available",
+        },
+        symbols=["600438"],
+    )
+
+    assert result["market_score"] == 53.0
+    assert result["market_regime"]["global_score_used"] is True
+    assert result["market_regime"]["global_weight"] == 0.15
+    assert result["market_regime"]["components"][-1]["label"] == "全球科技时段情绪"
 
 
 def test_fund_flow_score_is_missing_without_traceable_volume_or_orderbook_evidence():

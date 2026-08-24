@@ -248,3 +248,29 @@ def test_future_calendar_separates_confirmed_and_rule_dates():
     assert any(row["event_type"] in {"derivatives_settlement", "etf_option_expiry", "reporting_window"} for row in result["events"])
     assert sum(row["event_type"] == "reporting_window" for row in result["events"]) >= 2
     assert all(row["impact_direction"] == "结果待确认" for row in result["events"])
+
+
+def test_future_calendar_classifies_macro_events_without_predicting_direction():
+    result = InformationEventCalendarService().build(
+        "300750",
+        "宁德时代",
+        global_items=[{
+            "title": "美联储公布利率决议并召开新闻发布会",
+            "event_type": "market_macro",
+            "event_time": "2026-08-26T02:00:00",
+            "source": "美联储官网日历",
+            "source_type": "announcement",
+            "credibility_score": 100,
+            "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        }],
+        now=datetime(2026, 8, 24, 10, 0),
+        horizon_days=30,
+    )
+
+    event = next(row for row in result["events"] if row["event_type"] == "central_bank_decision")
+    assert result["score_included"] is False
+    assert event["impact_direction"] == "结果待确认"
+    assert event["attention_level"] == "高"
+    assert event["event_scope"] == "全球/市场环境"
+    assert "全球流动性" in event["transmission_channels"]
+    assert "暂停" in event["risk_gate"] or "人工确认" in event["risk_gate"]

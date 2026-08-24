@@ -18,6 +18,7 @@ DEFAULT_TTLS = {
     "quote_cache": 30,
     "technical_factor_cache": 6 * 60 * 60,
     "global_news_cache": 45 * 60,
+    "global_market_sentiment": 45,
     "sector_mainline_cache": 2 * 60,
     "sector_mainline_daily": 45 * 24 * 60 * 60,
     "sector_mainline_intraday": 14 * 24 * 60 * 60,

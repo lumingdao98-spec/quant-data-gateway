@@ -18,6 +18,20 @@ EVENT_TYPE_NAMES = {
     "contract_order": "合同/订单事项",
     "investment_project": "项目投产/投资事项",
     "market_macro": "宏观/市场事件",
+    "macro_release": "宏观数据公布",
+    "central_bank_decision": "央行利率/政策会议",
+    "employment_release": "就业/非农数据公布",
+    "lockup_expiry": "限售股解禁",
+    "index_rebalance": "指数调样/再平衡",
+    "shareholder_reduction": "股东减持计划",
+    "buyback": "股份回购计划",
+    "placement": "定增/配股/再融资",
+    "commodity_supply": "大宗商品供需事件",
+    "fx_rate_shock": "汇率/利率冲击观察",
+    "geopolitical": "地缘政治事件",
+    "export_control": "出口管制/关税/制裁",
+    "shipping_logistics": "航运/物流扰动",
+    "cybersecurity": "网络安全/数据风险",
     "derivatives_settlement": "股指衍生品交割观察日",
     "etf_option_expiry": "ETF期权行权观察日",
     "reporting_window": "定期报告集中披露窗口",
@@ -34,10 +48,44 @@ EVENT_IMPACT_WINDOWS = {
     "contract_order": "生效前后3日",
     "investment_project": "投产/落地前后5日",
     "market_macro": "公布前1日至公布后1日",
+    "macro_release": "公布前1日至公布后1日",
+    "central_bank_decision": "会议前2日至声明后1日",
+    "employment_release": "公布前1日至公布后1日",
+    "lockup_expiry": "解禁前5日至后3日",
+    "index_rebalance": "公告日至生效后2日",
+    "shareholder_reduction": "计划公告日至执行结束",
+    "buyback": "计划公告日至执行结束",
+    "placement": "预案公告至发行结果披露",
+    "commodity_supply": "事项前后3个交易日",
+    "fx_rate_shock": "公布/异动前后2个交易日",
+    "geopolitical": "事件发展期持续观察",
+    "export_control": "公布日至落地后5个交易日",
+    "shipping_logistics": "扰动发生至运价/供给恢复",
+    "cybersecurity": "披露日至处置结果确认",
     "derivatives_settlement": "当周三至下周一",
     "etf_option_expiry": "行权日前2日至后1日",
     "reporting_window": "窗口期内持续观察",
     "general_news": "事件日前后2日",
+}
+
+EVENT_TRANSMISSION_CHANNELS = {
+    "macro_release": ["利率预期", "汇率", "风险偏好", "行业景气预期"],
+    "central_bank_decision": ["无风险利率", "美元/人民币汇率", "全球流动性", "成长股估值"],
+    "employment_release": ["海外利率预期", "美元指数", "全球科技估值", "外资风险偏好"],
+    "lockup_expiry": ["潜在供给", "流动性", "个股波动"],
+    "index_rebalance": ["被动资金调仓", "尾盘成交", "短期流动性"],
+    "shareholder_reduction": ["潜在供给", "治理预期", "个股风险偏好"],
+    "buyback": ["公司资本动作", "潜在需求", "治理预期"],
+    "placement": ["股本摊薄", "融资用途", "潜在供给"],
+    "commodity_supply": ["原材料成本", "产品价格", "产业链利润再分配"],
+    "fx_rate_shock": ["外资流向", "进口成本", "出口竞争力", "估值折现率"],
+    "geopolitical": ["能源/运价", "供应链", "避险情绪", "风险溢价"],
+    "export_control": ["供应链可得性", "国产替代", "订单预期", "风险溢价"],
+    "shipping_logistics": ["运价", "交付周期", "库存", "进出口成本"],
+    "cybersecurity": ["运营连续性", "监管风险", "修复成本", "声誉风险"],
+    "derivatives_settlement": ["期现基差", "套保/移仓", "尾盘成交", "短期波动"],
+    "etf_option_expiry": ["期权行权", "做市对冲", "ETF申赎", "尾盘流动性"],
+    "reporting_window": ["业绩预期", "估值修正", "行业比较", "个股波动"],
 }
 
 
@@ -95,7 +143,8 @@ class InformationEventCalendarService:
         delta_days = (event_dt.date() - current.date()).days
         if delta_days < 0 or delta_days > horizon_days:
             return None
-        event_type = str(item.get("event_type") or "general_news")
+        title = str(item.get("title") or "未来事项")
+        event_type = self._normalize_event_type(str(item.get("event_type") or "general_news"), title)
         source = str(item.get("source") or item.get("source_name") or "未知来源")
         source_ref = str(item.get("attachment_url") or item.get("url") or item.get("source_ref") or "")
         credibility = float(item.get("credibility_score") or 0)
@@ -121,6 +170,9 @@ class InformationEventCalendarService:
             "impact_direction": "结果待确认",
             "attention_level": attention_level,
             "monitoring_action": self._monitoring_action(event_type, delta_days),
+            "transmission_channels": EVENT_TRANSMISSION_CHANNELS.get(event_type, []),
+            "event_scope": "全球/市场环境" if event_type in {"macro_release", "central_bank_decision", "employment_release", "commodity_supply", "fx_rate_shock", "geopolitical", "export_control", "shipping_logistics"} else "个股/公司事项",
+            "risk_gate": self._risk_gate(event_type, delta_days),
             "auto_trade_rule": "事件结果公布前不因日历事件自动买入；临近高关注事件时需最新数据和人工确认。",
             "score_included": False,
             "evidence_kind": "公开信息日期",
@@ -185,6 +237,9 @@ class InformationEventCalendarService:
             "impact_direction": "结果待确认",
             "attention_level": self._attention_level(event_type, delta_days),
             "monitoring_action": self._monitoring_action(event_type, delta_days),
+            "transmission_channels": EVENT_TRANSMISSION_CHANNELS.get(event_type, []),
+            "event_scope": "全市场制度事件",
+            "risk_gate": self._risk_gate(event_type, delta_days),
             "auto_trade_rule": "不得依据推算日期自动买卖；交易前必须再次核对交易所正式日历。",
             "score_included": False,
             "evidence_kind": "制度规则推算",
@@ -216,10 +271,17 @@ class InformationEventCalendarService:
         return value[:80]
 
     def _attention_level(self, event_type: str, days_until: int) -> str:
-        high_types = {"financial_report", "regulatory", "holder_change", "derivatives_settlement", "etf_option_expiry"}
+        high_types = {
+            "financial_report", "regulatory", "holder_change", "derivatives_settlement", "etf_option_expiry",
+            "central_bank_decision", "employment_release", "lockup_expiry", "index_rebalance",
+            "shareholder_reduction", "geopolitical", "export_control", "cybersecurity",
+        }
         if days_until <= 3 and event_type in high_types:
             return "高"
-        if days_until <= 7 or event_type in {"shareholder_meeting", "market_macro", "reporting_window"}:
+        if days_until <= 7 or event_type in {
+            "shareholder_meeting", "market_macro", "macro_release", "commodity_supply",
+            "fx_rate_shock", "shipping_logistics", "reporting_window",
+        }:
             return "中"
         return "低"
 
@@ -231,6 +293,43 @@ class InformationEventCalendarService:
         if event_type == "reporting_window":
             return "等待个股预约披露公告，不因窗口本身调整方向"
         return "加入观察清单，临近7日再提高检查频率"
+
+    def _risk_gate(self, event_type: str, days_until: int) -> str:
+        if days_until <= 1 and event_type in {
+            "financial_report", "central_bank_decision", "employment_release", "lockup_expiry",
+            "shareholder_reduction", "geopolitical", "export_control", "cybersecurity",
+        }:
+            return "自动新增仓位暂停，等待结果/公告并人工复核"
+        if days_until <= 3:
+            return "提高数据新鲜度要求；放大仓位或实盘委托需人工确认"
+        return "仅观察，不预判方向、不直接改变当前评分"
+
+    def _normalize_event_type(self, event_type: str, title: str) -> str:
+        value = str(event_type or "general_news")
+        if value not in {"general_news", "market_macro"}:
+            return value
+        text = str(title or "")
+        keyword_groups = (
+            ("employment_release", ("非农", "就业数据", "失业率", "初请失业金")),
+            ("central_bank_decision", ("FOMC", "美联储", "央行会议", "利率决议", "降息", "加息")),
+            ("macro_release", ("CPI", "PPI", "PMI", "GDP", "通胀数据", "社会融资", "社融", "M2")),
+            ("lockup_expiry", ("限售股解禁", "解禁上市")),
+            ("index_rebalance", ("指数调样", "指数调整", "调入指数", "调出指数", "再平衡")),
+            ("shareholder_reduction", ("减持计划", "拟减持")),
+            ("buyback", ("股份回购", "回购计划")),
+            ("placement", ("定增", "配股", "再融资")),
+            ("export_control", ("出口管制", "加征关税", "制裁清单", "实体清单")),
+            ("geopolitical", ("地缘冲突", "军事冲突", "停火谈判", "战争")),
+            ("shipping_logistics", ("红海航运", "港口罢工", "航运中断", "物流中断")),
+            ("cybersecurity", ("网络攻击", "数据泄露", "网络安全事件")),
+            ("fx_rate_shock", ("美元指数", "人民币汇率", "外汇干预", "汇率异动")),
+            ("commodity_supply", ("原油供应", "天然气供应", "铜供应", "稀土供应", "减产会议")),
+        )
+        lower = text.lower()
+        for candidate, keywords in keyword_groups:
+            if any(keyword.lower() in lower for keyword in keywords):
+                return candidate
+        return value
 
     def _nth_weekday(self, year: int, month: int, weekday: int, n: int) -> date:
         weeks = calendar.monthcalendar(year, month)

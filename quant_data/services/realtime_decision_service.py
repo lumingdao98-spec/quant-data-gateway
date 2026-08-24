@@ -67,11 +67,13 @@ class RealtimeDecisionService:
         cache_state: Any,
         market_regime: Any,
         market_event_factors: MarketEventFactorService | None = None,
+        global_market_sentiment: Any | None = None,
     ) -> None:
         self.market_data = market_data
         self.cache_state = cache_state
         self.market_regime = market_regime
         self.market_event_factors = market_event_factors or MarketEventFactorService(cache_state)
+        self.global_market_sentiment = global_market_sentiment
         self.information_event_calendar = InformationEventCalendarService()
         self.dimension_service = DecisionDimensionService()
 
@@ -269,6 +271,9 @@ class RealtimeDecisionService:
                     "source": market.get("source"),
                     "quality_status": market.get("quality_status") or ("available" if market.get("valid_for_score") else "insufficient_sample"),
                     "stale": bool(market.get("stale")),
+                    "components": list(market.get("components") or []),
+                    "global_score_used": bool(market.get("global_score_used")),
+                    "global_context": dict(market.get("global_context") or {}),
                 },
                 "market_events": "全球要闻/IPO/板块真实缓存",
             }
@@ -310,7 +315,7 @@ class RealtimeDecisionService:
                 "screening_information_source": profile.get("information_source"),
                 "fund_flow_score": out.get("fund_flow_score"),
                 "market_score": out.get("market_score"),
-                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘-异常风险；筛选总分仅审计，不重复计票",
+                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘环境-异常风险；大盘环境以A股为主体，全球科技时段情绪最多占其中15%；筛选总分仅审计，不重复计票",
                 "sources": existing_sources,
                 "recent_information_count": info.get("recent_count", 0),
                 "recent_information_latest": info.get("latest_published_at"),
@@ -341,6 +346,10 @@ class RealtimeDecisionService:
                 f"近期信息：{info.get('recent_count', 0)} 条，历史/无日期排除 {info.get('excluded_count', 0)} 条",
                 f"盘口：{self._display(self._best_price(quote, 'bid'))} / {self._display(self._best_price(quote, 'ask'))}，来源 {quote.get('orderbook_source') or '缺失'}",
                 f"市场事件调整：大盘 {adjusted.get('market_adjustment', 0):+.2f} / 个股信息 {adjusted.get('information_adjustment', 0):+.2f}，证据 {event_context.get('factor_count', 0)} 项",
+                (
+                    f"全球科技时段情绪：{self._display(market.get('global_score'))} 分，"
+                    f"{'按15%上限进入大盘环境' if market.get('global_score_used') else '证据不足/过期，本轮不计分'}"
+                ),
             ]
         )
         evidence.extend(event_context.get("evidence") or [])
@@ -539,12 +548,60 @@ class RealtimeDecisionService:
         } and not baseline_stale
         baseline = _number(profile.get("market_score")) if baseline_allowed else None
         if live_score is not None and baseline is not None:
-            score = baseline * 0.55 + live_score * 0.45
+            domestic_score = baseline * 0.55 + live_score * 0.45
         else:
-            score = live_score if live_score is not None else baseline
+            domestic_score = live_score if live_score is not None else baseline
+        global_context: dict[str, Any] = {}
+        if self.global_market_sentiment is not None:
+            try:
+                global_context = dict(self.global_market_sentiment.snapshot(allow_network=False) or {})
+            except Exception as exc:
+                global_context = {
+                    "valid_for_score": False,
+                    "quality_status": "error",
+                    "missing_reasons": [f"全球科技情绪缓存读取失败：{str(exc)[:120]}"],
+                }
+        global_score = _number(global_context.get("score"))
+        global_used = bool(
+            domestic_score is not None
+            and global_context.get("valid_for_score")
+            and global_score is not None
+        )
+        score = domestic_score * 0.85 + global_score * 0.15 if global_used else domestic_score
+        source_parts = []
+        if live_score is not None:
+            source_parts.append("有效市场宽度")
+        if baseline is not None:
+            source_parts.append("筛选大盘底座")
+        if global_used:
+            source_parts.append("全球科技时段情绪15%")
+        components = []
+        if domestic_score is not None:
+            components.append(
+                {
+                    "key": "a_share_domestic",
+                    "label": "A股本地环境",
+                    "score": round(domestic_score, 2),
+                    "weight": 0.85 if global_used else 1.0,
+                }
+            )
+        if global_used:
+            components.append(
+                {
+                    "key": "global_technology_context",
+                    "label": "全球科技时段情绪",
+                    "score": round(float(global_score), 2),
+                    "weight": 0.15,
+                }
+            )
         return {
             "score": round(score, 2) if score is not None else None,
-            "source": "有效市场宽度+筛选大盘底座" if live_score is not None and baseline is not None else "筛选大盘底座" if baseline is not None else "市场宽度/指数证据不足",
+            "domestic_score": round(domestic_score, 2) if domestic_score is not None else None,
+            "global_score": round(global_score, 2) if global_score is not None else None,
+            "global_score_used": global_used,
+            "global_weight": 0.15 if global_used else 0.0,
+            "global_context": global_context,
+            "source": "+".join(source_parts) if source_parts else "市场宽度/指数证据不足",
             "sample_count": len(quotes),
             "confidence": live.get("confidence") if quotes else "low",
             "regime": live.get("regime") if quotes else "unknown",
@@ -558,9 +615,12 @@ class RealtimeDecisionService:
             "missing_reasons": (
                 list(live.get("missing_reasons") or [])
                 + ([] if baseline_allowed else ["筛选大盘底座缺失、过期或质量不足"])
+                + ([] if global_used or not global_context else list(global_context.get("missing_reasons") or []))
             )
             if score is None
             else [],
+            "global_missing_reasons": [] if global_used else list(global_context.get("missing_reasons") or []),
+            "components": components,
         }
 
     def _recent_information(self, symbol: str, profile: dict[str, Any]) -> dict[str, Any]:

@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 artifacts/
+output/playwright/
 .venv/
 venv/
 env/

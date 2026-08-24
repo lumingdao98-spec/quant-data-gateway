@@ -48,6 +48,14 @@ def _default_sources() -> list[SourceDefinition]:
     return [
         SourceDefinition("eastmoney", "东方财富公开行情/F10", "quote", supports=["quote", "kline", "fundamentals", "orderbook", "sector_flow"]),
         SourceDefinition("sina", "新浪财经公开行情", "quote", supports=["quote", "intraday"]),
+        SourceDefinition(
+            "sina_global_quote",
+            "新浪全球指数与期货行情",
+            "quote",
+            url="https://finance.sina.com.cn/",
+            supports=["global_index", "index_futures", "session_aware_sentiment"],
+            note="按各市场交易时段和数据时间判断新鲜度；相关指数去重后仅作市场环境背景。",
+        ),
         SourceDefinition("cninfo", "巨潮资讯公告", "news", supports=["official_announcement"]),
         SourceDefinition("exchange", "交易所公告", "news", supports=["official_announcement"]),
         SourceDefinition("f10", "公开 F10 数据", "fundamentals", supports=["fundamentals", "industry"]),

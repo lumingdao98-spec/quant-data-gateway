@@ -254,6 +254,7 @@ class ScreenerService:
         self.technical_factor_engine = TechnicalFactorEngine()
         self.market_behavior_engine = MarketBehaviorEngine()
         self.market_regime_service = MarketRegimeService()
+        self.global_market_sentiment_service = None
         self.candidate_pool_service = CandidatePoolService()
         self._candidate_meta_by_symbol: dict[str, dict] = {}
 
@@ -445,7 +446,25 @@ class ScreenerService:
                     index_bars[spec.key] = bars
             except Exception as exc:
                 index_errors.append(f"{spec.name}:{str(exc)[:80]}")
-        regime = dict(self.market_regime_service.analyze_market(regime_quotes, index_bars=index_bars))
+        global_context: dict = {}
+        if self.global_market_sentiment_service is not None:
+            try:
+                global_context = dict(
+                    self.global_market_sentiment_service.snapshot(allow_network=False) or {}
+                )
+            except Exception as exc:
+                global_context = {
+                    "valid_for_score": False,
+                    "quality_status": "error",
+                    "missing_reasons": [f"全球科技情绪缓存读取失败：{str(exc)[:120]}"],
+                }
+        regime = dict(
+            self.market_regime_service.analyze_market(
+                regime_quotes,
+                index_bars=index_bars,
+                global_context=global_context,
+            )
+        )
         regime["sample_scope"] = sample_scope
         regime["sample_count"] = len(regime_quotes)
         if errors:

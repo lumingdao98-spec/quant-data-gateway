@@ -14,7 +14,7 @@ def test_closed_loop_smoke_pages_and_cached_apis(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "cache_state_service", svc)
     svc.save_screener_snapshot("screen-smoke", {"snapshot_id": "screen-smoke", "results": [{"symbol": "300274", "name": "Sungrow", "grade": "B", "total_score": 70}], "summary": {"result_count": 1}})
     svc.save_info_snapshot("info-smoke", "600438", {"snapshot_id": "info-smoke", "symbol": "600438", "items": [{"title": "notice"}], "source_logs": [{"source": "cache", "status": "ok"}], "score_model": {"formula": "x"}}, mode="light")
-    bars = [Bar("300750", "1d", datetime(2026, 5, 1) + timedelta(days=i), 1, 2, 1, 2, 1, 1, source="cache").to_dict() for i in range(8)]
+    bars = [Bar("300750", "1d", datetime(2026, 5, 1) + timedelta(days=i), 1, 2, 1, 2, 1, 1, source="cache").to_dict() for i in range(40)]
     svc.save_kline_cache("300750:1d:qfq", "300750", {"ok": True, "symbol": "300750", "frame": "1d", "adjust": "qfq", "bars": bars, "data": bars, "source": ["cache"], "fallback_chain": ["test"], "errors": [], "behavior_analysis": {}, "kline_markers": []})
 
     client = TestClient(api.app)
