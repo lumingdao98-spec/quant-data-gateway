@@ -30,13 +30,20 @@ class LiveSyncService:
         fetched_at = _now()
         errors: list[str] = []
         health = self._safe_call("health", self.broker.health_check, errors)
-        account = self._safe_call("account", self.broker.get_account, errors)
-        cash = self._safe_call("cash", self.broker.get_cash, errors)
-        positions = self._safe_call("positions", self.broker.get_positions, errors, default=[])
-        orders = self._safe_call("orders", self.broker.get_orders, errors, default=[])
-        trades = self._safe_call("trades", self.broker.get_trades, errors, default=[])
-
         health_data = health.to_dict() if hasattr(health, "to_dict") else dict(health or {})
+        if health_data.get("connected") is True:
+            account = self._safe_call("account", self.broker.get_account, errors)
+            cash = self._safe_call("cash", self.broker.get_cash, errors)
+            positions = self._safe_call("positions", self.broker.get_positions, errors, default=[])
+            orders = self._safe_call("orders", self.broker.get_orders, errors, default=[])
+            trades = self._safe_call("trades", self.broker.get_trades, errors, default=[])
+        else:
+            # Never read account or order data from a disabled, unverified or
+            # disconnected bridge. In particular this prevents an endpoint
+            # that failed provider-identity checks from being treated as a
+            # source of broker truth.
+            account, cash, positions, orders, trades = {}, {}, [], [], []
+
         account_data = account.to_dict() if hasattr(account, "to_dict") else dict(account or {})
         cash_data = cash.to_dict() if hasattr(cash, "to_dict") else dict(cash or {})
         position_rows = [x.to_dict() if hasattr(x, "to_dict") else dict(x or {}) for x in positions or []]

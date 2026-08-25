@@ -6,14 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import re
 from dataclasses import fields, replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from statistics import mean
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import FastAPI, Query, Body
+from fastapi import FastAPI, Query, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -25,6 +25,7 @@ from quant_data.services.market_data_service import MarketDataService
 from quant_data.services.screener_service import ScreenerConfig, ScreenerService
 from quant_data.services.watchlist_service import WatchlistService
 from quant_data.services.score_history_service import ScoreHistoryService
+from quant_data.services.database_management_service import DatabaseManagementService
 from quant_data.services.annotation_service import AnnotationService
 from quant_data.services.strategy_library_service import StrategyLibraryService
 from quant_data.services.technical_indicator_library import TechnicalIndicatorLibraryService
@@ -73,6 +74,7 @@ from quant_data.live_trading_ui import build_live_trading_ui
 from quant_data.trading_records_ui import build_trading_records_ui
 from quant_data.data_center_ui import build_data_center_ui
 from quant_data.auto_trading_workbench_ui import build_auto_trading_workbench_ui
+from quant_data.broker_setup_ui import build_broker_setup_ui
 from quant_data.chart import ChartAnnotationService
 from quant_data.data import (
     EarningsSnapshot,
@@ -88,6 +90,7 @@ from quant_data.data import (
 )
 from quant_data.events import EventBus, EventTriggerEngine
 from quant_data.live import LiveTradingEngine
+from quant_data.notifications import MobileNotificationService
 from quant_data.persistence import TradingStore
 from quant_data.realtime import RealtimePaperEngineV323
 from quant_data.scoring import (
@@ -149,6 +152,7 @@ realtime_decision_service = RealtimeDecisionService(
     fundamental_scoring=fundamental_snapshot_scoring_service,
     individual_capital_evidence=individual_capital_evidence_service,
 )
+from quant_data.trading.broker import BrokerSetupService
 decision_dimension_service = DecisionDimensionService()
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
 technical_factor_engine = TechnicalFactorEngine()
@@ -166,8 +170,48 @@ realtime_paper_engine_v321 = RealtimePaperEngine(
     freshness_guard=DataFreshnessGuard(),
 )
 trading_store_v323 = TradingStore()
+mobile_notification_service_v328 = MobileNotificationService(store=trading_store_v323)
 ledger_service_v324 = LedgerService(trading_store_v323)
 tonghuashun_companion_v326 = TonghuashunCompanion(trading_store_v323)
+database_management_service_v328 = DatabaseManagementService(
+    {
+        "market_cache": {
+            "label": "行情与评分历史",
+            "purpose": "行情缓存、手工筛选评分和每日自动评分走势",
+            "path": score_history_service.db_path,
+        },
+        "cache_state": {
+            "label": "系统状态缓存",
+            "purpose": "筛选会话、自动交易配置、来源健康和后台任务状态",
+            "path": cache_state_service.db_path,
+        },
+        "company_profile": {
+            "label": "公司与基本面画像",
+            "purpose": "本地可追溯公司画像和财务快照",
+            "path": company_profile_service.db_path,
+        },
+        "feature_store": {
+            "label": "因子特征库",
+            "purpose": "技术因子和 WordSource 分析结果",
+            "path": wordsource_system_service.feature_store.path,
+        },
+        "news_store": {
+            "label": "新闻与公告库",
+            "purpose": "清洗去重后的个股、公告、宏观与全球信息快照",
+            "path": news_service.store.db_path,
+        },
+        "trading_store": {
+            "label": "统一交易账本",
+            "purpose": "回测、模拟、实盘信号、订单、成交、持仓、评分溯源和审计",
+            "path": trading_store_v323.db_path,
+        },
+        "local_integrations": {
+            "label": "本地接入配置",
+            "purpose": "同花顺桌面伴随等非敏感本地配置；不保存券商密码或令牌",
+            "path": tonghuashun_companion_v326.config_db_path,
+        },
+    }
+)
 pit_store_v323 = PITStore()
 realtime_decision_service.market_event_factors.pit_store = pit_store_v323
 event_bus_v324 = EventBus(pit_store_v323)
@@ -177,7 +221,11 @@ source_registry_v323 = default_source_registry()
 factor_engine_v323 = V323FactorEngine()
 stock_classifier_v323 = StockClassifierV323()
 strategy_suitability_v323 = StrategySuitabilityV323()
-live_trading_engine_v323 = LiveTradingEngine(store=trading_store_v323)
+live_trading_engine_v323 = LiveTradingEngine(store=trading_store_v323, notifier=mobile_notification_service_v328)
+broker_setup_service_v328 = BrokerSetupService(
+    live_trading_engine_v323.config,
+    companion_status_provider=tonghuashun_companion_v326.status,
+)
 realtime_paper_engine_v323 = RealtimePaperEngineV323(realtime_paper_engine_v321, trading_store_v323)
 position_review_service_v325 = PositionReviewService(trading_store_v323)
 position_review_scheduler_v325 = PositionReviewScheduler(market_calendar)
@@ -191,6 +239,11 @@ _realtime_paper_scheduler_stop = Event()
 _realtime_paper_scheduler_thread: Thread | None = None
 _realtime_paper_scheduler_lock = Lock()
 _realtime_paper_scheduler_last_error = ""
+_daily_score_scheduler_stop = Event()
+_daily_score_scheduler_thread: Thread | None = None
+_daily_score_scheduler_lock = Lock()
+_daily_score_scheduler_last_run: dict[str, Any] = {}
+_daily_score_scheduler_last_error = ""
 _pit_news_sync_seen: set[str] = set()
 _pit_news_sync_lock = Lock()
 
@@ -245,10 +298,12 @@ FALLBACK_STRATEGIES = [
 async def _app_lifespan(_app: FastAPI):
     _start_position_review_scheduler()
     _start_realtime_paper_scheduler()
+    _start_daily_score_scheduler()
     _submit_background_job("market-regime-index-cache", lambda: _market_index_bars(limit=90))
     try:
         yield
     finally:
+        _stop_daily_score_scheduler()
         _stop_realtime_paper_scheduler()
         _stop_position_review_scheduler()
 
@@ -333,9 +388,10 @@ def _render_chinese_api_docs() -> str:
             ],
         ),
         (
-            "自动交易 V3.27",
+            "自动交易 V3.28",
             [
                 ("GET", "/auto-trading", "自动交易总控台入口，汇总筛选、详情、回测、实时模拟、真实交易、记录和数据中心。"),
+                ("GET", "/broker-setup", "券商接入向导：分步检查 QMT、PTrade、同花顺桌面伴随和授权执行桥；只读校验，不在网页保存密钥。"),
                 ("GET", "/api/auto-trading/config", "读取当前自动交易配置，包含股票池、策略组合、仓位模型、止盈止损、最大回撤和事件监控。"),
                 ("POST", "/api/auto-trading/config/one-click", "从最新筛选/自选池一键生成配置；没有真实数据时只标注缺失，不伪造。"),
                 ("GET", "/api/auto-trading/readiness", "检查 paper/live readiness，显示 QMT/PTrade、kill switch、确认队列和风控门槛。"),
@@ -357,6 +413,9 @@ def _render_chinese_api_docs() -> str:
                 ("GET", "/api/agent/market-brief", "联网证据代理：聚合金十快讯、全球宏观事件、评分溯源和实盘安全状态，只做辅助判断，不自动下单。"),
                 ("POST", "/api/live/orders/preview-batch", "真实交易多股票批量预检查；逐只经过风控、白名单、kill switch 和确认要求，不会直接下单。"),
                 ("POST", "/api/live/orders/place-batch", "真实交易多股票批量提交入口；默认配置下会被禁用或进入确认队列，不能绕过安全门控。"),
+                ("GET", "/api/score/trend/{symbol}", "查看每日自动评分、盘中评分溯源和手工筛选评分的分源走势。"),
+                ("GET", "/api/score/daily/status", "查看每日交易池评分调度、目标股票、最近运行与历史留痕状态。"),
+                ("POST", "/api/score/daily/run", "立即保存交易池当日评分；只评分和审计，不创建订单、不提交券商。"),
             ],
         ),
         (
@@ -370,6 +429,16 @@ def _render_chinese_api_docs() -> str:
                 ("GET", "/api/decision-framework", "查看技术面、信息面、资金面、大盘环境在回测/模拟/实盘/提醒中的统一使用规则。"),
                 ("GET", "/api/decision-framework/{symbol}", "查看单只标的本轮哪些分项有效、实际来源、PIT状态、自动入场阻断原因和执行分。"),
                 ("GET", "/api/screener/historical-snapshot?symbols=300750,600438", "按决策时点重建筛选快照，保证回测不偷看未来。"),
+            ],
+        ),
+        (
+            "数据中心与 SQLite",
+            [
+                ("GET", "/data-center", "数据库、缓存、来源健康、新鲜度、缺失字段和后台任务可视化入口。"),
+                ("GET", "/api/data-center/databases", "盘点系统白名单 SQLite 的实际路径、文件/WAL 大小、完整性、表与行数。"),
+                ("POST", "/api/data-center/databases/{database_key}/checkpoint", "对指定白名单数据库执行 PASSIVE/TRUNCATE WAL checkpoint；不删除业务数据。"),
+                ("GET", "/api/data-center/decision-readiness", "查看各决策维度是否具备真实、近期、可追溯数据。"),
+                ("POST", "/api/data-center/refresh", "按明确范围刷新数据；不会把失败或缺失伪装成成功。"),
             ],
         ),
     ]
@@ -2407,6 +2476,7 @@ def _auto_decision_policy(risk_controls: dict, score_weights: dict) -> dict:
         "global_sell_threshold": 45.0,
         "risk_controls": risk_controls,
         "score_weights": score_weights,
+        "adaptive_policy": "默认按策略族与可追溯大盘环境有限调整权重、阈值和仓位；选择手工模式时用户权重优先。",
     }
 
 
@@ -2652,6 +2722,13 @@ def _build_auto_trading_config(
 
     risk_in = dict(merged.get("risk_controls") or {})
     score_in = dict(merged.get("score_weights") or {})
+    requested_weight_mode = str(
+        merged.get("score_weight_mode")
+        or score_in.get("mode")
+        or score_in.get("weight_mode")
+        or ("manual" if score_in else "adaptive")
+    ).strip().lower()
+    score_weight_mode = "adaptive" if requested_weight_mode in {"adaptive", "auto", "strategy"} else "manual"
     event_in = dict(merged.get("event_watch") or {})
     data_in = dict(merged.get("data_requirements") or {})
     combo = _strategy_combo_from(
@@ -2739,6 +2816,7 @@ def _build_auto_trading_config(
         "strategy_matrix": _auto_strategy_matrix(strategy_parameters),
         "strategy_blueprints": _auto_strategy_matrix(strategy_parameters),
         "score_weights": score_weights,
+        "score_weight_mode": score_weight_mode,
         "decision_policy": _auto_decision_policy(risk_controls, score_weights),
         "integrated_score_dimensions": _auto_integrated_dimensions(score_weights),
         "event_watch": event_watch,
@@ -2861,6 +2939,541 @@ def score_history(symbol: str, days: int = 90) -> dict:
 def score_latest(limit: int = 100, score_date: str | None = None) -> dict:
     data = score_history_service.latest(limit=limit, score_date=score_date)
     return {"ok": True, "count": len(data), "data": data}
+
+
+def _daily_score_targets(limit: int = 80) -> list[dict[str, Any]]:
+    """Collect persisted paper/live pools without requiring a screener click."""
+
+    limit = max(1, min(int(limit or 80), 200))
+    targets: dict[tuple[str, str, str], dict[str, Any]] = {}
+    saved_read = cache_state_service.get("auto_trading_config", "default", allow_stale=True)
+    saved_config = dict(saved_read.data or {}) if isinstance(saved_read.data, dict) else {}
+    config = _build_auto_trading_config(saved_config) if saved_config else {}
+    default_family = str(config.get("strategy_family") or "hybrid")
+    default_profiles = config.get("screener_signal_map") if isinstance(config.get("screener_signal_map"), dict) else {}
+
+    def add(
+        symbol: Any,
+        *,
+        mode: str,
+        family: str,
+        source: str,
+        profile: dict[str, Any] | None = None,
+        score_config: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            normalized = normalize_symbol(str(symbol or ""))
+        except Exception:
+            return
+        if not normalized:
+            return
+        selected_family = str(family or default_family or "hybrid")
+        key = (normalized, str(mode or "realtime_paper"), selected_family)
+        row = targets.setdefault(
+            key,
+            {
+                "symbol": normalized,
+                "mode": key[1],
+                "strategy_family": selected_family,
+                "sources": [],
+                "profile": {},
+                "score_config": {},
+            },
+        )
+        if source and source not in row["sources"]:
+            row["sources"].append(source)
+        candidate_profile = profile or default_profiles.get(normalized) or {}
+        if isinstance(candidate_profile, dict) and candidate_profile:
+            row["profile"].update(candidate_profile)
+        if isinstance(score_config, dict) and score_config:
+            row["score_config"].update(score_config)
+
+    if config:
+        for symbol in config.get("symbols") or []:
+            add(
+                symbol,
+                mode="realtime_paper",
+                family=default_family,
+                source="自动交易配置池",
+                profile=default_profiles.get(str(symbol)) or {},
+                score_config=config,
+            )
+    for symbol in watchlist_service.list().get("symbols") or []:
+        add(symbol, mode="realtime_paper", family=default_family, source="自选监控池", score_config=config)
+
+    for session in realtime_paper_engine_v323.list_sessions():
+        if str(session.get("status") or "").lower() not in {"running", "paused"}:
+            continue
+        session_config = session.get("config") if isinstance(session.get("config"), dict) else {}
+        session_profiles = session_config.get("screener_signal_map") if isinstance(session_config.get("screener_signal_map"), dict) else {}
+        family = str(session.get("strategy_family") or session_config.get("strategy_family") or default_family)
+        for symbol in session.get("symbols") or []:
+            add(
+                symbol,
+                mode="realtime_paper",
+                family=family,
+                source="活跃实时模拟会话",
+                profile=session_profiles.get(str(symbol)) or {},
+                score_config=session_config or config,
+            )
+
+    live_rows = trading_store_v323.list("live_sessions", limit=100)
+    for session in live_rows:
+        if str(session.get("status") or "").lower() in {"stopped", "closed", "disabled", "failed"}:
+            continue
+        family = str(session.get("strategy_family") or default_family)
+        for symbol in _auto_list(session.get("symbols") or session.get("watchlist")):
+            add(symbol, mode="live", family=family, source="真实交易观察会话", score_config=config)
+    live_positions = trading_store_v323.list("positions", mode="live", limit=500)
+    live_positions += trading_store_v323.list_normalized("broker_positions", mode="live", limit=500)
+    for position in live_positions:
+        quantity = _as_float(position.get("quantity") or position.get("total_quantity"), 0.0)
+        if quantity > 0:
+            add(position.get("symbol"), mode="live", family=default_family, source="真实账户持仓", score_config=config)
+    return list(targets.values())[:limit]
+
+
+def _cached_daily_score_quote(symbol: str, *, refresh: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    if refresh:
+        try:
+            _, quote_data, cache_status = _enrich_quote_real(symbol, force=True)
+            try:
+                service.get_kline(symbol, frame="1d", limit=260, adjust="qfq", force_refresh=True)
+            except Exception:
+                pass
+            return quote_data, dict(cache_status or {})
+        except Exception:
+            pass
+    read = cache_state_service.get("quote_cache", symbol, allow_stale=True)
+    stored = read.data if isinstance(read.data, dict) else {}
+    quote_data = stored.get("quote") if isinstance(stored.get("quote"), dict) else stored
+    if quote_data:
+        return dict(quote_data), dict(read.cache_status or {})
+    cached_quote = service.cache.get_quote(symbol, max_age_seconds=None)
+    if cached_quote is not None:
+        return _quote_dict_with_aliases(cached_quote), {
+            "hit": True,
+            "stale": True,
+            "source": "market_cache_any_age",
+            "missing_reasons": ["实时行情快照未命中，使用任意年龄行情缓存，仅供每日复盘"],
+        }
+    return {}, {
+        "hit": False,
+        "stale": True,
+        "source": "missing",
+        "missing_reasons": ["行情缓存缺失"],
+    }
+
+
+def _daily_score_snapshot(target: dict[str, Any], *, refresh: bool, decision_time: datetime) -> dict[str, Any]:
+    symbol = normalize_symbol(str(target.get("symbol") or ""))
+    profile = dict(target.get("profile") or {})
+    score_config = dict(target.get("score_config") or {})
+    quote_data, quote_cache = _cached_daily_score_quote(symbol, refresh=refresh)
+    name = str(quote_data.get("name") or profile.get("name") or symbol)
+    stale = bool(quote_cache.get("stale"))
+    hydrated = realtime_decision_service.hydrate(
+        {
+            "symbol": symbol,
+            "name": name,
+            "mode": str(target.get("mode") or "realtime_paper"),
+            "strategy_family": str(target.get("strategy_family") or "hybrid"),
+            "quote": quote_data,
+            "data_freshness": {
+                "stale": stale,
+                "action": "refresh_required" if stale else "allow",
+                "source": quote_cache.get("source") or "quote_cache",
+                "missing_reasons": list(quote_cache.get("missing_reasons") or []),
+            },
+        },
+        profile=profile,
+        symbols=[
+            normalize_symbol(str(value))
+            for value in (score_config.get("symbols") or [symbol])
+            if str(value or "").strip()
+        ],
+    )
+    dimensions = {
+        "fundamental_score": _score_or_none(hydrated.get("fundamental_score")),
+        "technical_score": _score_or_none(hydrated.get("technical_score")),
+        "information_score": _score_or_none(hydrated.get("information_score")),
+        "fund_flow_score": _score_or_none(hydrated.get("fund_flow_score")),
+        "market_score": _score_or_none(hydrated.get("market_score")),
+    }
+    usable_count = sum(value is not None for value in dimensions.values())
+    signal_data: dict[str, Any] = {}
+    final_score: float | None = None
+    if usable_count:
+        signal = realtime_paper_engine_v321.signal_fusion.fuse(
+            symbol=symbol,
+            horizon="position" if target.get("mode") == "live" else "intraday_paper",
+            strategy_family=str(target.get("strategy_family") or "hybrid"),
+            screening_score=_score_or_none(hydrated.get("screening_score")),
+            daily_k_score=_score_or_none(hydrated.get("daily_k_score")),
+            intraday_score=_score_or_none(hydrated.get("intraday_score")),
+            fundamental_score=dimensions["fundamental_score"],
+            technical_score=dimensions["technical_score"],
+            information_score=dimensions["information_score"],
+            fund_flow_score=dimensions["fund_flow_score"],
+            market_score=dimensions["market_score"],
+            score_weights=score_config.get("score_weights") if isinstance(score_config.get("score_weights"), dict) else None,
+            anomaly_score=_as_float(hydrated.get("anomaly_score"), 0.0),
+            evidence=list(target.get("sources") or []),
+            data_freshness=dict(hydrated.get("data_freshness") or {}),
+            missing_data=list(hydrated.get("missing_data") or []),
+            info_negative_veto=bool(hydrated.get("info_negative_veto")),
+            now=decision_time,
+        )
+        signal_data = signal.to_dict()
+        final_score = _score_or_none(signal_data.get("final_score"))
+    readiness = dict(hydrated.get("dimension_readiness") or {})
+    quality_status = "missing" if not usable_count else "available" if usable_count == 5 and not stale else "partial"
+    provenance_id = (
+        f"daily-score-{decision_time.date().isoformat()}-{target.get('mode') or 'paper'}-"
+        f"{target.get('strategy_family') or 'hybrid'}-{symbol}"
+    )
+    score_breakdown = dict(signal_data.get("score_breakdown") or {})
+    provenance = {
+        "provenance_id": provenance_id,
+        "symbol": symbol,
+        "name": name,
+        "decision_time": decision_time.isoformat(timespec="seconds"),
+        "mode": str(target.get("mode") or "realtime_paper"),
+        "strategy_family": str(target.get("strategy_family") or "hybrid"),
+        "final_score": final_score,
+        "action": signal_data.get("action") or "数据不足",
+        "dimension_scores": {**dimensions, "market_regime_score": dimensions.get("market_score")},
+        "factor_contributions": list(score_breakdown.get("contributions") or []),
+        "gates": readiness,
+        "data_sources": dict((hydrated.get("score_breakdown") or {}).get("sources") or {}),
+        "missing_data": list(hydrated.get("missing_data") or []),
+        "stale_data": ["quote"] if stale else [],
+        "quality_status": quality_status,
+        "policy_version": "v328-daily-pool-score",
+        "source": "每日交易池自动评分",
+        "sources": list(target.get("sources") or []),
+        "broker_submitted": False,
+    }
+    score_provenance_memory_v323[provenance_id] = provenance
+    trading_store_v323.put(
+        "score_provenance",
+        provenance,
+        mode=provenance["mode"],
+        symbol=symbol,
+        session_id=decision_time.date().isoformat(),
+        record_id=provenance_id,
+    )
+    return {
+        "score_date": decision_time.date().isoformat(),
+        "symbol": symbol,
+        "name": name,
+        "mode": provenance["mode"],
+        "strategy_family": provenance["strategy_family"],
+        "final_score": final_score,
+        "screening_score": _score_or_none(hydrated.get("screening_score")),
+        "daily_k_score": _score_or_none(hydrated.get("daily_k_score")),
+        "intraday_score": _score_or_none(hydrated.get("intraday_score")),
+        **dimensions,
+        "anomaly_score": _score_or_none(signal_data.get("anomaly_score")),
+        "action": signal_data.get("action") or "数据不足",
+        "quality_status": quality_status,
+        "auto_entry_eligible": bool(readiness.get("auto_entry_eligible")) and not stale,
+        "entry_block_reasons": list(readiness.get("entry_block_reasons") or []),
+        "provenance_id": provenance_id,
+        "source": "每日交易池自动评分",
+        "pool_sources": list(target.get("sources") or []),
+        "data_sources": provenance["data_sources"],
+        "updated_at": decision_time.isoformat(timespec="seconds"),
+    }
+
+
+def _run_daily_score_snapshots(*, force: bool = False, refresh: bool = False, limit: int = 80) -> dict[str, Any]:
+    global _daily_score_scheduler_last_run, _daily_score_scheduler_last_error
+    if not _daily_score_scheduler_lock.acquire(blocking=False):
+        return {"ok": False, "status": "busy", "message": "每日评分任务正在执行"}
+    try:
+        now = _now_cn().replace(tzinfo=None)
+        if market_calendar.is_holiday("CN", now.date()) and not force:
+            result = {
+                "ok": True,
+                "status": "non_trading_day",
+                "message": "非交易日不生成新的每日评分快照",
+                "score_date": now.date().isoformat(),
+                "created": 0,
+            }
+            _daily_score_scheduler_last_run = result
+            return result
+        targets = _daily_score_targets(limit=limit)
+        snapshots: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for target in targets:
+            try:
+                snapshots.append(_daily_score_snapshot(target, refresh=refresh, decision_time=now))
+            except Exception as exc:
+                errors.append({"symbol": str(target.get("symbol") or ""), "error": str(exc)[:220]})
+        saved = score_history_service.save_daily_snapshots(snapshots, score_date=now.date().isoformat())
+        result = {
+            "ok": not errors,
+            "partial": bool(errors and snapshots),
+            "status": "complete" if not errors else "partial" if snapshots else "failed",
+            "score_date": now.date().isoformat(),
+            "target_count": len(targets),
+            "created": saved,
+            "refresh_requested": bool(refresh),
+            "orders_created": 0,
+            "broker_submitted": False,
+            "data": snapshots,
+            "errors": errors,
+            "message": "交易池每日评分已保存；该任务只评分和留痕，不生成订单。",
+        }
+        _daily_score_scheduler_last_run = {key: value for key, value in result.items() if key != "data"}
+        _daily_score_scheduler_last_error = errors[0]["error"] if errors else ""
+        trading_store_v323.put(
+            "audit_events",
+            {
+                "event_type": "daily_pool_score_run",
+                **_daily_score_scheduler_last_run,
+                "created_at": now.isoformat(timespec="seconds"),
+            },
+            mode="scheduler",
+            session_id=now.date().isoformat(),
+            record_id=f"daily-pool-score-run-{now.date().isoformat()}",
+        )
+        return result
+    finally:
+        _daily_score_scheduler_lock.release()
+
+
+def _daily_score_run_time() -> time:
+    raw = str(os.environ.get("DAILY_SCORE_RUN_AT") or "15:10").strip()
+    try:
+        hour, minute = raw.split(":", 1)
+        return time(hour=max(0, min(23, int(hour))), minute=max(0, min(59, int(minute))))
+    except (TypeError, ValueError):
+        return time(15, 10)
+
+
+def _daily_score_scheduler_status() -> dict[str, Any]:
+    enabled = _as_bool(os.environ.get("DAILY_SCORE_SCHEDULER_ENABLED"), True)
+    now = _now_cn().replace(tzinfo=None)
+    run_time = _daily_score_run_time()
+    targets = _daily_score_targets(limit=200)
+    history_status = score_history_service.daily_status()
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "running": bool(_daily_score_scheduler_thread and _daily_score_scheduler_thread.is_alive()),
+        "run_at": run_time.strftime("%H:%M"),
+        "market_date": now.date().isoformat(),
+        "is_trading_day": not market_calendar.is_holiday("CN", now.date()),
+        "target_count": len(targets),
+        "targets": [
+            {
+                "symbol": row.get("symbol"),
+                "mode": row.get("mode"),
+                "strategy_family": row.get("strategy_family"),
+                "sources": row.get("sources"),
+            }
+            for row in targets
+        ],
+        "history": history_status,
+        "last_run": dict(_daily_score_scheduler_last_run),
+        "last_error": _daily_score_scheduler_last_error,
+        "policy": "交易日收盘后对自动配置池、自选池、活跃模拟池和真实持仓逐只评分；只写评分走势，不创建订单。",
+    }
+
+
+def _daily_score_scheduler_loop() -> None:
+    global _daily_score_scheduler_last_error
+    if _daily_score_scheduler_stop.wait(60.0):
+        return
+    while not _daily_score_scheduler_stop.is_set():
+        try:
+            if _as_bool(os.environ.get("DAILY_SCORE_SCHEDULER_ENABLED"), True):
+                now = _now_cn().replace(tzinfo=None)
+                status = score_history_service.daily_status()
+                due = (
+                    not market_calendar.is_holiday("CN", now.date())
+                    and now.time() >= _daily_score_run_time()
+                    and status.get("latest_score_date") != now.date().isoformat()
+                )
+                if due:
+                    _run_daily_score_snapshots(force=False, refresh=True)
+        except Exception as exc:
+            _daily_score_scheduler_last_error = str(exc)[:240]
+        if _daily_score_scheduler_stop.wait(60.0):
+            return
+
+
+def _start_daily_score_scheduler() -> None:
+    global _daily_score_scheduler_thread
+    if _daily_score_scheduler_thread and _daily_score_scheduler_thread.is_alive():
+        return
+    _daily_score_scheduler_stop.clear()
+    _daily_score_scheduler_thread = Thread(
+        target=_daily_score_scheduler_loop,
+        name="daily-pool-score-scheduler",
+        daemon=True,
+    )
+    _daily_score_scheduler_thread.start()
+
+
+def _stop_daily_score_scheduler() -> None:
+    global _daily_score_scheduler_thread
+    _daily_score_scheduler_stop.set()
+    if _daily_score_scheduler_thread and _daily_score_scheduler_thread.is_alive():
+        _daily_score_scheduler_thread.join(timeout=2.0)
+    _daily_score_scheduler_thread = None
+
+
+def _score_trend_payload(symbol: str, *, days: int = 90, mode: str = "all") -> dict[str, Any]:
+    symbol = normalize_symbol(symbol)
+    days = max(1, min(int(days or 90), 1000))
+    start = (date.today() - timedelta(days=days)).isoformat()
+    points: list[dict[str, Any]] = []
+    for row in score_history_service.history(symbol, days=days):
+        points.append(
+            {
+                "timestamp": row.get("updated_at") or row.get("score_date"),
+                "score_date": row.get("score_date"),
+                "source_kind": "screener",
+                "source_label": "手工筛选评分",
+                "mode": "screener",
+                "strategy_family": row.get("mode") or "balanced",
+                "final_score": row.get("total_score"),
+                "dimensions": {
+                    "low_position": row.get("low_score"),
+                    "trend": row.get("trend_score"),
+                    "volume": row.get("volume_score"),
+                    "value": row.get("value_score"),
+                },
+                "action": row.get("grade") or "筛选",
+                "quality_status": "snapshot",
+                "auto_entry_eligible": False,
+                "provenance_id": "",
+            }
+        )
+    for row in score_history_service.daily_history(symbol, days=days, mode=mode):
+        points.append(
+            {
+                "timestamp": row.get("updated_at") or row.get("score_date"),
+                "score_date": row.get("score_date"),
+                "source_kind": "daily_pool",
+                "source_label": "交易池每日自动评分",
+                "mode": row.get("mode"),
+                "strategy_family": row.get("strategy_family"),
+                "final_score": row.get("final_score"),
+                "dimensions": {
+                    "fundamental": row.get("fundamental_score"),
+                    "technical": row.get("technical_score"),
+                    "information": row.get("information_score"),
+                    "fund_flow": row.get("fund_flow_score"),
+                    "market": row.get("market_score"),
+                    "daily_k": row.get("daily_k_score"),
+                    "intraday": row.get("intraday_score"),
+                },
+                "action": row.get("action"),
+                "quality_status": row.get("quality_status"),
+                "auto_entry_eligible": bool(row.get("auto_entry_eligible")),
+                "provenance_id": row.get("provenance_id"),
+            }
+        )
+    provenance_rows = trading_store_v323.list("score_provenance", symbol=symbol, limit=2500)
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in provenance_rows:
+        row_mode = str(row.get("mode") or "")
+        if mode not in {"", "all"} and row_mode != mode:
+            continue
+        timestamp = str(row.get("decision_time") or row.get("created_at") or "")
+        if not timestamp or timestamp[:10] < start:
+            continue
+        score_value = row.get("final_score")
+        if score_value is None:
+            score_value = row.get("final_trade_score")
+        final_score = _score_or_none(score_value)
+        if final_score is None:
+            continue
+        minute_bucket = timestamp[:16]
+        dimensions = dict(row.get("dimension_scores") or {})
+        breakdown = dict(row.get("score_breakdown") or {})
+        gates = row.get("gates") if isinstance(row.get("gates"), dict) else {}
+        daily_k_score = row.get("daily_k_score")
+        if daily_k_score is None:
+            daily_k_score = breakdown.get("daily_k_score")
+        intraday_score = row.get("intraday_score")
+        if intraday_score is None:
+            intraday_score = breakdown.get("intraday_score")
+        buckets[(row_mode, minute_bucket)] = {
+            "timestamp": timestamp,
+            "score_date": timestamp[:10],
+            "source_kind": "intraday_provenance",
+            "source_label": "盘中评分溯源",
+            "mode": row_mode or "realtime_paper",
+            "strategy_family": row.get("strategy_family") or "",
+            "final_score": final_score,
+            "dimensions": {
+                "fundamental": dimensions.get("fundamental_score", row.get("fundamental_score")),
+                "technical": dimensions.get("technical_score", row.get("technical_score")),
+                "information": dimensions.get("information_score", row.get("information_score")),
+                "fund_flow": dimensions.get("fund_flow_score", row.get("fund_flow_score")),
+                "market": dimensions.get("market_regime_score", dimensions.get("market_score", row.get("market_score"))),
+                "daily_k": daily_k_score,
+                "intraday": intraday_score,
+            },
+            "action": row.get("action") or "观察",
+            "quality_status": row.get("quality_status") or "provenance",
+            "auto_entry_eligible": bool(gates.get("auto_entry_eligible")),
+            "provenance_id": row.get("provenance_id") or row.get("record_id") or "",
+        }
+    points.extend(buckets.values())
+    points = [point for point in points if _score_or_none(point.get("final_score")) is not None]
+    points.sort(key=lambda point: str(point.get("timestamp") or ""))
+    if len(points) > 800:
+        points = points[-800:]
+    source_counts: dict[str, int] = {}
+    for point in points:
+        key = str(point.get("source_kind") or "unknown")
+        source_counts[key] = source_counts.get(key, 0) + 1
+    latest = points[-1] if points else None
+    previous = points[-2] if len(points) > 1 else None
+    delta = None
+    if latest and previous:
+        delta = round(float(latest["final_score"]) - float(previous["final_score"]), 4)
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "days": days,
+        "mode": mode or "all",
+        "count": len(points),
+        "data": points,
+        "summary": {
+            "latest": latest,
+            "previous": previous,
+            "latest_delta": delta,
+            "source_counts": source_counts,
+            "daily_scheduler": _daily_score_scheduler_status(),
+        },
+        "truth_boundary": "手工筛选、每日交易池评分和盘中评分溯源分开标识；缺失分项不补中性分，评分走势本身不创建订单。",
+    }
+
+
+@app.get("/api/score/trend/{symbol}")
+def score_trend_v328(symbol: str, days: int = 90, mode: str = "all") -> dict:
+    return _score_trend_payload(symbol, days=days, mode=mode)
+
+
+@app.get("/api/score/daily/status")
+def score_daily_status_v328() -> dict:
+    return _daily_score_scheduler_status()
+
+
+@app.post("/api/score/daily/run")
+def score_daily_run_v328(payload: dict = Body(default_factory=dict)) -> dict:
+    return _run_daily_score_snapshots(
+        force=_as_bool(payload.get("force"), True),
+        refresh=_as_bool(payload.get("refresh"), False),
+        limit=max(1, min(int(_as_float(payload.get("limit"), 80.0)), 200)),
+    )
 
 
 
@@ -5751,6 +6364,16 @@ def _enrich_trading_record_row(table: str, item: dict) -> dict:
         record_type = "风控"
     elif table == "audit_events":
         record_type = "审计"
+    elif table == "chart_markers":
+        record_type = "图表标注"
+    elif table == "signals":
+        record_type = "交易信号"
+    elif table == "score_provenance":
+        record_type = "评分溯源"
+    elif table == "broker_raw_responses":
+        record_type = "券商返回"
+    elif table == "data_source_status":
+        record_type = "数据源状态"
     else:
         record_type = "记录"
     row["record_type_cn"] = record_type
@@ -5787,11 +6410,19 @@ def _trading_records_summary(rows: list[dict]) -> dict:
     mode_counts: dict[str, int] = {}
     symbol_counts: dict[str, int] = {}
     by_mode: dict[str, dict] = {}
-    orders_count = fills_count = positions_count = 0
+    orders_count = fills_count = 0
     total_amount = total_fee = realized_pnl = unrealized_pnl = 0.0
     position_market_value = position_cost_value = 0.0
     latest_account_value = None
-    for row in rows:
+    position_snapshots_count = 0
+    latest_positions: dict[tuple[str, str, str], dict] = {}
+    seen_fills: set[str] = set()
+    ordered_rows = sorted(
+        rows,
+        key=lambda item: str(item.get("created_at") or item.get("timestamp") or item.get("fetched_at") or ""),
+        reverse=True,
+    )
+    for row in ordered_rows:
         table = str(row.get("table") or "")
         record_type = str(row.get("record_type_cn") or table or "record")
         mode = str(row.get("mode") or row.get("source") or "unknown")
@@ -5802,32 +6433,57 @@ def _trading_records_summary(rows: list[dict]) -> dict:
             symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
         bucket = by_mode.setdefault(mode, {"count": 0, "amount": 0.0, "fee": 0.0, "pnl": 0.0})
         bucket["count"] += 1
-        amount = _as_float(row.get("display_amount"), 0.0)
-        fee = _as_float(row.get("display_fee"), 0.0)
-        pnl = _as_float(row.get("display_pnl"), 0.0)
-        bucket["amount"] = round(bucket["amount"] + amount, 4)
-        bucket["fee"] = round(bucket["fee"] + fee, 4)
-        bucket["pnl"] = round(bucket["pnl"] + pnl, 4)
-        total_amount += amount
-        total_fee += fee
         if table == "orders":
             orders_count += 1
         elif table == "fills":
+            fill_key = str(row.get("fill_id") or row.get("id") or "") or "|".join(
+                str(row.get(key) or "")
+                for key in ("order_id", "symbol", "side", "display_quantity", "display_price", "filled_at", "created_at")
+            )
+            if fill_key in seen_fills:
+                continue
+            seen_fills.add(fill_key)
             fills_count += 1
+            amount = _as_float(row.get("display_amount"), 0.0)
+            fee = _as_float(row.get("display_fee"), 0.0)
+            pnl = _as_float(row.get("display_pnl"), 0.0)
+            total_amount += amount
+            total_fee += fee
             realized_pnl += pnl
+            bucket["amount"] = round(bucket["amount"] + amount, 4)
+            bucket["fee"] = round(bucket["fee"] + fee, 4)
+            bucket["pnl"] = round(bucket["pnl"] + pnl, 4)
         elif table == "positions":
-            positions_count += 1
-            unrealized_pnl += pnl
-            position_market_value += _as_float(row.get("display_market_value") or row.get("display_amount"), 0.0)
-            position_cost_value += _as_float(row.get("display_cost_price"), 0.0) * _as_float(row.get("display_quantity"), 0.0)
+            position_snapshots_count += 1
+            position_key = (
+                mode,
+                str(row.get("account_id") or ""),
+                symbol,
+            )
+            if symbol and position_key not in latest_positions:
+                latest_positions[position_key] = row
         elif table == "account_snapshots" and latest_account_value is None and row.get("display_amount") is not None:
             latest_account_value = _as_float(row.get("display_amount"), 0.0)
+    for row in latest_positions.values():
+        quantity = _as_float(row.get("display_quantity"), 0.0)
+        if quantity <= 0:
+            continue
+        mode = str(row.get("mode") or row.get("source") or "unknown")
+        pnl = _as_float(row.get("display_pnl"), 0.0)
+        market_value = _as_float(row.get("display_market_value") or row.get("display_amount"), 0.0)
+        cost_value = _as_float(row.get("display_cost_price"), 0.0) * quantity
+        unrealized_pnl += pnl
+        position_market_value += market_value
+        position_cost_value += cost_value
+        bucket = by_mode.setdefault(mode, {"count": 0, "amount": 0.0, "fee": 0.0, "pnl": 0.0})
+        bucket["pnl"] = round(bucket["pnl"] + pnl, 4)
     total_pnl = realized_pnl + unrealized_pnl
     return {
         "rows_count": len(rows),
         "orders_count": orders_count,
         "fills_count": fills_count,
-        "positions_count": positions_count,
+        "positions_count": sum(1 for row in latest_positions.values() if _as_float(row.get("display_quantity"), 0.0) > 0),
+        "position_snapshots_count": position_snapshots_count,
         "total_amount": round(total_amount, 4),
         "total_fee": round(total_fee, 4),
         "realized_pnl": round(realized_pnl, 4),
@@ -6068,6 +6724,40 @@ def event_triggers_live(symbol: str = "", strategy_family: str = "core_satellite
 @app.get("/api/live-broker/status")
 def live_broker_status() -> dict:
     return live_trading_engine_v323.status()
+
+
+@app.get("/api/live-broker/setup")
+def live_broker_setup(broker_type: str = "") -> dict:
+    return broker_setup_service_v328.inspect(broker_type)
+
+
+@app.post("/api/live-broker/setup/validate")
+def live_broker_setup_validate(payload: dict = Body(default_factory=dict)) -> dict:
+    return broker_setup_service_v328.validate(payload)
+
+
+@app.get("/api/notifications/mobile/status")
+def mobile_notification_status() -> dict:
+    return mobile_notification_service_v328.status()
+
+
+@app.post("/api/notifications/mobile/preview")
+def mobile_notification_preview(payload: dict = Body(default_factory=dict)) -> dict:
+    return mobile_notification_service_v328.preview(payload)
+
+
+@app.post("/api/notifications/mobile/test")
+def mobile_notification_test(payload: dict = Body(default_factory=dict)) -> dict:
+    return mobile_notification_service_v328.send(
+        {
+            "event_type": "manual_test",
+            "title": "量化网关移动提醒联通测试",
+            "level": payload.get("level") or "warning",
+            "symbol": payload.get("symbol") or "",
+            "reason": "由总控台用户显式发起；不包含订单或成交动作。",
+            "status": "联通测试",
+        }
+    )
 
 
 @app.post("/api/live-broker/connect")
@@ -6645,7 +7335,14 @@ def live_order_preview_batch(payload: dict = Body(default_factory=dict)) -> dict
         {"symbol": symbol, "preview": live_trading_engine_v323.preview_order(_prepare_live_order_payload({**payload, "symbol": symbol}))}
         for symbol in symbols[:50]
     ]
-    return {"ok": bool(rows), "data": rows, "count": len(rows), "note": "每只标的独立生成服务端行情、评分溯源和风控预检查。"}
+    passed = sum(1 for row in rows if bool((row.get("preview") or {}).get("precheck", {}).get("ok")))
+    return {
+        "ok": bool(rows),
+        "data": rows,
+        "count": len(rows),
+        "summary": {"precheck_passed": passed, "blocked": len(rows) - passed},
+        "note": "每只标的独立生成服务端行情、评分溯源和风控预检查。",
+    }
 
 
 @app.post("/api/live/orders/place-batch")
@@ -6657,7 +7354,17 @@ def live_order_place_batch(payload: dict = Body(default_factory=dict)) -> dict:
         {"symbol": symbol, "result": live_trading_engine_v323.place_order(_prepare_live_order_payload({**payload, "symbol": symbol}), confirmed=False)}
         for symbol in symbols[:50]
     ]
-    return {"ok": bool(rows), "data": rows, "count": len(rows), "requires_confirmation": True}
+    pending = sum(1 for row in rows if (row.get("result") or {}).get("reason") == "needs_confirmation")
+    submitted = sum(1 for row in rows if bool((row.get("result") or {}).get("ok")))
+    blocked = len(rows) - pending - submitted
+    return {
+        "ok": bool(rows),
+        "data": rows,
+        "count": len(rows),
+        "summary": {"needs_confirmation": pending, "submitted": submitted, "blocked": blocked},
+        "requires_confirmation": bool(pending),
+        "note": "请求已逐只处理；ok 表示批次已受理，不代表券商成交，请查看 summary 和每只结果。",
+    }
 
 
 @app.post("/api/live/orders/confirm")
@@ -6717,9 +7424,7 @@ def tonghuashun_companion_update_reminder(reminder_id: str, payload: dict = Body
 
 @app.post("/api/live/orders/{order_id}/cancel")
 def live_order_cancel(order_id: str) -> dict:
-    result = live_trading_engine_v323.broker.cancel_order(order_id).to_dict()
-    trading_store_v323.put("orders", {"order_id": order_id, "status": result.get("status"), "status_reason": result.get("reason"), "mode": "live", "record_stage": "cancel", "broker_submitted": True}, mode="live", record_id=order_id)
-    return {"ok": bool(result.get("ok")), "data": result}
+    return live_trading_engine_v323.cancel_order(order_id)
 
 
 @app.post("/api/live/kill-switch")
@@ -6894,6 +7599,25 @@ def data_center_status_v323() -> dict:
     return _data_center_status_payload()
 
 
+@app.get("/api/data-center/databases")
+def data_center_databases_v328(quick_check: bool = True) -> dict:
+    return database_management_service_v328.inventory(quick_check=quick_check)
+
+
+@app.post("/api/data-center/databases/{database_key}/checkpoint")
+def data_center_database_checkpoint_v328(
+    database_key: str,
+    payload: dict = Body(default_factory=dict),
+) -> dict:
+    try:
+        return database_management_service_v328.checkpoint(
+            database_key,
+            truncate=_as_bool(payload.get("truncate"), False),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/auto-trading/dashboard-overview")
 def auto_trading_dashboard_overview(records_limit: int = 30) -> dict:
     """Aggregate stable dashboard state without creating signals or orders."""
@@ -7018,27 +7742,185 @@ def data_center_missing_fields_v323() -> dict:
     return {"ok": True, "data": list(dict.fromkeys(str(x) for x in missing)), "count": len(missing)}
 
 
+@app.get("/api/data-center/decision-readiness")
+def data_center_decision_readiness_v328(
+    symbols: str = "",
+    mode: str = "realtime_paper",
+    strategy_family: str = "swing",
+) -> dict:
+    """Explain current cache-only decision readiness without fetching data."""
+    requested = _parse_symbol_text(symbols) if symbols else watchlist_service.list().get("symbols", [])
+    normalized_symbols = list(dict.fromkeys(normalize_symbol(value) for value in requested if normalize_symbol(value)))[:20]
+    rows: list[dict[str, Any]] = []
+    for symbol in normalized_symbols:
+        response = decision_framework_symbol_v326(symbol, mode=mode, strategy_family=strategy_family)
+        data = dict(response.get("data") or {})
+        current = dict(data.get("current_readiness") or {})
+        readiness = current if current.get("dimensions") else data
+        dimensions = [dict(row) for row in (readiness.get("dimensions") or []) if isinstance(row, dict)]
+        market = dict(readiness.get("market_context") or {})
+        all_rows = dimensions + ([{"key": "market", **market}] if market else [])
+        rows.append(
+            {
+                "symbol": symbol,
+                "name": data.get("name") or symbol,
+                "mode": mode,
+                "strategy_family": readiness.get("strategy_family") or strategy_family,
+                "scores": dict(data.get("current_dimension_scores") or {}),
+                "dimensions": all_rows,
+                "ready_count": sum(1 for row in all_rows if row.get("ready")),
+                "missing_count": sum(1 for row in all_rows if not row.get("ready")),
+                "dimension_gate_eligible": bool(readiness.get("auto_entry_eligible")),
+                "effective_entry_gate": data.get("effective_entry_gate") or "unknown",
+                "provenance_freshness": dict(data.get("provenance_freshness") or {}),
+                "entry_block_reasons": list(readiness.get("entry_block_reasons") or data.get("entry_block_reasons") or []),
+                "warnings": list(readiness.get("warnings") or data.get("warnings") or []),
+                "fundamental_snapshot": dict(data.get("fundamental_snapshot") or {}),
+                "market_regime": dict(data.get("market_regime") or {}),
+                "capital_evidence": dict(data.get("individual_capital_evidence") or {}),
+                "cache_only_error": data.get("cache_only_error") or "",
+            }
+        )
+    return {
+        "ok": True,
+        "data": rows,
+        "count": len(rows),
+        "network_used": False,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "truth_boundary": "只读本地真实缓存，不联网、不补0分、不生成信号或订单；刷新必须显式调用数据中心刷新接口。",
+    }
+
+
 @app.get("/api/data-center/source-errors")
 def data_center_source_errors_v323() -> dict:
     warnings = source_registry_service.warnings() if hasattr(source_registry_service, "warnings") else []
     providers = provider_warnings().get("data") if "provider_warnings" in globals() else []
-    return {"ok": True, "data": {"registry": source_registry_v323.list(), "warnings": warnings, "provider_warnings": providers, "live_broker": live_trading_engine_v323.status()["broker"]}}
+    news_health = news_service.source_health() if hasattr(news_service, "source_health") else {}
+    return {
+        "ok": True,
+        "data": {
+            "registry": source_registry_v323.list(),
+            "warnings": warnings,
+            "provider_warnings": providers,
+            "news_sources": news_health,
+            "live_broker": live_trading_engine_v323.status()["broker"],
+        },
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
 
 
 @app.post("/api/data-center/refresh")
 def data_center_refresh_v323(payload: dict = Body(default_factory=dict)) -> dict:
     symbols = _symbols_from_payload(payload) or watchlist_service.list().get("symbols", [])
-    refreshed = []
-    for sym in symbols[:20]:
-        try:
-            q = service.get_quote(sym, force_refresh=bool(payload.get("force")))
-            qdict = q.to_dict() if hasattr(q, "to_dict") else q.__dict__
-            snap = build_quote_snapshot(sym, qdict, source_id=str(qdict.get("source") or "quote"))
-            trading_store_v323.put("data_source_status", snap.source.to_dict(), mode="data", symbol=sym, record_id=f"quote-{sym}-{snap.source.raw_hash}")
-            refreshed.append(sym)
-        except Exception as exc:
-            trading_store_v323.put("data_source_status", {"symbol": sym, "quality_status": "error", "missing_reasons": [str(exc)[:200]]}, mode="data", symbol=sym)
-    return {"ok": True, "refreshed": refreshed, "count": len(refreshed)}
+    normalized_symbols = list(dict.fromkeys(normalize_symbol(value) for value in symbols if normalize_symbol(value)))[:20]
+    raw_scopes = payload.get("scopes") or payload.get("scope") or ["quote"]
+    if isinstance(raw_scopes, str):
+        raw_scopes = re.split(r"[,，;；\s]+", raw_scopes)
+    aliases = {
+        "行情": "quote",
+        "K线": "kline",
+        "基本面": "fundamentals",
+        "信息面": "information",
+        "资金面": "capital",
+        "全球市场": "global_market",
+        "大盘情绪": "global_market",
+    }
+    scopes = [aliases.get(str(value).strip(), str(value).strip().lower()) for value in raw_scopes if str(value).strip()]
+    allowed_scopes = {"quote", "kline", "fundamentals", "information", "capital", "global_market"}
+    if "all" in scopes:
+        scopes = ["quote", "kline", "fundamentals", "information", "capital", "global_market"]
+    scopes = list(dict.fromkeys(value for value in scopes if value in allowed_scopes)) or ["quote"]
+    force = bool(payload.get("force"))
+    results: list[dict[str, Any]] = []
+    refreshed: list[str] = []
+
+    def add_result(symbol: str, scope: str, ok: bool, *, summary: str, data: dict | None = None, error: str = "") -> None:
+        results.append(
+            {
+                "symbol": symbol,
+                "scope": scope,
+                "ok": bool(ok),
+                "summary": summary,
+                "error": error[:240],
+                "data": dict(data or {}),
+            }
+        )
+
+    for sym in normalized_symbols:
+        local_profile = company_profile_service.get_local_profile(sym, allow_stale=True)
+        qdict: dict[str, Any] = {}
+        quote_obj = service.cache.get_quote(sym, max_age_seconds=None)
+        if quote_obj is not None:
+            qdict = quote_obj.to_dict()
+        if "quote" in scopes:
+            try:
+                quote_obj = service.get_quote(sym, force_refresh=force)
+                qdict = quote_obj.to_dict() if hasattr(quote_obj, "to_dict") else dict(quote_obj.__dict__)
+                snap = build_quote_snapshot(sym, qdict, source_id=str(qdict.get("source") or "quote"))
+                trading_store_v323.put("data_source_status", snap.source.to_dict(), mode="data", symbol=sym, record_id=f"quote-{sym}-{snap.source.raw_hash}")
+                add_result(sym, "quote", True, summary="行情快照已更新", data={"source": qdict.get("source"), "ts": str(qdict.get("ts") or "")})
+                refreshed.append(sym)
+            except Exception as exc:
+                reason = str(exc)[:200]
+                trading_store_v323.put("data_source_status", {"symbol": sym, "quality_status": "error", "missing_reasons": [reason]}, mode="data", symbol=sym)
+                add_result(sym, "quote", False, summary="行情刷新失败，未伪造", error=reason)
+        if "kline" in scopes:
+            try:
+                data = _safe_kline_payload(sym, frame="1d", adjust="qfq", limit=260, force=force)
+                ok = bool(data.get("ok") and (data.get("data") or data.get("bars")))
+                add_result(sym, "kline", ok, summary="日K缓存已更新" if ok else "日K源未返回有效数据", data={"cache_status": data.get("cache_status"), "source": data.get("source")}, error="" if ok else str(data.get("error") or "无有效K线"))
+            except Exception as exc:
+                add_result(sym, "kline", False, summary="日K刷新失败，保留历史缓存", error=str(exc))
+        if "fundamentals" in scopes:
+            try:
+                local_profile = company_profile_service.get_profile(sym, force=force)
+                scored = fundamental_snapshot_scoring_service.evaluate(symbol=sym, profile=local_profile, quote=qdict)
+                ok = scored.get("score") is not None or scored.get("quality_status") == "not_applicable"
+                add_result(sym, "fundamentals", ok, summary="财务/公司画像已核对" if ok else "财务快照仍不完整", data=scored, error="" if ok else "；".join(scored.get("missing_reasons") or []))
+            except Exception as exc:
+                add_result(sym, "fundamentals", False, summary="基本面刷新失败，未补默认分", error=str(exc))
+        if "information" in scopes:
+            try:
+                info = info_analyze(sym, name=local_profile.get("name") or sym, limit=80, force=force, mode="light")
+                info_data = dict(info.get("data") or {})
+                items = list(info_data.get("items") or [])
+                ok = bool(items)
+                add_result(sym, "information", ok, summary=f"信息快照 {len(items)} 条" if ok else "未取得可核验近期信息", data={"snapshot_id": info.get("snapshot_id"), "cache_status": info.get("cache_status"), "item_count": len(items), "sources_status": (info_data.get("news") or {}).get("sources_status") or info_data.get("sources_status") or []}, error="" if ok else "公开来源无有效条目或当前源不可用")
+            except Exception as exc:
+                add_result(sym, "information", False, summary="信息面刷新失败，历史库仍保留", error=str(exc))
+        if "capital" in scopes:
+            try:
+                capital = market_capital_evidence(sym, force=force, allow_network=True).get("data") or {}
+                ok = capital.get("score") is not None
+                add_result(sym, "capital", ok, summary="资金证据已更新" if ok else "公开资金证据不足", data=capital, error="" if ok else "；".join(capital.get("missing_reasons") or []))
+            except Exception as exc:
+                add_result(sym, "capital", False, summary="资金证据刷新失败，未冒充主力流向", error=str(exc))
+        if "global_market" in scopes:
+            try:
+                market = global_market_sentiment_service.snapshot(force=force, allow_network=True, symbol=sym, profile=local_profile)
+                ok = bool(market.get("valid_for_score"))
+                add_result(sym, "global_market", ok, summary="全球行业/宽基背景已更新" if ok else "全球市场证据不足", data=market, error="" if ok else "；".join(market.get("missing_reasons") or []))
+            except Exception as exc:
+                add_result(sym, "global_market", False, summary="全球市场刷新失败，未补中性分", error=str(exc))
+
+    readiness = data_center_decision_readiness_v328(
+        symbols=",".join(normalized_symbols),
+        mode=str(payload.get("mode") or "realtime_paper"),
+        strategy_family=str(payload.get("strategy_family") or "swing"),
+    )
+    failures = [row for row in results if not row.get("ok")]
+    return {
+        "ok": True,
+        "partial": bool(failures),
+        "refreshed": list(dict.fromkeys(refreshed)),
+        "count": len(list(dict.fromkeys(refreshed))),
+        "symbols": normalized_symbols,
+        "scopes": scopes,
+        "force": force,
+        "results": results,
+        "readiness": readiness,
+        "truth_boundary": "只在用户显式请求时联网；每个失败来源单独返回错误并保留历史缓存，绝不生成替代行情、新闻、财务或资金数据。",
+    }
 
 
 @app.get("/api/screener/run")
@@ -10033,6 +10915,11 @@ def realtime_paper_page() -> str:
 @app.get("/auto-trading", response_class=HTMLResponse)
 def auto_trading_page() -> str:
     return build_auto_trading_workbench_ui()
+
+
+@app.get("/broker-setup", response_class=HTMLResponse)
+def broker_setup_page() -> str:
+    return build_broker_setup_ui()
 
 
 @app.get("/live-trading", response_class=HTMLResponse)

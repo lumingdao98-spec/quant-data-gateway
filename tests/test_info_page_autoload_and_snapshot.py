@@ -49,6 +49,9 @@ def test_info_page_uses_single_parallel_localized_render_pipeline():
     assert "快照编号" in html
     assert "缓存年龄" in html
     assert "未提供原文链接" in html
+    assert "核对原始信息" in html
+    assert "传导路径" in html
+    assert "不提供可追溯原始链接" not in html
     assert "function renderLongText(" in html
     assert "展开完整摘要" in html
     assert "board_meeting:'董事会会议'" in html

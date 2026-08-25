@@ -859,6 +859,7 @@ def _session_config(payload: dict[str, Any]) -> dict[str, Any]:
         "position_sizing",
         "risk_controls",
         "score_weights",
+        "score_weight_mode",
         "event_watch",
         "data_requirements",
         "decision_policy",

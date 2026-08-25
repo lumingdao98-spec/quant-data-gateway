@@ -105,6 +105,84 @@ def test_trading_records_api_returns_summary_for_cost_and_pnl():
     assert summary["symbol_counts"]["990001"] >= 2
 
 
+def test_trading_records_summary_counts_only_fills_and_latest_position_snapshot():
+    rows = [
+        api._enrich_trading_record_row(
+            "orders",
+            {
+                "order_id": "summary-order",
+                "mode": "realtime_paper",
+                "symbol": "300750",
+                "side": "buy",
+                "quantity": 100,
+                "limit_price": 10,
+                "created_at": "2026-08-26T09:30:00+08:00",
+            },
+        ),
+        api._enrich_trading_record_row(
+            "fills",
+            {
+                "fill_id": "summary-fill",
+                "mode": "realtime_paper",
+                "symbol": "300750",
+                "side": "buy",
+                "quantity": 100,
+                "price": 10,
+                "fee": 5,
+                "created_at": "2026-08-26T09:31:00+08:00",
+            },
+        ),
+        api._enrich_trading_record_row(
+            "positions",
+            {
+                "position_id": "summary-position-old",
+                "mode": "realtime_paper",
+                "symbol": "300750",
+                "quantity": 100,
+                "cost_price": 10,
+                "last_price": 11,
+                "market_value": 1100,
+                "unrealized_pnl": 100,
+                "created_at": "2026-08-26T09:32:00+08:00",
+            },
+        ),
+        api._enrich_trading_record_row(
+            "positions",
+            {
+                "position_id": "summary-position-new",
+                "mode": "realtime_paper",
+                "symbol": "300750",
+                "quantity": 100,
+                "cost_price": 10,
+                "last_price": 12,
+                "market_value": 1200,
+                "unrealized_pnl": 200,
+                "created_at": "2026-08-26T09:33:00+08:00",
+            },
+        ),
+        api._enrich_trading_record_row(
+            "chart_markers",
+            {
+                "marker_id": "summary-marker",
+                "mode": "realtime_paper",
+                "symbol": "300750",
+                "price": 10,
+                "quantity": 100,
+                "created_at": "2026-08-26T09:34:00+08:00",
+            },
+        ),
+    ]
+
+    summary = api._trading_records_summary(rows)
+
+    assert summary["total_amount"] == 1000
+    assert summary["total_fee"] == 5
+    assert summary["positions_count"] == 1
+    assert summary["position_snapshots_count"] == 2
+    assert summary["position_market_value"] == 1200
+    assert summary["unrealized_pnl"] == 200
+
+
 def test_trading_records_enriches_position_cost_and_zero_pnl():
     row = api._enrich_trading_record_row(
         "positions",

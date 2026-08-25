@@ -229,6 +229,16 @@ class RealtimePaperEngine:
             if exclusion:
                 excluded_by_readiness.append(exclusion)
                 missing_data.append(f"{key}_excluded_by_readiness")
+        configured_score_weights = (
+            dict(payload.get("score_weights"))
+            if isinstance(payload.get("score_weights"), dict)
+            else {}
+        )
+        configured_score_weights["mode"] = str(
+            payload.get("score_weight_mode")
+            or configured_score_weights.get("mode")
+            or "manual"
+        )
         signal = self.signal_fusion.fuse(
             symbol=symbol,
             horizon=str(payload.get("horizon") or self.state.config.horizon),
@@ -240,12 +250,13 @@ class RealtimePaperEngine:
             information_score=execution_scores["information"],
             fund_flow_score=execution_scores["fund_flow"],
             market_score=execution_scores["market"],
-            score_weights=payload.get("score_weights") if isinstance(payload.get("score_weights"), dict) else None,
+            score_weights=configured_score_weights,
             anomaly_score=anomaly.anomaly_score,
             anomaly_action=anomaly.action_suggestion,
             info_negative_veto=bool(payload.get("info_negative_veto") or event_context.get("veto")),
             technical_broken=bool(payload.get("technical_broken")),
             fundamental_poor=bool(payload.get("fundamental_poor")),
+            strategy_family=str(payload.get("strategy_family") or payload.get("strategy") or ""),
             evidence=list(dict.fromkeys(evidence)),
             data_freshness=freshness.to_dict(),
             missing_data=list(dict.fromkeys(missing_data)),

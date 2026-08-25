@@ -33,6 +33,16 @@ class BrokerConfig:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def to_safe_dict(self) -> dict[str, Any]:
+        """Return status-safe configuration without exposing local credentials."""
+
+        data = self.to_dict()
+        data["qmt_account_id"] = _mask_identifier(self.qmt_account_id)
+        data["ptrade_account_id"] = _mask_identifier(self.ptrade_account_id)
+        data["http_bridge_token"] = "已配置" if self.http_bridge_token else ""
+        data["secret_fields_redacted"] = True
+        return data
+
 
 def load_broker_config(env: dict[str, str] | None = None) -> BrokerConfig:
     data = env or os.environ
@@ -78,3 +88,12 @@ def _bool(value: str | None, default: bool) -> bool:
     if value is None or value == "":
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mask_identifier(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{text[:2]}{'*' * max(4, len(text) - 4)}{text[-2:]}"

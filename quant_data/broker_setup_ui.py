@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+
+def build_broker_setup_ui() -> str:
+    return r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>券商接入向导 V3.28</title>
+  <style>
+    :root{color-scheme:dark;--bg:#08111f;--panel:#101b2e;--panel2:#0c1728;--line:#2a3e5d;--text:#e7f0ff;--muted:#91a9c9;--blue:#60a5fa;--green:#4ade80;--amber:#fbbf24;--red:#f87171}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI","Microsoft YaHei",sans-serif}button,input,select{font:inherit}a{color:#93c5fd}header{min-height:64px;display:flex;align-items:center;gap:12px;padding:10px 18px;background:#0d1829;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}.brand{font-size:20px;font-weight:900}.brand small{display:block;color:var(--muted);font-size:12px}.grow{flex:1}.nav{display:flex;gap:7px;flex-wrap:wrap}.nav a{text-decoration:none;background:#17243a;border:1px solid var(--line);border-radius:7px;padding:7px 10px;font-weight:800}
+    main{max-width:1500px;margin:auto;padding:16px;display:grid;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}.head{padding:12px 14px;background:#142138;border-bottom:1px solid var(--line);font-weight:900;display:flex;gap:10px;align-items:center}.body{padding:14px}.intro{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.intro article,.step{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}.intro b,.step b{display:block;font-size:16px;margin-bottom:4px}.intro p,.step p,.muted{color:var(--muted);margin:0;overflow-wrap:anywhere}.warning{border-color:#854d0e;background:#211807;color:#fde68a}.good{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
+    .layout{display:grid;grid-template-columns:minmax(280px,.75fr) minmax(0,1.6fr);gap:14px}.choices{display:grid;gap:8px}.choice{width:100%;text-align:left;border:1px solid var(--line);background:#0c1728;color:var(--text);border-radius:8px;padding:11px;cursor:pointer}.choice.active{border-color:#60a5fa;background:#10294c}.choice b{display:block}.choice small{display:block;color:var(--muted);margin-top:3px}.fields{display:none}.fields.active{display:block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}.field input,.field select{width:100%;height:40px;border:1px solid #365275;border-radius:7px;background:#091425;color:var(--text);padding:0 10px}.notice{border:1px solid #31517f;background:#0b1b31;border-radius:7px;padding:10px;line-height:1.6;overflow-wrap:anywhere}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.btn{border:1px solid #34527b;border-radius:7px;background:#1a2c48;color:var(--text);padding:8px 12px;font-weight:800;cursor:pointer}.btn.primary{background:#2563eb;border-color:#3b82f6}.btn.green{background:#15803d;border-color:#22c55e}.btn:disabled{opacity:.55;cursor:wait}.result{display:grid;gap:8px;margin-top:12px}.card{background:#0b1628;border:1px solid var(--line);border-radius:8px;padding:10px;overflow-wrap:anywhere}.card strong{display:block;margin-bottom:4px}.caps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.cap{background:#0c1728;border:1px solid var(--line);border-radius:7px;padding:8px}.cap b,.cap span{display:block;overflow-wrap:anywhere}.cap b{color:#9dc4ff;font-size:11px}.cap span{margin-top:3px}.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.num{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#164e63;color:#67e8f9;font-weight:900;margin-bottom:7px}pre{max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#06101d;border:1px solid var(--line);border-radius:7px;padding:11px;color:#bad5fa}.docs{display:flex;gap:8px;flex-wrap:wrap}.docs a{display:inline-flex;border:1px solid #31517f;border-radius:7px;padding:6px 8px;text-decoration:none}.toast{display:none;position:fixed;right:18px;bottom:18px;z-index:20;max-width:min(520px,calc(100vw - 36px));background:#17243a;border:1px solid #4b6b96;border-radius:7px;padding:11px 14px;box-shadow:0 12px 30px #0008}.toast.show{display:block}
+    @media(max-width:900px){.layout,.intro{grid-template-columns:1fr}.steps{grid-template-columns:repeat(2,minmax(0,1fr))}.caps{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:620px){header{align-items:flex-start;flex-wrap:wrap}.nav{display:none}main{padding:8px}.grid,.steps,.caps{grid-template-columns:1fr}.body{padding:10px}}
+  </style>
+</head>
+<body>
+<header><div class="brand">券商接入向导 V3.28<small>先只读验收，再模拟，最后才考虑真实委托</small></div><div class="grow"></div><nav class="nav"><a href="/auto-trading">总控台</a><a href="/realtime-paper">实时模拟</a><a href="/live-trading">真实交易</a><a href="/data-center">数据中心</a></nav></header>
+<main>
+  <section class="intro">
+    <article><b>量化执行</b><p>QMT/MiniQMT 或券商 PTrade 授权环境提供正式账户、持仓、委托和成交接口；策略仍由本系统统一评分与风控内核生成。</p></article>
+    <article><b>同花顺桌面伴随</b><p>可保存本地启动器路径、唤起客户端并生成经风控的人工委托提醒；普通桌面客户端没有被本系统当作自动下单接口。</p></article>
+    <article class="warning"><b>真实交易默认关闭</b><p>配置成功也不会自动开启实盘。还必须经过白名单、数据新鲜度、评分溯源、订单预检、人工确认和紧急停止开关。</p></article>
+  </section>
+
+  <section class="panel"><div class="head">四步接入</div><div class="body"><div class="steps">
+    <div class="step"><span class="num">1</span><b>选择通道</b><p>根据券商实际授权选择 QMT、PTrade、同花顺伴随或授权执行桥。</p></div>
+    <div class="step"><span class="num">2</span><b>只读校验</b><p>检查 SDK、路径、账号标识和桥地址；网页输入不写入配置文件。</p></div>
+    <div class="step"><span class="num">3</span><b>本地配置并重启</b><p>按安全模板配置环境变量，不把账号、密码、令牌提交到 Git。</p></div>
+    <div class="step"><span class="num">4</span><b>模拟后验收实盘</b><p>先验证账户/持仓只读同步和模拟订单，再手工开启实盘安全开关。</p></div>
+  </div></div></section>
+
+  <section class="layout">
+    <div class="panel"><div class="head">接入方式</div><div class="body choices" id="choices">
+      <button class="choice active" data-type="qmt" onclick="choose('qmt')"><b>迅投 QMT / MiniQMT</b><small>本机券商终端 + xtquant，适合 A 股量化实盘。</small></button>
+      <button class="choice" data-type="ptrade" onclick="choose('ptrade')"><b>PTrade 券商托管</b><small>通常由券商提供托管环境，不存在通用本地 SDK。</small></button>
+      <button class="choice" data-type="tonghuashun" onclick="choose('tonghuashun')"><b>同花顺桌面 / 授权桥</b><small>桌面端用于人工提醒；自动委托必须有 SuperMind/券商授权执行桥。</small></button>
+      <button class="choice" data-type="http_bridge" onclick="choose('http_bridge')"><b>受控本地 HTTP 桥</b><small>用于券商授权执行端，默认只允许本机地址与独立令牌。</small></button>
+    </div></div>
+    <div class="panel"><div class="head">配置与诊断 <span class="muted" id="selectedLabel">迅投 QMT / MiniQMT</span></div><div class="body">
+      <div class="fields active" data-fields="qmt"><div class="grid"><div class="field"><label>QMT userdata_mini 目录</label><input id="qmtPath" placeholder="D:\券商QMT\userdata_mini"></div><div class="field"><label>资金账号标识</label><input id="qmtAccount" autocomplete="off" placeholder="仅本次校验，不保存"></div><div class="field"><label>账号类型</label><select id="qmtType"><option value="STOCK">普通股票</option><option value="CREDIT">信用账户</option></select></div><div class="field"><label>独占会话号</label><input id="qmtSession" value="10001" inputmode="numeric"></div></div></div>
+      <div class="fields" data-fields="ptrade"><div class="grid"><div class="field"><label>券商指定模块</label><input id="ptradeModule" placeholder="仅券商明确提供时填写"></div><div class="field"><label>账号标识</label><input id="ptradeAccount" autocomplete="off" placeholder="仅本次校验，不保存"></div><div class="field"><label>托管/本地路径（可选）</label><input id="ptradePath" placeholder="由券商文档决定"></div><div class="field"><label>客户端工厂（可选）</label><input id="ptradeFactory" placeholder="module:function"></div></div></div>
+      <div class="fields" data-fields="tonghuashun"><div class="notice">下面分成两条独立能力：本地桌面伴随只负责启动与人工提醒；授权执行桥才可进入真实订单确认队列。系统不会用鼠标脚本代替券商 API。</div><div class="grid" style="margin-top:10px"><div class="field"><label>同花顺启动器</label><input id="thsLauncher" value="D:\software\同花顺\hexinlauncher.exe"></div><div class="field"><label>同花顺委托程序（可选）</label><input id="thsOrderApp" placeholder="券商安装目录中的委托程序 .exe"></div><div class="field"><label>授权执行桥地址</label><input id="thsBridgeUrl" value="http://127.0.0.1:8765"></div><div class="field"><label>桥接令牌</label><input id="thsBridgeToken" type="password" autocomplete="new-password" placeholder="仅本次校验，不保存"></div></div><div class="actions"><button class="btn" onclick="saveCompanion(this)">保存桌面伴随</button><button class="btn" onclick="launchCompanion('launcher',this)">启动行情客户端</button><button class="btn" onclick="launchCompanion('order',this)">启动委托程序</button></div></div>
+      <div class="fields" data-fields="http_bridge"><div class="grid"><div class="field"><label>桥接地址</label><input id="bridgeUrl" value="http://127.0.0.1:8765"></div><div class="field"><label>独立访问令牌</label><input id="bridgeToken" type="password" autocomplete="new-password" placeholder="仅本次校验，不保存"></div></div></div>
+      <div class="actions"><button class="btn" onclick="loadSetup(this)">读取本机状态</button><button class="btn primary" onclick="validateSetup(this)">只读校验</button><button class="btn green" onclick="location.href='/live-trading'">进入真实交易预检</button></div>
+      <div id="result" class="result"><div class="card muted">正在读取本机组件和安全开关；不会登录、保存密钥或下单。</div></div>
+      <details style="margin-top:10px"><summary>安全环境变量模板</summary><pre id="template">读取后生成模板。</pre></details>
+      <div class="docs" id="docs"></div>
+    </div></div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+const $=id=>document.getElementById(id);let selected='qmt',lastSetup=null;
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const labels={qmt:'迅投 QMT / MiniQMT',ptrade:'PTrade 券商托管',tonghuashun:'同花顺桌面 / 授权桥',http_bridge:'受控本地 HTTP 桥'};
+function toast(msg,bad=false){const el=$('toast');el.textContent=msg;el.style.borderColor=bad?'#7f1d1d':'#4b6b96';el.className='toast show';clearTimeout(window.__t);window.__t=setTimeout(()=>el.className='toast',4500)}
+async function api(url,options){const r=await fetch(url,options);let d={};try{d=await r.json()}catch(_){throw new Error('接口未返回有效 JSON')}if(!r.ok||d.ok===false)throw new Error(d.detail||d.message||('请求失败 '+r.status));return d}
+async function busy(btn,label,fn){const old=btn.textContent;btn.disabled=true;btn.textContent=label;try{return await fn()}finally{btn.disabled=false;btn.textContent=old}}
+function choose(type){selected=type;document.querySelectorAll('.choice').forEach(x=>x.classList.toggle('active',x.dataset.type===type));document.querySelectorAll('.fields').forEach(x=>x.classList.toggle('active',x.dataset.fields===type));$('selectedLabel').textContent=labels[type]||type;if(lastSetup)render(lastSetup)}
+function payload(){return {broker_type:selected,qmt_path:$('qmtPath').value.trim(),qmt_account_id:$('qmtAccount').value.trim(),qmt_account_type:$('qmtType').value,qmt_session_id:$('qmtSession').value.trim(),ptrade_path:$('ptradePath').value.trim(),ptrade_account_id:$('ptradeAccount').value.trim(),ptrade_module:$('ptradeModule').value.trim(),ptrade_client_factory:$('ptradeFactory').value.trim(),http_bridge_url:selected==='tonghuashun'?$('thsBridgeUrl').value.trim():$('bridgeUrl').value.trim(),http_bridge_token:selected==='tonghuashun'?$('thsBridgeToken').value:$('bridgeToken').value}}
+function render(data){lastSetup=data;const active=(data.brokers||{})[selected]||data.active||{};const cls=active.configuration_ready?'good':active.status==='data_or_companion_only'?'warn':'bad';const reasons=(active.missing_reasons||[]);const steps=(active.next_steps||[]);$('result').innerHTML=`<div class="card"><strong class="${cls}">${esc(labels[selected])}：${esc(active.status||'未检查')}</strong><div>${active.configuration_ready?'基础配置可进入连接验收':'仍需完成基础配置'}</div>${reasons.length?`<ul>${reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}</div><div class="caps">${Object.entries(active.capabilities||{}).map(([k,v])=>`<div class="cap"><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join('')}</div>${steps.length?`<div class="card"><strong>下一步</strong><ol>${steps.map(x=>`<li>${esc(x)}</li>`).join('')}</ol></div>`:''}<div class="card warning"><strong>安全开关</strong>实盘功能 ${data.safety?.feature_live_broker?'已打开':'关闭'}；真实下单 ${data.safety?.live_trading_enabled?'已打开':'关闭'}；人工确认 ${data.safety?.order_confirm_required?'开启':'关闭'}；Kill switch ${data.safety?.kill_switch?'开启':'关闭'}。</div>`;$('template').textContent=(data.environment_templates||{})[selected]||'暂无模板';const docs=(data.official_docs||{})[selected]||[];$('docs').innerHTML=docs.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.label)}</a>`).join('')}
+async function loadSetup(btn){return busy(btn,'读取中...',async()=>{const data=await api('/api/live-broker/setup?broker_type='+encodeURIComponent(selected));render(data);if(selected==='tonghuashun'){const c=await api('/api/integrations/tonghuashun/status');$('thsLauncher').value=c.launcher_path||$('thsLauncher').value;$('thsOrderApp').value=c.order_app_path||''}toast('只读状态已更新')})}
+async function validateSetup(btn){return busy(btn,'校验中...',async()=>{const data=await api('/api/live-broker/setup/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload())});render(data);toast('只读校验完成；账号和令牌未写入磁盘')})}
+async function saveCompanion(btn){return busy(btn,'保存中...',async()=>{const data=await api('/api/integrations/tonghuashun/configure',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:true,launcher_path:$('thsLauncher').value.trim(),order_app_path:$('thsOrderApp').value.trim()})});toast(data.message||'桌面伴随配置已保存');await loadSetup(btn)})}
+async function launchCompanion(target,btn){return busy(btn,'启动中...',async()=>{const data=await api('/api/integrations/tonghuashun/launch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({target})});toast(data.message||'已唤起客户端')})}
+window.addEventListener('DOMContentLoaded',()=>loadSetup(document.querySelector('.actions .btn')).catch(e=>toast(e.message,true)));
+</script>
+</body></html>"""

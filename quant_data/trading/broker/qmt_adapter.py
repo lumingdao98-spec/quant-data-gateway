@@ -163,10 +163,11 @@ class QmtBrokerAdapter(DisabledBrokerAdapter):
 
     def _map_order(self, row: Any) -> BrokerOrder:
         order_id = str(_attr(row, "order_id") or "")
+        raw_status = _attr(row, "order_status", "status")
         return BrokerOrder(
             order_id=order_id, broker_order_id=order_id,
             symbol=_symbol(_attr(row, "stock_code", "symbol")), side=_side(_attr(row, "order_type", "side")),
-            status=str(_attr(row, "order_status", "status") or "unknown"),
+            status=_order_status(raw_status),
             quantity=int(_num(_attr(row, "order_volume", "quantity"))), price=_num(_attr(row, "price", "order_price")),
             filled_quantity=int(_num(_attr(row, "traded_volume", "filled_quantity"))),
             created_at=_time_text(_attr(row, "order_time", "created_at")), source="broker:qmt", raw_response=_raw(row),
@@ -214,8 +215,49 @@ def _market_symbol(symbol: str) -> str:
 
 
 def _side(value: Any) -> str:
-    text = str(value or "").lower()
-    return "buy" if text in {"23", "buy", "stock_buy"} or "buy" in text else "sell" if text else ""
+    text = str(value or "").strip().lower()
+    if text in {"23", "buy", "stock_buy", "b", "买入"}:
+        return "buy"
+    if text in {"24", "sell", "stock_sell", "s", "卖出"}:
+        return "sell"
+    return ""
+
+
+def _order_status(value: Any) -> str:
+    """Map XtTrader order states into the shared V3.23 lifecycle."""
+
+    text = str(value if value is not None else "").strip().lower()
+    numeric = {
+        "48": "submitted",          # 未报
+        "49": "submitted",          # 待报
+        "50": "accepted",           # 已报
+        "51": "cancel_requested",   # 已报待撤
+        "52": "cancel_requested",   # 部成待撤
+        "53": "cancelled",          # 部撤
+        "54": "cancelled",          # 已撤
+        "55": "partially_filled",   # 部成
+        "56": "filled",             # 已成
+        "57": "rejected",           # 废单
+        "255": "unknown",
+    }
+    if text in numeric:
+        return numeric[text]
+    aliases = {
+        "未报": "submitted",
+        "待报": "submitted",
+        "已报": "accepted",
+        "已报待撤": "cancel_requested",
+        "部成待撤": "cancel_requested",
+        "部撤": "cancelled",
+        "已撤": "cancelled",
+        "部成": "partially_filled",
+        "已成": "filled",
+        "废单": "rejected",
+    }
+    return aliases.get(text, text if text in {
+        "submitted", "accepted", "cancel_requested", "cancelled",
+        "partially_filled", "filled", "rejected", "failed", "expired",
+    } else "unknown")
 
 
 def _time_text(value: Any) -> str:

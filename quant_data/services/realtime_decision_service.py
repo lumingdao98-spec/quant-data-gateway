@@ -365,7 +365,7 @@ class RealtimeDecisionService:
                 out.get("strategy_family")
                 or out.get("horizon")
                 or profile.get("strategy_family")
-                or "hybrid"
+                or "swing"
             ),
             scores={
                 "fundamental": out.get("fundamental_score"),

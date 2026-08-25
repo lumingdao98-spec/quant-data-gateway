@@ -74,6 +74,28 @@ class ScoreProvenanceEngine:
         stale = _stale(req.data_sources)
         if req.mode in {"realtime_paper", "live"} and stale and policy.stale_buy_block:
             gates.append(ScoreGate("stale_data_buy_block", False, "实时/实盘模式存在过期数据，禁止自动新增仓位", "block", penalty=20))
+        if req.mode in {"realtime_paper", "live"}:
+            quality = valid_values.get("data_quality_score")
+            if quality is None:
+                gates.append(
+                    ScoreGate(
+                        "data_quality_missing_block",
+                        False,
+                        "缺少可核验的数据质量分，禁止自动新增仓位",
+                        "block",
+                        penalty=0,
+                    )
+                )
+            elif quality < policy.minimum_data_quality_for_new_position:
+                gates.append(
+                    ScoreGate(
+                        "data_quality_low_block",
+                        False,
+                        f"数据质量 {quality:.1f} 低于门槛 {policy.minimum_data_quality_for_new_position:.1f}，禁止自动新增仓位",
+                        "block",
+                        penalty=0,
+                    )
+                )
         for gate in gates:
             if not gate.passed:
                 final -= abs(gate.penalty)
@@ -158,5 +180,7 @@ def _explain_dimension(key: str, value: float, weight: float) -> str:
         "behavior_risk_score": "冲高回落、跌破均线、诱多等行为风险",
         "data_quality_score": "数据源新鲜度、缺失字段和可追溯性",
     }
+    if key == "data_quality_score":
+        return f"{labels[key]}：{value:.1f}，仅作为新鲜度与完整性门禁，不参与加权得分。"
     direction = "加分" if weight >= 0 else "风险扣分"
     return f"{labels.get(key, key)}：{value:.1f}，权重 {weight:.2f}，作为{direction}项。"

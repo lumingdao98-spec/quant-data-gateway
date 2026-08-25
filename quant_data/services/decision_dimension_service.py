@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
+from quant_data.scoring.adaptive_execution_policy import (
+    ADAPTIVE_POLICY_VERSION,
+    STRATEGY_LABELS,
+    STRATEGY_WEIGHT_PROFILES,
+    AdaptiveExecutionPolicy,
+)
 from quant_data.scoring.execution_policy import EXECUTION_SCORE_THRESHOLDS, EXECUTION_SCORE_WEIGHTS
 
 
@@ -31,8 +37,8 @@ class DecisionDimensionService:
     inputs are suitable for backtest, paper entry, live entry, or reminders.
     """
 
-    _SHORT_FAMILIES = {"intraday_paper", "short_term", "event_driven", "score_reversal"}
-    _LONG_FAMILIES = {"long_term", "long_term_compounder", "core_satellite", "dividend_low_vol"}
+    _SHORT_FAMILIES = {"short", "intraday_paper", "short_term", "event_driven", "score_reversal"}
+    _LONG_FAMILIES = {"position", "long_term", "long_term_compounder", "core_satellite", "dividend_low_vol"}
     _ETF_FAMILIES = {"etf_index", "etf_momentum_rotation", "dca", "dca_schedule"}
     _UNUSABLE_QUALITY = {
         "missing",
@@ -44,6 +50,9 @@ class DecisionDimensionService:
         "error",
         "insufficient_sample",
     }
+
+    def __init__(self) -> None:
+        self.adaptive_policy = AdaptiveExecutionPolicy()
 
     def evaluate(
         self,
@@ -61,7 +70,12 @@ class DecisionDimensionService:
         freshness = dict(freshness or {})
         recent_information = dict(recent_information or {})
         provenance = dict(provenance or {})
-        family = str(strategy_family or "hybrid").strip().lower()
+        market_score = self._number(scores.get("market") if "market" in scores else scores.get("market_score"))
+        adaptive = self.adaptive_policy.resolve(
+            strategy_family=strategy_family,
+            market_score=market_score,
+        )
+        family = adaptive.strategy_family
         normalized_mode = self._mode(mode)
         required = self._required_dimensions(family, normalized_mode)
         stale_fields = {str(x) for x in (freshness.get("stale_fields") or [])}
@@ -119,11 +133,10 @@ class DecisionDimensionService:
                     "truth_boundary": truth_boundary,
                     "reason": reason,
                     "missing_reasons": source_missing,
-                    "configured_weight": EXECUTION_SCORE_WEIGHTS[rule.key],
+                    "configured_weight": adaptive.weights[rule.key],
                 }
             )
 
-        market_score = self._number(scores.get("market") if "market" in scores else scores.get("market_score"))
         market_source = self._source_for("market", sources)
         market_quality = self._quality("market", market_source, recent_information)
         market_stale = self._is_stale("market", stale_fields, recent_information, market_source)
@@ -144,7 +157,7 @@ class DecisionDimensionService:
             "usage": "参与有效权重并调节目标仓位" if market_ready else "未参与本轮评分",
             "reason": "" if market_ready else ("；".join(market_missing[:3]) or "指数趋势或有效市场宽度样本不足/过期"),
             "missing_reasons": market_missing,
-            "configured_weight": EXECUTION_SCORE_WEIGHTS["market"],
+            "configured_weight": adaptive.weights["market"],
         }
         if not market_ready:
             warnings.append("大盘情绪未参与：指数趋势或有效市场宽度证据不足")
@@ -172,6 +185,7 @@ class DecisionDimensionService:
             "paper_policy": "实时模拟使用最新缓存；策略必需的基本面、技术面、信息面或资金面缺失/过期时禁止自动新增仓位。",
             "live_policy": "真实交易复用实时决策分，并额外要求持久化评分溯源、实时行情、风控、确认队列和券商门禁。",
             "execution_score_policy": "SignalFusionEngine 的 final_score 是唯一执行分；policy_score 仅作审计对照，不直接下单。",
+            "adaptive_policy": adaptive.to_dict(),
             "provenance_ready": provenance_ok,
             "freshness_action": freshness.get("action") or "unknown",
         }
@@ -197,6 +211,15 @@ class DecisionDimensionService:
             "execution_thresholds": {
                 **EXECUTION_SCORE_THRESHOLDS,
             },
+            "adaptive_policy_version": ADAPTIVE_POLICY_VERSION,
+            "strategy_weight_profiles": {
+                key: {
+                    "label": STRATEGY_LABELS.get(key, key),
+                    "weights": dict(weights),
+                }
+                for key, weights in STRATEGY_WEIGHT_PROFILES.items()
+            },
+            "adaptive_policy": "先按短线、波段、中长线、ETF/定投、核心-卫星或事件驱动选择权重；再根据可追溯大盘环境有限调整阈值和仓位。用户手工权重优先。",
             "missing_policy": "缺失、过期、质量不足或超出0到100的分项不参与执行分；剩余有效权重重新归一化。必需维度缺失仍阻断自动新增仓位。",
             "screening_policy": "筛选总分仅作审计与候选排序，不得把实时观察强行提升为买入，也不得抬高实时仓位。",
             "mode_flow": {

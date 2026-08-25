@@ -65,7 +65,7 @@ class ScoreProvenanceV323:
     missing_data: list[str] = field(default_factory=list)
     stale_data: list[str] = field(default_factory=list)
     excluded_dimensions: list[dict[str, Any]] = field(default_factory=list)
-    policy_version: str = "v3.23-default"
+    policy_version: str = "v3.28-execution-aligned"
     policy_hash: str = ""
     dimension_scores: dict[str, float] = field(default_factory=dict)
 

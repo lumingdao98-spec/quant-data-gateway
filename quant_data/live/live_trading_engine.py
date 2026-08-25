@@ -19,6 +19,7 @@ from quant_data.trading.broker import (
     PTradeBrokerAdapter,
     QmtBrokerAdapter,
     SimulatorBrokerAdapter,
+    TonghuashunBridgeBrokerAdapter,
     load_broker_config,
 )
 from quant_data.trading.order_models import UnifiedOrder
@@ -43,18 +44,26 @@ def market_session_status() -> dict[str, Any]:
 class LiveTradingEngine:
     """Live broker facade with safe defaults and persistent audit trail."""
 
-    def __init__(self, config: BrokerConfig | None = None, broker: BrokerAdapter | None = None, store: TradingStore | None = None) -> None:
+    def __init__(
+        self,
+        config: BrokerConfig | None = None,
+        broker: BrokerAdapter | None = None,
+        store: TradingStore | None = None,
+        notifier: Any | None = None,
+    ) -> None:
         self.config = config or load_broker_config()
         self.broker = broker or self._broker_from_config(self.config)
         self.session = LiveSession(broker=self.config.broker_type)
-        self.confirm_queue = LiveConfirmQueue()
-        self.order_service = LiveOrderService(self.broker)
         self.store = store or TradingStore()
+        self.confirm_queue = LiveConfirmQueue()
+        self.confirm_queue.restore(self.store.list("manual_confirmations", mode="live", limit=5000))
+        self.order_service = LiveOrderService(self.broker)
         self.sync_service = LiveSyncService(self.broker, self.store)
         self.position_sync = LivePositionSync(self.broker)
         self.reconciliation = LiveReconciliation(self.broker, self.store)
         self.audit = TradingAuditLogV323(self.store)
         self.marker_engine = TradingMarkerEngine()
+        self.notifier = notifier
         self._store_live_session()
 
     def _broker_from_config(self, config: BrokerConfig) -> BrokerAdapter:
@@ -64,6 +73,8 @@ class LiveTradingEngine:
             return PTradeBrokerAdapter(config)
         if config.broker_type == "http_bridge":
             return HttpBridgeBrokerAdapter(config)
+        if config.broker_type == "tonghuashun":
+            return TonghuashunBridgeBrokerAdapter(config)
         if config.broker_type == "simulator":
             return SimulatorBrokerAdapter()
         return DisabledBrokerAdapter(config)
@@ -75,7 +86,7 @@ class LiveTradingEngine:
             "ok": True,
             "session": self.session.to_dict(),
             "broker": health,
-            "config": self.config.to_dict(),
+            "config": self.config.to_safe_dict(),
             "safety": {
                 "FEATURE_LIVE_BROKER": self.config.feature_live_broker,
                 "LIVE_TRADING_ENABLED": self.config.live_trading_enabled,
@@ -104,7 +115,15 @@ class LiveTradingEngine:
         self.session.status = "killed" if enabled else "disabled"
         self._store_live_session()
         self.audit.record("live_kill_switch", {"enabled": enabled}, mode="live", session_id=self.session.session_id)
-        return {"ok": True, "data": self.session.to_dict()}
+        notification = self._notify(
+            {
+                "event_type": "kill_switch",
+                "level": "critical" if enabled else "warning",
+                "status": "已开启" if enabled else "已解除",
+                "reason": "用户切换真实交易紧急停止开关",
+            }
+        )
+        return {"ok": True, "data": self.session.to_dict(), "notification": notification}
 
     def preview_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         order = self._order_from_payload(payload)
@@ -151,7 +170,20 @@ class LiveTradingEngine:
             self.store.put("orders", stored_order, mode="live", symbol=order.symbol, session_id=order.session_id)
             self._store_marker(order.to_dict())
             self.audit.record("live_order_rejected", order.to_dict(), mode="live", symbol=order.symbol, session_id=order.session_id)
-            return {"ok": False, "data": stored_order, "reason": pre["reason"]}
+            notification = self._notify(
+                {
+                    "event_type": "risk_blocked",
+                    "symbol": order.symbol,
+                    "name": order.name,
+                    "side": order.side,
+                    "quantity": order.quantity,
+                    "price": order.limit_price,
+                    "status": order.status,
+                    "reason": pre["reason"],
+                    "order_id": order.order_id,
+                }
+            )
+            return {"ok": False, "data": stored_order, "reason": pre["reason"], "notification": notification}
 
         if self.config.order_confirm_required and not confirmed:
             task = self.confirm_queue.enqueue(
@@ -172,7 +204,27 @@ class LiveTradingEngine:
             self.store.put("orders", stored_order, mode="live", symbol=order.symbol, session_id=order.session_id)
             self._store_marker(order.to_dict())
             self.audit.record("live_order_needs_confirmation", {"order": order.to_dict(), "confirmation": task.to_dict()}, mode="live", symbol=order.symbol, session_id=order.session_id)
-            return {"ok": False, "data": stored_order, "confirmation": task.to_dict(), "reason": "needs_confirmation"}
+            notification = self._notify(
+                {
+                    "event_type": "needs_confirmation",
+                    "symbol": order.symbol,
+                    "name": order.name,
+                    "side": order.side,
+                    "quantity": order.quantity,
+                    "price": order.limit_price,
+                    "status": order.status,
+                    "reason": order.status_reason,
+                    "order_id": order.order_id,
+                    "confirmation_id": task.task_id,
+                }
+            )
+            return {
+                "ok": False,
+                "data": stored_order,
+                "confirmation": task.to_dict(),
+                "reason": "needs_confirmation",
+                "notification": notification,
+            }
 
         result = self.order_service.place(order, confirmed=True)
         routed_order = dict(result.get("order") or order.to_dict())
@@ -191,7 +243,21 @@ class LiveTradingEngine:
         )
         self._store_marker(routed_order)
         self.audit.record("live_order_submitted", result, mode="live", symbol=order.symbol, session_id=order.session_id)
-        return {"ok": result["ok"], "data": result}
+        notification = self._notify(
+            {
+                "event_type": "order_submitted",
+                "level": "info",
+                "symbol": order.symbol,
+                "name": order.name,
+                "side": order.side,
+                "quantity": order.quantity,
+                "price": order.limit_price,
+                "status": routed_order.get("status") or "submitted",
+                "reason": routed_order.get("status_reason") or "订单已进入券商适配器",
+                "order_id": routed_order.get("order_id") or order.order_id,
+            }
+        )
+        return {"ok": result["ok"], "data": result, "notification": notification}
 
     def place_orders_batch(self, payload: dict[str, Any], symbols: list[str], *, confirmed: bool = False) -> dict[str, Any]:
         rows = []
@@ -204,6 +270,78 @@ class LiveTradingEngine:
             "safety": "批量入口不会绕过逐笔风控、人工确认或全局 kill switch。",
             "note": "真实批量下单不会绕过逐笔风控、白名单、确认队列和券商适配器。",
         }
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        requested_id = str(order_id or "").strip()
+        stored = self.store.get("orders", requested_id) if requested_id else None
+        if stored is None:
+            stored = next(
+                (
+                    row
+                    for row in self.store.list("orders", mode="live", limit=5000)
+                    if requested_id
+                    in {
+                        str(row.get("id") or ""),
+                        str(row.get("order_id") or ""),
+                        str(row.get("broker_order_id") or ""),
+                    }
+                ),
+                None,
+            )
+        if not stored or not bool(stored.get("broker_submitted")):
+            result = {
+                "ok": False,
+                "order_id": requested_id,
+                "status": "rejected",
+                "reason": "未找到已提交券商的真实订单，禁止把预检查或确认票据当作可撤委托",
+            }
+            self.audit.record("live_cancel_rejected", result, mode="live", session_id=self.session.session_id)
+            return result
+
+        broker_order_id = str(stored.get("broker_order_id") or "").strip()
+        if not broker_order_id:
+            result = {
+                "ok": False,
+                "order_id": str(stored.get("order_id") or requested_id),
+                "status": "rejected",
+                "reason": "订单缺少券商委托号，无法安全撤单",
+            }
+            self.audit.record(
+                "live_cancel_rejected",
+                result,
+                mode="live",
+                symbol=str(stored.get("symbol") or ""),
+                session_id=str(stored.get("session_id") or self.session.session_id),
+            )
+            return result
+
+        broker_result = self.broker.cancel_order(broker_order_id).to_dict()
+        local_order_id = str(stored.get("order_id") or requested_id)
+        updated = {
+            **stored,
+            "order_id": local_order_id,
+            "broker_order_id": broker_order_id,
+            "status": str(broker_result.get("status") or ("cancel_requested" if broker_result.get("ok") else "failed")),
+            "status_reason": str(broker_result.get("reason") or ""),
+            "cancel_requested_at": _now(),
+            "updated_at": _now(),
+            "record_stage": "cancel",
+            "broker_submitted": True,
+        }
+        session_id = str(updated.get("session_id") or self.session.session_id)
+        symbol = str(updated.get("symbol") or "")
+        self.store.put("orders", updated, mode="live", symbol=symbol, session_id=session_id, record_id=local_order_id)
+        self.store.put(
+            "broker_raw_responses",
+            {"order_id": local_order_id, "broker_order_id": broker_order_id, "cancel_result": broker_result, "created_at": _now()},
+            mode="live",
+            symbol=symbol,
+            session_id=session_id,
+            record_id=_stable_id("cancel", local_order_id, broker_result),
+        )
+        self._store_marker(updated)
+        self.audit.record("live_cancel_requested", updated, mode="live", symbol=symbol, session_id=session_id)
+        return {"ok": bool(broker_result.get("ok")), "data": updated, "broker_result": broker_result}
 
     def sync_live_account_state(self, *, force: bool = False) -> dict[str, Any]:
         result = self.sync_service.sync(session_id=self.session.session_id, force=force)
@@ -233,6 +371,12 @@ class LiveTradingEngine:
         task_before = self.confirm_queue.tasks.get(confirm_id)
         if task_before is None:
             return {"ok": False, "message": f"confirm task not found: {confirm_id}"}
+        if task_before.status != "pending":
+            return {
+                "ok": False,
+                "message": f"confirmation already decided: {task_before.status}",
+                "data": task_before.to_dict(),
+            }
         task = self.confirm_queue.approve(confirm_id, operator="user")
         self.store.put("manual_confirmations", task.to_dict(), mode="live", symbol=task.symbol, session_id=self.session.session_id, record_id=task.task_id)
         self.audit.record("live_confirmation_approved", task.to_dict(), mode="live", symbol=task.symbol, session_id=self.session.session_id)
@@ -255,10 +399,27 @@ class LiveTradingEngine:
         return {"ok": bool(execution.get("ok")), "data": stored_task, "execution": execution}
 
     def reject_confirmation(self, confirm_id: str) -> dict[str, Any]:
+        task_before = self.confirm_queue.tasks.get(confirm_id)
+        if task_before is None:
+            return {"ok": False, "message": f"confirm task not found: {confirm_id}"}
+        if task_before.status != "pending":
+            return {
+                "ok": False,
+                "message": f"confirmation already decided: {task_before.status}",
+                "data": task_before.to_dict(),
+            }
         task = self.confirm_queue.reject(confirm_id, operator="user")
         self.store.put("manual_confirmations", task.to_dict(), mode="live", symbol=task.symbol, session_id=self.session.session_id, record_id=task.task_id)
         self.audit.record("live_confirmation_rejected", task.to_dict(), mode="live", symbol=task.symbol, session_id=self.session.session_id)
         return {"ok": True, "data": task.to_dict()}
+
+    def _notify(self, event: dict[str, Any]) -> dict[str, Any]:
+        if self.notifier is None:
+            return {"ok": False, "status": "not_configured", "message": "移动提醒服务未配置"}
+        try:
+            return dict(self.notifier.send({"mode": "live", **event}) or {})
+        except Exception as exc:
+            return {"ok": False, "status": "failed", "message": f"移动提醒异常: {str(exc)[:160]}"}
 
     def _can_live_place_legacy(self, order: UnifiedOrder) -> dict[str, Any]:
         if self.session.kill_switch or self.config.live_kill_switch:
@@ -336,7 +497,7 @@ class LiveTradingEngine:
         if any(row["required"] and not row["passed"] for row in gates):
             return self._precheck_result(gates, order_value=value)
 
-        real_provider = self.config.broker_type in {"qmt", "ptrade", "http_bridge"}
+        real_provider = self.config.broker_type in {"qmt", "ptrade", "http_bridge", "tonghuashun"}
         if real_provider:
             provenance = self.store.get("score_provenance", order.provenance_id) if order.provenance_id else None
             provenance_ok = bool(provenance) and str((provenance or {}).get("symbol") or "") == order.symbol

@@ -1,4 +1,5 @@
 from quant_data.trading.broker import BrokerConfig, HttpBridgeBrokerAdapter, LiveOrderRequest
+from quant_data.trading.broker.http_bridge_adapter import _order_status, _side
 
 
 def _config(**overrides):
@@ -69,3 +70,12 @@ def test_http_bridge_malformed_or_negative_response_never_becomes_success():
     ack = adapter.place_order(LiveOrderRequest(symbol="300750", side="buy", quantity=100, limit_price=400))
 
     assert ack.accepted is False
+
+
+def test_http_bridge_normalizes_external_order_fields_without_guessing_unknown_side():
+    assert _side("证券买入") == "buy"
+    assert _side("卖出") == "sell"
+    assert _side("other") == ""
+    assert _order_status("部成") == "partially_filled"
+    assert _order_status("已成") == "filled"
+    assert _order_status("mystery") == "unknown"

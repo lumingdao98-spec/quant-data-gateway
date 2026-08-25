@@ -71,7 +71,7 @@ def test_detail_chart_clusters_duplicate_markers_without_dropping_audit_rows():
     assert "function markerAnchorPrice" in html
     assert "raw>=lo*.85&&raw<=hi*1.15" in html
     assert "visibleMarkerPrices=function(){return[]}" in html
-    assert "byDate[date].slice(0,4)" in html
+    assert "byDate[date].slice(0,3)" in html
     assert "已合并重复" in html
     assert "collectAllMarkers()" in html
     assert "qd-v327-chart-density" in html

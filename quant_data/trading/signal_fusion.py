@@ -5,6 +5,7 @@ from datetime import datetime
 from math import isfinite
 from typing import Any, Literal
 
+from quant_data.scoring.adaptive_execution_policy import AdaptiveExecutionPolicy
 from quant_data.scoring.execution_policy import EXECUTION_SCORE_THRESHOLDS, EXECUTION_SCORE_WEIGHTS
 
 
@@ -63,6 +64,7 @@ class SignalFusionConfig:
 class SignalFusionEngine:
     def __init__(self, config: SignalFusionConfig | None = None) -> None:
         self.config = config or SignalFusionConfig()
+        self.adaptive_policy = AdaptiveExecutionPolicy()
 
     def fuse(
         self,
@@ -86,6 +88,7 @@ class SignalFusionEngine:
         anomaly_action: str | None = None,
         technical_broken: bool = False,
         fundamental_poor: bool = False,
+        strategy_family: str | None = None,
         now: datetime | None = None,
     ) -> UnifiedSignal:
         cfg = self.config
@@ -97,34 +100,19 @@ class SignalFusionEngine:
             "fund_flow": fund_flow_score,
             "market": market_score,
         }
-        weights = {
-            "screening": cfg.screening_weight,
-            "fundamental": cfg.fundamental_weight,
-            "technical": cfg.technical_weight,
-            "information": cfg.information_weight,
-            "fund_flow": cfg.fund_flow_weight,
-            "market": cfg.market_weight,
-        }
-        if score_weights:
-            aliases = {
-                "screening": ("screening", "screening_score", "screener", "screener_score"),
-                "fundamental": ("fundamental", "fundamental_score"),
-                "technical": ("technical", "technical_score"),
-                "information": ("information", "information_score", "info"),
-                "fund_flow": ("fund_flow", "fund_flow_score", "capital", "money"),
-                "market": ("market", "market_regime", "market_score"),
-            }
-            for key, names in aliases.items():
-                for name in names:
-                    if name not in score_weights:
-                        continue
-                    try:
-                        value = float(score_weights[name])
-                    except (TypeError, ValueError):
-                        continue
-                    if value > 0:
-                        weights[key] = value
-                    break
+        adaptive = self.adaptive_policy.resolve(
+            strategy_family=strategy_family,
+            horizon=horizon,
+            market_score=market_score,
+            score_weights=score_weights,
+            base_thresholds={
+                "buy": cfg.buy_threshold,
+                "add": cfg.add_threshold,
+                "reduce_or_sell": cfg.sell_threshold,
+            },
+            weak_market_cut=cfg.weak_market_cut,
+        )
+        weights = {"screening": cfg.screening_weight, **adaptive.weights}
         scores: dict[str, float | None] = {}
         invalid_dimensions: list[dict[str, Any]] = []
         for key, value in raw_scores.items():
@@ -210,10 +198,9 @@ class SignalFusionEngine:
             "weight_policy": "缺失或无效分项不参与；剩余有效分项重新归一化到100%。筛选总分仅在所有分项都缺失时作低置信兜底。",
             "configured_weights": {key: round(float(weights[key]), 6) for key in component_keys},
             "thresholds": {
-                "buy": cfg.buy_threshold,
-                "add": cfg.add_threshold,
-                "reduce_or_sell": cfg.sell_threshold,
+                **adaptive.thresholds,
             },
+            "adaptive_policy": adaptive.to_dict(),
         }
         action: SignalAction = "hold"
         reason_parts: list[str] = []
@@ -223,13 +210,13 @@ class SignalFusionEngine:
         elif anomaly_action in {"block_buy", "force_exit"}:
             action = "reduce" if anomaly_action == "force_exit" else "avoid"
             reason_parts.append("异常波动触发规避")
-        elif final_score >= cfg.add_threshold and anomaly_score < 25:
+        elif final_score >= adaptive.thresholds["add"] and anomaly_score < 25:
             action = "add"
             reason_parts.append("综合评分强且异常较低")
-        elif final_score >= cfg.buy_threshold and anomaly_score < 35:
+        elif final_score >= adaptive.thresholds["buy"] and anomaly_score < 35:
             action = "buy"
             reason_parts.append("综合评分达到买入观察阈值")
-        elif final_score <= cfg.sell_threshold or anomaly_score >= 55:
+        elif final_score <= adaptive.thresholds["reduce_or_sell"] or anomaly_score >= 55:
             action = "sell" if anomaly_score >= 55 else "reduce"
             reason_parts.append("评分转弱或异常升高")
         else:
@@ -239,7 +226,7 @@ class SignalFusionEngine:
         if technical_broken and (fundamental_score or 0) >= 65:
             action = "hold" if action in {"buy", "add"} else action
             reason_parts.append("基本面较好但技术破位，禁止短线追买")
-        market_scale = cfg.weak_market_cut if market_score is not None and market_score < 40 else 1.0
+        market_scale = adaptive.position_scale
         if market_scale < 1:
             reason_parts.append("大盘弱势降低目标仓位")
         base_weight = cfg.max_target_weight * max(0.0, (final_score - 45.0) / 55.0) * market_scale

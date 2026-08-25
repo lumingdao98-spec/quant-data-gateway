@@ -159,6 +159,10 @@ class NewsAnalysisService:
         self.cache_ttl_seconds = cache_ttl_seconds
         self.store = NewsStoreService()
         self._source_status: list[dict[str, Any]] = []
+        self._last_source_status: list[dict[str, Any]] = []
+        self._last_source_checked_at: str = ""
+        self._last_global_source_status: list[dict[str, Any]] = []
+        self._last_global_checked_at: str = ""
         self._global_news_cache: dict[str, Any] | None = None
         self._global_news_cache_ts: float = 0.0
         self.source_timeout_seconds = 3.0
@@ -196,12 +200,14 @@ class NewsAnalysisService:
             if cached and (cached.get("items") or (cached_age is not None and cached_age <= 60)):
                 cached = self._normalize_cached_result(cached, symbol=symbol, name=name, limit=limit)
                 cached.setdefault("cache_info", {"hit": True, "ttl_seconds": self.cache_ttl_seconds})
+                self._last_source_status = [
+                    dict(row) for row in (cached.get("sources_status") or []) if isinstance(row, dict)
+                ]
+                self._last_source_checked_at = str(cached.get("updated_at") or "")
                 self._log_progress(f"命中信息面缓存 {name}({symbol})，返回缓存结果")
                 return cached
 
         self._source_status = []
-        self._source_failures = {}
-        self._source_circuit_opened_at = {}
         self._current_mode = mode
         self._round_started_at = time.monotonic()
         self._round_budget_seconds = float(budget_seconds) if budget_seconds else None
@@ -270,6 +276,8 @@ class NewsAnalysisService:
         }
         self._write_cache(key, result)
         self.store.save_analysis(symbol, key, result, name=name)
+        self._last_source_status = [dict(row) for row in self._source_status]
+        self._last_source_checked_at = str(result.get("updated_at") or "")
         return result
 
     def search_keyword(self, keyword: str, limit: int = 80, force: bool = False) -> dict[str, Any]:
@@ -318,6 +326,55 @@ class NewsAnalysisService:
             "原则": "官方公告和监管披露优先；快讯用于宏观/行业映射；社区只用于舆情热度和传闻风险；搜索引擎页不进入评分。",
         }
 
+    def source_health(self) -> dict[str, Any]:
+        """Read the latest source diagnostics without starting a crawl."""
+        now = time.time()
+
+        def decorate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            output: list[dict[str, Any]] = []
+            for original in rows:
+                row = dict(original)
+                count = int(row.get("count") or 0)
+                skipped = str(row.get("skipped_reason") or "").strip()
+                status = str(row.get("status") or "").strip()
+                if count > 0:
+                    quality = "有有效数据"
+                elif skipped:
+                    quality = "已跳过/降级"
+                elif status.lower() in {"ok", "healthy"}:
+                    quality = "已连接但无有效条目"
+                else:
+                    quality = "异常或无数据"
+                row["quality_status"] = quality
+                output.append(row)
+            return output
+
+        circuits = []
+        for source, opened_at in sorted(self._source_circuit_opened_at.items()):
+            remaining = max(0.0, 120.0 - (now - float(opened_at or 0)))
+            if remaining <= 0:
+                continue
+            circuits.append(
+                {
+                    "source": source,
+                    "failures": int(self._source_failures.get(source) or 0),
+                    "remaining_seconds": round(remaining, 1),
+                    "status": "短时熔断，等待后续显式刷新重试",
+                }
+            )
+        return {
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "last_stock_source_checked_at": self._last_source_checked_at,
+            "last_global_source_checked_at": self._last_global_checked_at,
+            "stock_sources": decorate(self._last_source_status),
+            "global_sources": decorate(self._last_global_source_status),
+            "active_circuits": circuits,
+            "store": self.store.stats(),
+            "source_policy": self.message_source_policy(),
+            "network_used": False,
+            "truth_boundary": "这里只展示最近一次真实抓取诊断与本地信息库覆盖；没有数据的来源不会补分，百度/360/搜狗结果页永久不作为证据。",
+        }
+
 
 
     def fetch_global_news(self, limit: int = 80, force: bool = False, ttl_seconds: int = 45, budget_seconds: float = 7.0) -> dict[str, Any]:
@@ -335,6 +392,10 @@ class NewsAnalysisService:
             data = dict(self._global_news_cache)
             data.setdefault("cache_info", {})
             data["cache_info"].update({"hit": True, "ttl_seconds": ttl_seconds, "auto_refresh": True})
+            self._last_global_source_status = [
+                dict(row) for row in (data.get("sources_status") or []) if isinstance(row, dict)
+            ]
+            self._last_global_checked_at = str(data.get("updated_at") or "")
             return data
 
         raw_rows: list[dict[str, Any]] = []
@@ -503,6 +564,8 @@ class NewsAnalysisService:
         }
         self._global_news_cache = result
         self._global_news_cache_ts = now
+        self._last_global_source_status = [dict(row) for row in status]
+        self._last_global_checked_at = str(result.get("updated_at") or "")
         return result
 
     def _bounded_value(self, fn, *, timeout: float, label: str = "外部来源") -> Any:

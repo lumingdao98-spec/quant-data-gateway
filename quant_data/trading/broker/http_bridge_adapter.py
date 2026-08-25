@@ -116,7 +116,7 @@ class HttpBridgeBrokerAdapter(BrokerAdapter):
         accepted = payload.get("accepted") is True
         return LiveOrderAck(
             accepted=accepted,
-            status=str(payload.get("status") or ("accepted" if accepted else "rejected")),
+            status=_order_status(payload.get("status"), fallback="accepted" if accepted else "rejected"),
             order_id=str(payload.get("order_id") or ""),
             broker_order_id=str(payload.get("broker_order_id") or payload.get("order_id") or ""),
             reason=str(payload.get("reason") or payload.get("message") or ""),
@@ -131,7 +131,7 @@ class HttpBridgeBrokerAdapter(BrokerAdapter):
         return CancelOrderResult(
             ok=payload.get("ok") is True,
             order_id=str(payload.get("order_id") or order_id),
-            status=str(payload.get("status") or "unknown"),
+            status=_order_status(payload.get("status"), fallback="cancel_requested" if payload.get("ok") is True else "unknown"),
             reason=str(payload.get("reason") or payload.get("message") or ""),
         )
 
@@ -243,8 +243,8 @@ class HttpBridgeBrokerAdapter(BrokerAdapter):
             order_id=str(row.get("order_id") or row.get("broker_order_id") or ""),
             broker_order_id=str(row.get("broker_order_id") or row.get("order_id") or ""),
             symbol=str(row.get("symbol") or ""),
-            side=str(row.get("side") or ""),
-            status=str(row.get("status") or "unknown"),
+            side=_side(row.get("side")),
+            status=_order_status(row.get("status")),
             quantity=int(float(row.get("quantity") or 0)),
             filled_quantity=int(float(row.get("filled_quantity") or 0)),
             price=float(row["price"]) if row.get("price") not in (None, "") else None,
@@ -263,7 +263,7 @@ class HttpBridgeBrokerAdapter(BrokerAdapter):
             order_id=str(row.get("order_id") or ""),
             broker_order_id=str(row.get("broker_order_id") or row.get("order_id") or ""),
             symbol=str(row.get("symbol") or ""),
-            side=str(row.get("side") or ""),
+            side=_side(row.get("side")),
             quantity=quantity,
             price=price,
             amount=float(row.get("amount") or quantity * price),
@@ -274,3 +274,46 @@ class HttpBridgeBrokerAdapter(BrokerAdapter):
             source=str(row.get("source") or "authorized_local_http_bridge"),
             raw_response=row,
         )
+
+
+def _side(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"buy", "b", "23", "stock_buy", "买入", "证券买入"} or "买入" in text:
+        return "buy"
+    if text in {"sell", "s", "24", "stock_sell", "卖出", "证券卖出"} or "卖出" in text:
+        return "sell"
+    return ""
+
+
+def _order_status(value: Any, *, fallback: str = "unknown") -> str:
+    text = str(value if value is not None else "").strip().lower().replace(" ", "")
+    aliases = {
+        "signal_created": "signal_created",
+        "prechecked": "prechecked",
+        "risk_blocked": "risk_blocked",
+        "needs_confirmation": "needs_confirmation",
+        "confirmed": "confirmed",
+        "submitted": "submitted",
+        "pending": "submitted",
+        "待报": "submitted",
+        "accepted": "accepted",
+        "已报": "accepted",
+        "partially_filled": "partially_filled",
+        "partial": "partially_filled",
+        "部成": "partially_filled",
+        "filled": "filled",
+        "done": "filled",
+        "已成": "filled",
+        "cancel_requested": "cancel_requested",
+        "待撤": "cancel_requested",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+        "已撤": "cancelled",
+        "rejected": "rejected",
+        "废单": "rejected",
+        "failed": "failed",
+        "expired": "expired",
+        "unknown": "unknown",
+        "reconciled": "reconciled",
+    }
+    return aliases.get(text, fallback)

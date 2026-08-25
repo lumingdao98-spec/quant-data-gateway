@@ -6,7 +6,7 @@ import quant_data.api as api
 def test_auto_trading_workbench_page_visible():
     html = TestClient(api.app).get("/auto-trading").text
 
-    assert "V3.26 自动交易总控台" in html
+    assert "V3.28 自动交易总控台" in html
     assert "首页总览 + 右侧覆盖模块" in html
     assert "交易工作流" in html
     assert "联网智能辅助" in html
@@ -32,6 +32,18 @@ def test_auto_trading_workbench_page_visible():
     assert "runConfigBacktest" in html
     assert "quote_hydrate_request" in html
     assert "/api/live-broker/status" in html
+    assert "/api/live-broker/setup" in html
+    assert "/api/live-broker/setup/validate" in html
+    assert "券商接入向导" in html
+    assert "同花顺 / SuperMind 授权桥" in html
+    assert "普通同花顺客户端只做行情查看" in html
+    assert "/api/notifications/mobile/status" in html
+    assert "/api/notifications/mobile/preview" in html
+    assert "/api/notifications/mobile/test" in html
+    assert "移动端交易提醒" in html
+    assert "只读校验" in html
+    assert "网页输入未写入" in html or "不写入磁盘" in html
+    assert "renderBrokerSetup" in html
     assert "/api/integrations/tonghuashun/status" in html
     assert "同花顺委托提醒" in html
     assert "不会自动点击下单" in html

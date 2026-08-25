@@ -43,7 +43,13 @@ class PTradeBrokerAdapter(DisabledBrokerAdapter):
 
     def health_check(self) -> BrokerConnectionStatus:
         if not self._supported:
-            return BrokerConnectionStatus(False, "unsupported", "ptrade", f"无法导入 PTrade 模块 {self.config.ptrade_module or 'ptrade'}。")
+            return BrokerConnectionStatus(
+                False,
+                "unsupported",
+                "ptrade",
+                "PTrade 通常运行在券商托管平台；当前未识别券商明确提供的本地模块。"
+                "可在券商环境部署受控执行端后使用本地 HTTP 券商桥，或配置券商给出的模块/工厂。",
+            )
         if not (self.config.feature_live_broker and self.config.live_trading_enabled):
             return BrokerConnectionStatus(False, "disabled", "ptrade", "PTrade SDK 已识别，但真实交易开关未开启。")
         if not self.config.ptrade_account_id:
@@ -71,6 +77,17 @@ class PTradeBrokerAdapter(DisabledBrokerAdapter):
                 result = self._client.connect()
                 if result not in (True, 0, None):
                     raise RuntimeError(f"PTrade connect returned {result}")
+            required_methods = {
+                "get_cash",
+                "get_positions",
+                "get_orders",
+                "get_trades",
+                "place_order",
+                "cancel_order",
+            }
+            missing_methods = sorted(name for name in required_methods if not callable(getattr(self._client, name, None)))
+            if missing_methods:
+                raise RuntimeError("PTrade 执行端缺少必要接口: " + ", ".join(missing_methods))
             self._connected = True
             self._last_error = ""
         except Exception as exc:
@@ -111,12 +128,12 @@ class PTradeBrokerAdapter(DisabledBrokerAdapter):
         out: list[BrokerPosition] = []
         for row in rows or []:
             quantity = int(_num(_value(row, "quantity", "current_amount", "total_amount")))
-            cost = _num(_value(row, "avg_cost", "cost_price", "enable_amount"))
+            cost = _num(_value(row, "avg_cost", "cost_price", "cost_basis"))
             price = _num(_value(row, "market_price", "last_price"))
             market_value = _num(_value(row, "market_value"), quantity * price)
             unrealized = _num(_value(row, "unrealized_pnl"), market_value - quantity * cost)
             out.append(BrokerPosition(
-                symbol=_symbol(_value(row, "symbol", "stock_code", "stock_account")),
+                symbol=_symbol(_value(row, "symbol", "stock_code", "security")),
                 name=str(_value(row, "name", "stock_name") or ""),
                 quantity=quantity,
                 available_quantity=int(_num(_value(row, "available_quantity", "enable_amount"))),
@@ -186,8 +203,8 @@ class PTradeBrokerAdapter(DisabledBrokerAdapter):
         order_id = str(_value(row, "broker_order_id", "order_id", "entrust_no") or "")
         return BrokerOrder(
             order_id=order_id, broker_order_id=order_id,
-            symbol=_symbol(_value(row, "symbol", "stock_code")), side=str(_value(row, "side", "business_name") or "").lower(),
-            status=str(_value(row, "status", "order_status", "entrust_status") or "unknown"),
+            symbol=_symbol(_value(row, "symbol", "stock_code")), side=_side(_value(row, "side", "business_name")),
+            status=_order_status(_value(row, "status", "order_status", "entrust_status")),
             quantity=int(_num(_value(row, "quantity", "entrust_amount"))), price=_num(_value(row, "price", "entrust_price")),
             filled_quantity=int(_num(_value(row, "filled_quantity", "business_amount"))),
             created_at=str(_value(row, "created_at", "entrust_time") or ""), source="broker:ptrade", raw_response=_dict(row),
@@ -199,7 +216,7 @@ class PTradeBrokerAdapter(DisabledBrokerAdapter):
         order_id = str(_value(row, "broker_order_id", "order_id", "entrust_no") or "")
         return BrokerTrade(
             trade_id=str(_value(row, "broker_trade_id", "trade_id", "business_no") or ""), order_id=order_id, broker_order_id=order_id,
-            symbol=_symbol(_value(row, "symbol", "stock_code")), side=str(_value(row, "side", "business_name") or "").lower(),
+            symbol=_symbol(_value(row, "symbol", "stock_code")), side=_side(_value(row, "side", "business_name")),
             quantity=quantity, price=price, amount=_num(_value(row, "amount", "business_balance"), quantity * price),
             filled_at=str(_value(row, "filled_at", "business_time") or ""), fee=_num(_value(row, "fee", "fare0")),
             tax=_num(_value(row, "tax", "fare1")), source="broker:ptrade", raw_response=_dict(row),
@@ -230,3 +247,35 @@ def _num(value: Any, default: float = 0.0) -> float:
 
 def _symbol(value: Any) -> str:
     return str(value or "").split(".", 1)[0].zfill(6)[-6:]
+
+
+def _side(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"buy", "b", "23", "stock_buy", "买入", "证券买入"} or "买入" in text:
+        return "buy"
+    if text in {"sell", "s", "24", "stock_sell", "卖出", "证券卖出"} or "卖出" in text:
+        return "sell"
+    return ""
+
+
+def _order_status(value: Any) -> str:
+    text = str(value if value is not None else "").strip().lower().replace(" ", "")
+    if text in {"submitted", "pending", "待报", "未报"}:
+        return "submitted"
+    if text in {"accepted", "reported", "已报", "已受理", "已确认"}:
+        return "accepted"
+    if text in {"cancel_requested", "撤单中", "待撤", "已报待撤", "部成待撤"}:
+        return "cancel_requested"
+    if text in {"partially_filled", "partial", "部成", "部分成交"}:
+        return "partially_filled"
+    if text in {"filled", "done", "已成", "全部成交", "成交"}:
+        return "filled"
+    if text in {"cancelled", "canceled", "已撤", "部撤", "撤单"}:
+        return "cancelled"
+    if text in {"rejected", "废单", "拒单", "已拒绝"}:
+        return "rejected"
+    if text in {"failed", "失败"}:
+        return "failed"
+    if text in {"expired", "已过期"}:
+        return "expired"
+    return "unknown"
