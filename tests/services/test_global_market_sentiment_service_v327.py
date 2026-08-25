@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -208,6 +209,180 @@ def test_us_indices_are_bounded_as_one_correlated_asset_family():
     assert {row["key"] for row in us_rows} == {"nasdaq_100", "philadelphia_semiconductor", "sp500_futures"}
     assert sum(row["normalized_weight"] for row in us_rows) < 0.8
     assert sum(row["normalized_weight"] for row in result["selected_evidence"]) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("profile", "focus_key", "required_key", "forbidden_key"),
+    [
+        ({"industry": "半导体设备", "business_tags": ["芯片", "晶圆"]}, "semiconductor", "philadelphia_semiconductor", "global_solar"),
+        ({"industry": "光伏设备", "business_tags": ["硅料", "太阳能"]}, "solar", "global_solar", "philadelphia_semiconductor"),
+        ({"industry": "银行", "business_tags": ["财富管理"]}, "financial", "us_financial", "philadelphia_semiconductor"),
+    ],
+)
+def test_selected_sector_uses_its_own_overseas_benchmark(profile, focus_key, required_key, forbidden_key):
+    service = GlobalMarketSentimentService(cache_state=None)
+    focus = service.resolve_focus(profile=profile)
+
+    assert focus["profile_key"] == focus_key
+    assert required_key in focus["benchmark_keys"]
+    assert forbidden_key not in focus["benchmark_keys"]
+
+
+def test_unmapped_sector_uses_broad_context_without_forcing_semiconductor():
+    now = datetime(2026, 8, 24, 22, 0, tzinfo=SH)
+    observations = [
+        _row(
+            "philadelphia_semiconductor",
+            observed_at=now - timedelta(minutes=1),
+            change_pct=2.0,
+            cluster="us_semiconductor_direction",
+            timezone="America/New_York",
+        ),
+        _row(
+            "nasdaq_100_futures",
+            observed_at=now - timedelta(minutes=1),
+            change_pct=0.5,
+            cluster="us_tech_direction",
+            instrument_type="futures",
+            timezone="America/New_York",
+        ),
+        _row(
+            "hang_seng_tech",
+            observed_at=now - timedelta(hours=6),
+            change_pct=-0.2,
+            cluster="hong_kong_tech",
+            timezone="Asia/Hong_Kong",
+        ),
+    ]
+
+    result = GlobalMarketSentimentService(cache_state=None).analyze(
+        observations,
+        now=now,
+        profile={"industry": "造纸"},
+    )
+
+    assert result["mapping_status"] == "broad_only"
+    assert result["focus_label"] == "全球宽基背景"
+    assert "philadelphia_semiconductor" not in {row["key"] for row in result["observations"]}
+    assert "不强行套用费城半导体" in result["focus_reason"]
+
+
+def test_focused_analysis_marks_industry_benchmark_and_caps_it_against_broad_context():
+    now = datetime(2026, 8, 24, 22, 0, tzinfo=SH)
+    observations = [
+        _row(
+            "global_solar",
+            observed_at=now - timedelta(minutes=1),
+            change_pct=1.6,
+            cluster="sector_global_solar",
+            timezone="America/New_York",
+            family="sector_benchmark",
+            family_cap=0.68,
+        ),
+        _row(
+            "philadelphia_semiconductor",
+            observed_at=now - timedelta(minutes=1),
+            change_pct=3.0,
+            cluster="us_semiconductor_direction",
+            timezone="America/New_York",
+        ),
+        _row(
+            "nasdaq_100_futures",
+            observed_at=now - timedelta(minutes=1),
+            change_pct=0.4,
+            cluster="us_tech_direction",
+            instrument_type="futures",
+            timezone="America/New_York",
+            family="us_equity_risk",
+            family_cap=0.52,
+        ),
+        _row(
+            "hang_seng_tech",
+            observed_at=now - timedelta(hours=6),
+            change_pct=-0.3,
+            cluster="hong_kong_tech",
+            timezone="Asia/Hong_Kong",
+            family="greater_china_technology",
+            family_cap=0.30,
+        ),
+    ]
+
+    result = GlobalMarketSentimentService(cache_state=None).analyze(
+        observations,
+        now=now,
+        profile={"industry": "光伏设备", "business_tags": ["太阳能", "硅片"]},
+        requested_symbol="600438",
+    )
+
+    assert result["valid_for_score"] is True
+    assert result["focus_key"] == "solar"
+    assert result["requested_symbol"] == "600438"
+    assert result["sector_benchmark_units"] == 1
+    selected = {row["key"]: row for row in result["selected_evidence"]}
+    assert selected["global_solar"]["benchmark_role"] == "行业基准"
+    assert "philadelphia_semiconductor" not in {row["key"] for row in result["observations"]}
+    assert sum(
+        row["normalized_weight"]
+        for row in result["selected_evidence"]
+        if row["benchmark_role"] == "行业基准"
+    ) < 0.8
+
+
+def test_one_raw_quote_cache_can_be_reused_for_different_sector_mappings():
+    now = datetime(2026, 8, 24, 22, 0, tzinfo=SH)
+
+    class MemoryCache:
+        data = None
+
+        def get(self, *args, **kwargs):
+            return SimpleNamespace(
+                data=self.data,
+                cache_status={"status": "hit", "stale": False} if self.data else {"status": "miss", "stale": True},
+            )
+
+        def put(self, *args, **kwargs):
+            self.data = args[2]
+            return {"status": "refreshed", "stale": False}
+
+    class Provider:
+        calls = 0
+
+        def fetch(self, specs):
+            self.calls += 1
+            return [
+                {
+                    "key": spec.key,
+                    "name": spec.name,
+                    "code": spec.code,
+                    "cluster": spec.cluster,
+                    "instrument_type": spec.instrument_type,
+                    "timezone": spec.timezone,
+                    "technology_relevance": spec.technology_relevance,
+                    "base_weight": spec.base_weight,
+                    "priority": spec.priority,
+                    "correlation_family": spec.correlation_family,
+                    "family_cap": spec.family_cap,
+                    "change_pct": 0.5,
+                    "last": 100,
+                    "observed_at": now.isoformat(timespec="seconds"),
+                    "source_id": "unit",
+                    "source_name": "单元测试",
+                    "source_ref": spec.source_url,
+                }
+                for spec in specs
+            ]
+
+    cache = MemoryCache()
+    provider = Provider()
+    service = GlobalMarketSentimentService(cache_state=cache, provider=provider)
+
+    solar = service.snapshot(now=now, profile={"industry": "光伏设备"}, symbol="600438")
+    semiconductor = service.snapshot(now=now, profile={"industry": "半导体"}, symbol="688599")
+
+    assert provider.calls == 1
+    assert solar["focus_key"] == "solar"
+    assert semiconductor["focus_key"] == "semiconductor"
+    assert {row["key"] for row in solar["observations"]} != {row["key"] for row in semiconductor["observations"]}
 
 
 def test_market_regime_caps_global_context_at_fifteen_percent():

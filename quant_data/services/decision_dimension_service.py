@@ -73,6 +73,11 @@ class DecisionDimensionService:
         for rule in DIMENSION_RULES:
             score = self._number(scores.get(rule.key) if rule.key in scores else scores.get(f"{rule.key}_score"))
             source = self._source_for(rule.key, sources)
+            source_missing = [
+                str(item)
+                for item in (source.get("missing_reasons") or [])
+                if str(item or "").strip()
+            ]
             available = score is not None
             stale = self._is_stale(rule.key, stale_fields, recent_information, source)
             quality = self._quality(rule.key, source, recent_information)
@@ -82,13 +87,13 @@ class DecisionDimensionService:
             use = self._usage(rule.key, normalized_mode, pit_usable, quality)
             reason = ""
             if not available:
-                reason = "分数或有效输入缺失"
+                reason = "；".join(source_missing[:3]) or "分数或有效输入缺失"
             elif stale:
-                reason = "数据已过期"
+                reason = "；".join(source_missing[:3]) or "数据已过期"
             elif normalized_mode == "backtest" and not pit_usable:
                 reason = "没有决策时点可用的 PIT 证据，回测排除"
             elif quality in self._UNUSABLE_QUALITY:
-                reason = "证据质量不足"
+                reason = "；".join(source_missing[:3]) or "证据质量不足"
 
             ready = available and not stale and quality not in self._UNUSABLE_QUALITY
             if normalized_mode == "backtest":
@@ -113,6 +118,7 @@ class DecisionDimensionService:
                     "usage": use,
                     "truth_boundary": truth_boundary,
                     "reason": reason,
+                    "missing_reasons": source_missing,
                     "configured_weight": EXECUTION_SCORE_WEIGHTS[rule.key],
                 }
             )
@@ -122,6 +128,11 @@ class DecisionDimensionService:
         market_quality = self._quality("market", market_source, recent_information)
         market_stale = self._is_stale("market", stale_fields, recent_information, market_source)
         market_ready = market_score is not None and not market_stale and market_quality not in self._UNUSABLE_QUALITY
+        market_missing = [
+            str(item)
+            for item in (market_source.get("missing_reasons") or [])
+            if str(item or "").strip()
+        ]
         market_context = {
             "label": "大盘情绪",
             "score": round(market_score, 4) if market_score is not None else None,
@@ -131,7 +142,8 @@ class DecisionDimensionService:
             "source": market_source.get("source") or market_source.get("source_name") or "数据源缺失",
             "role": "用于市场环境调分和弱势降仓，不替代个股三面，也不能单独触发买入。",
             "usage": "参与有效权重并调节目标仓位" if market_ready else "未参与本轮评分",
-            "reason": "" if market_ready else "指数趋势或有效市场宽度样本不足/过期",
+            "reason": "" if market_ready else ("；".join(market_missing[:3]) or "指数趋势或有效市场宽度样本不足/过期"),
+            "missing_reasons": market_missing,
             "configured_weight": EXECUTION_SCORE_WEIGHTS["market"],
         }
         if not market_ready:

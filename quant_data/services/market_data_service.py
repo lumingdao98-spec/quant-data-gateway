@@ -340,6 +340,41 @@ class MarketDataService:
             pass
         return []
 
+    def get_index_kline(
+        self,
+        symbol: str,
+        frame: str = "1d",
+        limit: int = 90,
+        adjust: str = "none",
+        force_refresh: bool = False,
+    ) -> list[Bar]:
+        """Read an explicitly prefixed index without colliding with stock codes.
+
+        ``sh000001`` is the Shanghai Composite while ``000001`` is Ping An
+        Bank. The ordinary A-share normalizer intentionally strips exchange
+        prefixes, so index bars use a dedicated ``idx:`` SQLite cache key.
+        """
+        raw_symbol = str(symbol or "").strip().lower()
+        cache_symbol = f"idx:{raw_symbol}"
+        cached = self.cache.get_bars(cache_symbol, frame, limit=limit, max_age_seconds=None)
+        if not force_refresh and len(cached) >= min(int(limit or 90), 25):
+            return [replace(bar, symbol=raw_symbol) for bar in cached[-int(limit):]]
+        try:
+            bars = self.providers.get_kline(
+                raw_symbol,
+                frame=frame,
+                limit=limit,
+                adjust=adjust,
+            )
+        except Exception:
+            bars = []
+        if bars:
+            self.cache.save_bars(
+                [replace(bar, symbol=cache_symbol, source=f"{bar.source}|index_cache") for bar in bars]
+            )
+            return [replace(bar, symbol=raw_symbol) for bar in bars[-int(limit):]]
+        return [replace(bar, symbol=raw_symbol) for bar in cached[-int(limit):]]
+
 
     def _intraday_from_minute_bars(self, symbol: str) -> list[IntradayPoint]:
         """用分钟K线还原分时走势。

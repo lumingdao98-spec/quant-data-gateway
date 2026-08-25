@@ -68,12 +68,18 @@ class RealtimeDecisionService:
         market_regime: Any,
         market_event_factors: MarketEventFactorService | None = None,
         global_market_sentiment: Any | None = None,
+        company_profile_service: Any | None = None,
+        fundamental_scoring: Any | None = None,
+        individual_capital_evidence: Any | None = None,
     ) -> None:
         self.market_data = market_data
         self.cache_state = cache_state
         self.market_regime = market_regime
         self.market_event_factors = market_event_factors or MarketEventFactorService(cache_state)
         self.global_market_sentiment = global_market_sentiment
+        self.company_profile_service = company_profile_service
+        self.fundamental_scoring = fundamental_scoring
+        self.individual_capital_evidence = individual_capital_evidence
         self.information_event_calendar = InformationEventCalendarService()
         self.dimension_service = DecisionDimensionService()
 
@@ -89,6 +95,19 @@ class RealtimeDecisionService:
         symbol = str(out.get("symbol") or profile.get("symbol") or "").strip()
         if not symbol:
             return out
+
+        company_profile: dict[str, Any] = {}
+        if self.company_profile_service is not None:
+            try:
+                company_profile = dict(
+                    self.company_profile_service.get_local_profile(symbol, allow_stale=True) or {}
+                )
+            except Exception:
+                company_profile = {}
+        analysis_profile = {
+            **company_profile,
+            **{key: value for key, value in profile.items() if value not in (None, "", [], {})},
+        }
 
         quote = _dict(out.get("quote"))
         bars = self._daily_bars(symbol)
@@ -109,7 +128,7 @@ class RealtimeDecisionService:
             total_weight = sum(weight for _, weight in usable_technical) or 1.0
             technical_score = sum(float(value) * weight for value, weight in usable_technical) / total_weight
 
-        flow = self._fund_flow_score(quote, intraday)
+        flow = self._fund_flow_score(symbol, quote, intraday)
         profile_flow = _number(profile.get("fund_flow_score"))
         profile_flow_quality = str(profile.get("fund_flow_quality_status") or "").strip().lower()
         profile_flow_source = str(profile.get("fund_flow_source") or "").strip()
@@ -129,11 +148,11 @@ class RealtimeDecisionService:
 
         info = self._recent_information(symbol, profile)
         screening_information_score = _number(profile.get("information_score"))
-        market = self._market_score(symbols or [], profile)
+        market = self._market_score(symbol, symbols or [], analysis_profile)
         event_context = self.market_event_factors.build_context(
             symbol=symbol,
-            name=str(out.get("name") or profile.get("name") or symbol),
-            profile=profile,
+            name=str(out.get("name") or analysis_profile.get("name") or symbol),
+            profile=analysis_profile,
         )
         direct_event_factors = [
             row
@@ -178,15 +197,49 @@ class RealtimeDecisionService:
         screening_score = _number(profile.get("final_score"))
         if screening_score is None:
             screening_score = _number(out.get("screening_score"))
+        profile_fundamental_score = _number(profile.get("fundamental_score"))
+        profile_fundamental_source = str(profile.get("fundamental_source") or "").strip()
+        profile_fundamental_quality = str(profile.get("fundamental_quality_status") or "").strip().lower()
+        if not profile_fundamental_source or profile_fundamental_quality in {
+            "missing", "unavailable", "unsupported", "unusable", "invalid", "error"
+        }:
+            profile_fundamental_score = None
+        fundamental_snapshot: dict[str, Any] = {}
+        if self.fundamental_scoring is not None:
+            try:
+                fundamental_snapshot = dict(
+                    self.fundamental_scoring.evaluate(
+                        symbol=symbol,
+                        profile=company_profile,
+                        quote=quote,
+                    )
+                    or {}
+                )
+            except Exception as exc:
+                fundamental_snapshot = {
+                    "score": None,
+                    "quality_status": "error",
+                    "source": "财务快照评分失败",
+                    "missing_reasons": [str(exc)[:160]],
+                }
+        existing_fundamental_score = _number(out.get("fundamental_score"))
+        snapshot_fundamental_score = _number(fundamental_snapshot.get("score"))
+        if existing_fundamental_score is not None:
+            fundamental_score = existing_fundamental_score
+            fundamental_origin = "existing"
+        elif profile_fundamental_score is not None:
+            fundamental_score = profile_fundamental_score
+            fundamental_origin = "profile"
+        else:
+            fundamental_score = snapshot_fundamental_score
+            fundamental_origin = "snapshot"
         out.update(
             {
                 "screening_score": screening_score,
                 "daily_k_score": round(daily_score, 4) if daily_score is not None else None,
                 "intraday_score": round(intraday_score, 4) if intraday_score is not None else None,
                 "technical_score": round(technical_score, 4) if technical_score is not None else None,
-                "fundamental_score": _number(profile.get("fundamental_score"))
-                if out.get("fundamental_score") in (None, "", "--")
-                else _number(out.get("fundamental_score")),
+                "fundamental_score": round(fundamental_score, 4) if fundamental_score is not None else None,
                 "information_score": info.get("score"),
                 "fund_flow_score": round(fund_flow_score, 4) if fund_flow_score is not None else None,
                 "market_score": market.get("score"),
@@ -200,6 +253,16 @@ class RealtimeDecisionService:
                 "market_regime": market,
                 "market_event_context": event_context,
                 "orderbook_snapshot": self._orderbook_summary(quote),
+                "fundamental_snapshot": fundamental_snapshot,
+                "individual_capital_evidence": dict(flow.get("capital_evidence") or {}),
+                "company_profile_summary": {
+                    "symbol": symbol,
+                    "name": company_profile.get("name") or company_profile.get("company_name") or "",
+                    "industry": company_profile.get("industry") or "",
+                    "business_tags": list(company_profile.get("business_tags") or [])[:12],
+                    "updated_at": company_profile.get("updated_at") or "",
+                    "quality_status": company_profile.get("quality_status") or "",
+                },
             }
         )
 
@@ -214,6 +277,7 @@ class RealtimeDecisionService:
             ("recent_information_missing", info.get("has_recent")),
             ("recent_information_unusable", info.get("auto_buy_eligible")),
             ("orderbook_missing", self._best_price(quote, "bid")),
+            ("fundamental_snapshot_missing", fundamental_score),
         ):
             if value is None or value is False:
                 missing.append(key)
@@ -223,21 +287,35 @@ class RealtimeDecisionService:
         existing_sources = dict(existing.get("sources") or {})
         fundamental_score = _number(out.get("fundamental_score"))
         prior_fundamental_source = existing_sources.get("fundamental")
-        fundamental_source = str(
-            profile.get("fundamental_source")
-            or (prior_fundamental_source.get("source") if isinstance(prior_fundamental_source, dict) else "")
-            or ""
-        ).strip()
+        prior_fundamental_source = prior_fundamental_source if isinstance(prior_fundamental_source, dict) else {}
+        if fundamental_origin == "snapshot":
+            selected_fundamental_source = fundamental_snapshot
+        elif fundamental_origin == "profile":
+            selected_fundamental_source = {
+                "source": profile.get("fundamental_source"),
+                "source_ref": profile.get("fundamental_source_ref"),
+                "available_at": profile.get("fundamental_available_at") or profile.get("updated_at"),
+                "quality_status": profile.get("fundamental_quality_status"),
+                "stale": profile.get("fundamental_stale"),
+                "pit_status": profile.get("fundamental_pit_status"),
+            }
+        else:
+            selected_fundamental_source = prior_fundamental_source or fundamental_snapshot
+        fundamental_source = str(selected_fundamental_source.get("source") or "").strip()
         existing_sources.update(
             {
                 "screening": profile.get("source") or "筛选快照",
                 "fundamental": {
                     "source": fundamental_source,
-                    "source_ref": profile.get("fundamental_source_ref") or profile.get("screener_snapshot_id") or "",
-                    "available_at": profile.get("fundamental_available_at") or profile.get("updated_at") or "",
-                    "quality_status": profile.get("fundamental_quality_status")
+                    "source_ref": selected_fundamental_source.get("source_ref") or profile.get("screener_snapshot_id") or "",
+                    "available_at": selected_fundamental_source.get("available_at") or "",
+                    "quality_status": selected_fundamental_source.get("quality_status")
                     or ("snapshot" if fundamental_score is not None and fundamental_source else "missing"),
-                    "stale": bool(profile.get("fundamental_stale")),
+                    "stale": bool(selected_fundamental_source.get("stale")),
+                    "pit_status": selected_fundamental_source.get("pit_status") or "",
+                    "evidence_fields": list(selected_fundamental_source.get("evidence_fields") or []),
+                    "missing_reasons": list(selected_fundamental_source.get("missing_reasons") or []),
+                    "origin": fundamental_origin,
                 },
                 "technical": {
                     "source": f"{daily.get('source') or '日K缺失'} + {intraday_result.get('source') or '分时缺失'}",
@@ -263,14 +341,17 @@ class RealtimeDecisionService:
                 },
                 "fund_flow": {
                     "source": flow.get("source"),
+                    "source_ref": flow.get("source_ref") or "",
                     "available_at": flow.get("latest_at"),
                     "quality_status": flow.get("quality_status") or ("proxy_available" if fund_flow_score is not None else "missing"),
                     "evidence_fields": list(flow.get("evidence_fields") or []),
+                    "missing_reasons": list(flow.get("missing_reasons") or []),
                 },
                 "market": {
                     "source": market.get("source"),
                     "quality_status": market.get("quality_status") or ("available" if market.get("valid_for_score") else "insufficient_sample"),
                     "stale": bool(market.get("stale")),
+                    "missing_reasons": list(market.get("missing_reasons") or []),
                     "components": list(market.get("components") or []),
                     "global_score_used": bool(market.get("global_score_used")),
                     "global_context": dict(market.get("global_context") or {}),
@@ -315,7 +396,7 @@ class RealtimeDecisionService:
                 "screening_information_source": profile.get("information_source"),
                 "fund_flow_score": out.get("fund_flow_score"),
                 "market_score": out.get("market_score"),
-                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘环境-异常风险；大盘环境以A股为主体，全球科技时段情绪最多占其中15%；筛选总分仅审计，不重复计票",
+                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘环境-异常风险；大盘环境以A股为主体，所选行业对应的全球时段背景最多占其中15%；筛选总分仅审计，不重复计票",
                 "sources": existing_sources,
                 "recent_information_count": info.get("recent_count", 0),
                 "recent_information_latest": info.get("latest_published_at"),
@@ -347,7 +428,7 @@ class RealtimeDecisionService:
                 f"盘口：{self._display(self._best_price(quote, 'bid'))} / {self._display(self._best_price(quote, 'ask'))}，来源 {quote.get('orderbook_source') or '缺失'}",
                 f"市场事件调整：大盘 {adjusted.get('market_adjustment', 0):+.2f} / 个股信息 {adjusted.get('information_adjustment', 0):+.2f}，证据 {event_context.get('factor_count', 0)} 项",
                 (
-                    f"全球科技时段情绪：{self._display(market.get('global_score'))} 分，"
+                    f"全球行业时段背景：{self._display(market.get('global_score'))} 分，"
                     f"{'按15%上限进入大盘环境' if market.get('global_score_used') else '证据不足/过期，本轮不计分'}"
                 ),
             ]
@@ -472,7 +553,52 @@ class RealtimeDecisionService:
             "point_count": len(points),
         }
 
-    def _fund_flow_score(self, quote: dict[str, Any], points: list[IntradayPoint]) -> dict[str, Any]:
+    def _fund_flow_score(
+        self,
+        symbol: str | dict[str, Any],
+        quote: dict[str, Any] | list[IntradayPoint],
+        points: list[IntradayPoint] | None = None,
+    ) -> dict[str, Any]:
+        # Keep the former private helper signature usable by extensions/tests:
+        # _fund_flow_score(quote, points).
+        if isinstance(symbol, dict):
+            legacy_quote = dict(symbol)
+            legacy_points = list(quote) if isinstance(quote, list) else []
+            symbol = str(legacy_quote.get("symbol") or "")
+            quote = legacy_quote
+            points = legacy_points
+        quote = dict(quote) if isinstance(quote, dict) else {}
+        points = list(points or [])
+        capital: dict[str, Any] = {}
+        if self.individual_capital_evidence is not None:
+            try:
+                capital = dict(
+                    self.individual_capital_evidence.snapshot(
+                        symbol,
+                        quote=quote,
+                        intraday=points,
+                        allow_network=False,
+                    )
+                    or {}
+                )
+            except Exception as exc:
+                capital = {
+                    "score": None,
+                    "quality_status": "error",
+                    "missing_reasons": [f"个股资金证据缓存读取失败：{str(exc)[:160]}"],
+                }
+            capital_score = _number(capital.get("score"))
+            if capital_score is not None:
+                return {
+                    "score": round(capital_score, 2),
+                    "source": capital.get("source") or "公开个股资金流+当日分时量价代理",
+                    "source_ref": capital.get("source_ref") or "",
+                    "latest_at": capital.get("available_at"),
+                    "quality_status": capital.get("quality_status") or "partial",
+                    "evidence_fields": list(capital.get("evidence_fields") or []),
+                    "missing_reasons": list(capital.get("missing_reasons") or []),
+                    "capital_evidence": capital,
+                }
         change_value = _number(quote.get("change_pct"))
         change = change_value or 0.0
         volume_ratio = _number(quote.get("volume_ratio"))
@@ -511,6 +637,8 @@ class RealtimeDecisionService:
                 "latest_at": latest_at or None,
                 "quality_status": "missing",
                 "evidence_fields": evidence_fields,
+                "missing_reasons": list(capital.get("missing_reasons") or []),
+                "capital_evidence": capital,
             }
         return {
             "score": round(_clamp(score), 2),
@@ -518,22 +646,54 @@ class RealtimeDecisionService:
             "latest_at": latest_at,
             "quality_status": "proxy_available",
             "evidence_fields": evidence_fields,
+            "missing_reasons": list(capital.get("missing_reasons") or []),
+            "capital_evidence": capital,
         }
 
-    def _market_score(self, symbols: Iterable[str], profile: dict[str, Any]) -> dict[str, Any]:
+    def _market_score(self, symbol: str, symbols: Iterable[str], profile: dict[str, Any]) -> dict[str, Any]:
+        requested_symbol = str(symbol or "").strip()
         quotes: list[Quote] = []
+        seen: set[str] = set()
         cache = getattr(self.market_data, "cache", None)
-        for symbol in list(dict.fromkeys(str(item).strip() for item in symbols if str(item).strip()))[:80]:
+        for item_symbol in list(dict.fromkeys(str(item).strip() for item in symbols if str(item).strip()))[:80]:
             if cache is None:
                 break
             try:
-                quote = cache.get_quote(symbol, max_age_seconds=None)
+                quote = cache.get_quote(item_symbol, max_age_seconds=None)
             except Exception:
                 quote = None
-            if quote is not None:
+            if quote is not None and quote.symbol not in seen:
                 quotes.append(quote)
-        live = self.market_regime.analyze_market(quotes, index_bars={}) if quotes else {}
-        live_score = _number(live.get("score")) if quotes and live.get("valid_for_score") else None
+                seen.add(quote.symbol)
+        if cache is not None and hasattr(cache, "list_quotes"):
+            try:
+                for quote in cache.list_quotes(limit=300, max_age_seconds=None):
+                    if quote.symbol in seen:
+                        continue
+                    quotes.append(quote)
+                    seen.add(quote.symbol)
+                    if len(quotes) >= 300:
+                        break
+            except Exception:
+                pass
+
+        index_bars: dict[str, list[Bar]] = {}
+        if cache is not None:
+            for spec in getattr(self.market_regime, "index_specs", []):
+                try:
+                    bars = cache.get_bars(
+                        f"idx:{str(spec.symbol).lower()}",
+                        "1d",
+                        limit=90,
+                        max_age_seconds=None,
+                    )
+                except Exception:
+                    bars = []
+                index_rows = [bar for bar in bars if str(getattr(bar, "symbol", "")).lower().startswith("idx:")]
+                if index_rows:
+                    index_bars[spec.key] = index_rows
+        live = self.market_regime.analyze_market(quotes, index_bars=index_bars)
+        live_score = _number(live.get("score")) if live.get("valid_for_score") else None
         baseline_quality = str(profile.get("market_quality_status") or "").strip().lower()
         baseline_stale = bool(profile.get("market_stale"))
         baseline_allowed = bool(baseline_quality) and baseline_quality not in {
@@ -554,12 +714,19 @@ class RealtimeDecisionService:
         global_context: dict[str, Any] = {}
         if self.global_market_sentiment is not None:
             try:
-                global_context = dict(self.global_market_sentiment.snapshot(allow_network=False) or {})
+                global_context = dict(
+                    self.global_market_sentiment.snapshot(
+                        allow_network=False,
+                        symbol=requested_symbol,
+                        profile=profile,
+                    )
+                    or {}
+                )
             except Exception as exc:
                 global_context = {
                     "valid_for_score": False,
                     "quality_status": "error",
-                    "missing_reasons": [f"全球科技情绪缓存读取失败：{str(exc)[:120]}"],
+                    "missing_reasons": [f"全球行业情绪缓存读取失败：{str(exc)[:120]}"],
                 }
         global_score = _number(global_context.get("score"))
         global_used = bool(
@@ -569,12 +736,14 @@ class RealtimeDecisionService:
         )
         score = domestic_score * 0.85 + global_score * 0.15 if global_used else domestic_score
         source_parts = []
-        if live_score is not None:
+        if int(live.get("index_count") or 0) > 0:
+            source_parts.append("A股指数趋势")
+        if int(live.get("sample_count") or 0) >= 20:
             source_parts.append("有效市场宽度")
         if baseline is not None:
             source_parts.append("筛选大盘底座")
         if global_used:
-            source_parts.append("全球科技时段情绪15%")
+            source_parts.append(f"{global_context.get('focus_label') or '全球行业'}时段背景15%")
         components = []
         if domestic_score is not None:
             components.append(
@@ -589,7 +758,7 @@ class RealtimeDecisionService:
             components.append(
                 {
                     "key": "global_technology_context",
-                    "label": "全球科技时段情绪",
+                    "label": f"全球行业背景·{global_context.get('focus_label') or '宽基'}",
                     "score": round(float(global_score), 2),
                     "weight": 0.15,
                 }
@@ -603,9 +772,11 @@ class RealtimeDecisionService:
             "global_context": global_context,
             "source": "+".join(source_parts) if source_parts else "市场宽度/指数证据不足",
             "sample_count": len(quotes),
-            "confidence": live.get("confidence") if quotes else "low",
-            "regime": live.get("regime") if quotes else "unknown",
-            "basis": live.get("basis") if quotes else "没有可用实时指数/宽度快照，未伪造大盘分。",
+            "index_count": int(live.get("index_count") or 0),
+            "indices": list(live.get("indices") or []),
+            "confidence": live.get("confidence") or "low",
+            "regime": live.get("regime") or "unknown",
+            "basis": live.get("basis") or "没有可用实时指数/宽度快照，未伪造大盘分。",
             "quality_status": "available" if score is not None else str(live.get("quality_status") or "missing"),
             "valid_for_score": score is not None,
             "live_width_used": live_score is not None,

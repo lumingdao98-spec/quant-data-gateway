@@ -47,6 +47,8 @@ from quant_data.services.fundamental_library_service import FundamentalLibrarySe
 from quant_data.services.news_service import NewsAnalysisService
 from quant_data.services.info_analysis_service import InfoAnalysisService
 from quant_data.services.company_profile_service import CompanyProfileService
+from quant_data.services.fundamental_snapshot_scoring_service import FundamentalSnapshotScoringService
+from quant_data.services.individual_capital_evidence_service import IndividualCapitalEvidenceService
 from quant_data.services.global_industry_mapper import GlobalIndustryMapper
 from quant_data.services.technical_factor_engine import TechnicalFactorEngine
 from quant_data.services.background_cache_service import BackgroundCacheService
@@ -135,12 +137,17 @@ market_behavior_engine = MarketBehaviorEngine()
 orderbook_behavior_service = OrderBookBehaviorService()
 cache_state_service = CacheStateService()
 global_market_sentiment_service = GlobalMarketSentimentService(cache_state_service, calendar=market_calendar)
+fundamental_snapshot_scoring_service = FundamentalSnapshotScoringService()
+individual_capital_evidence_service = IndividualCapitalEvidenceService(cache_state_service)
 screener_service.global_market_sentiment_service = global_market_sentiment_service
 realtime_decision_service = RealtimeDecisionService(
     service,
     cache_state_service,
     market_regime_service,
     global_market_sentiment=global_market_sentiment_service,
+    company_profile_service=company_profile_service,
+    fundamental_scoring=fundamental_snapshot_scoring_service,
+    individual_capital_evidence=individual_capital_evidence_service,
 )
 decision_dimension_service = DecisionDimensionService()
 background_cache_service = BackgroundCacheService(cache_state_service=cache_state_service, watchlist_service=watchlist_service)
@@ -238,6 +245,7 @@ FALLBACK_STRATEGIES = [
 async def _app_lifespan(_app: FastAPI):
     _start_position_review_scheduler()
     _start_realtime_paper_scheduler()
+    _submit_background_job("market-regime-index-cache", lambda: _market_index_bars(limit=90))
     try:
         yield
     finally:
@@ -356,7 +364,8 @@ def _render_chinese_api_docs() -> str:
             [
                 ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
                 ("GET", "/api/market/regime", "大盘环境分析，可用于评分里的市场情绪权重。"),
-                ("GET", "/api/market/global-sentiment", "全球科技/风险情绪：按各市场交易时段区分实时、期货和前收盘，并按相关资产族去重，避免纳指/费城半导体/美股宽基重复放大。"),
+                ("GET", "/api/market/global-sentiment", "全球行业/风险情绪：传入 symbol 后按行业、主营和题材动态选择海外基准；例如半导体看费城半导体、光伏看太阳能ETF，并按各市场交易时段和相关性去重。"),
+                ("GET", "/api/market/capital-evidence/{symbol}", "个股资金证据：公开日资金流、全天与5/15/30/60分钟量价代理、基金持仓披露及真实性边界。"),
                 ("GET", "/api/market/sectors/mainline", "主线板块、公开资金净流、板块强度和持续性。"),
                 ("GET", "/api/decision-framework", "查看技术面、信息面、资金面、大盘环境在回测/模拟/实盘/提醒中的统一使用规则。"),
                 ("GET", "/api/decision-framework/{symbol}", "查看单只标的本轮哪些分项有效、实际来源、PIT状态、自动入场阻断原因和执行分。"),
@@ -435,7 +444,8 @@ def chinese_api_docs() -> str:
             ("GET", "/api/info/{symbol}", "个股信息面分析，包含新闻、公告、风险事件和来源可信度。"),
             ("GET", "/api/wordsource/report/{symbol}", "信息面/技术面/资金面映射报告。"),
             ("GET", "/api/market/regime", "大盘环境分析，用于评分中的市场情绪权重。"),
-            ("GET", "/api/market/global-sentiment", "全球科技/风险情绪，按交易时段和相关性去重后给出可追溯背景分。"),
+            ("GET", "/api/market/global-sentiment", "全球行业/风险情绪，可按 symbol、industry、themes 选择对应海外基准，并给出映射依据、交易时段和可追溯背景分。"),
+            ("GET", "/api/market/capital-evidence/{symbol}", "个股公开资金流、当日分时成交额方向代理、基金持仓披露与来源说明。"),
             ("GET", "/api/source-knowledge", "数据源知识库和覆盖说明。"),
         ]),
         ("系统与缓存", [
@@ -603,7 +613,7 @@ def _market_index_bars(limit: int = 90) -> dict[str, list[Bar]]:
     bars_by_key: dict[str, list[Bar]] = {}
     for spec in getattr(market_regime_service, "index_specs", []):
         try:
-            bars = service.providers.get_kline(spec.symbol, frame="1d", limit=limit, adjust="none")
+            bars = service.get_index_kline(spec.symbol, frame="1d", limit=limit, adjust="none")
             if bars:
                 bars_by_key[spec.key] = bars
         except Exception:
@@ -2940,9 +2950,66 @@ def wordsource_candidates(max_pages: int = 2, page_size: int = 100, max_items: i
 
 
 @app.get("/api/market/global-sentiment")
-def market_global_sentiment(force: bool = False) -> dict:
-    data = global_market_sentiment_service.snapshot(force=force, allow_network=True)
+def market_global_sentiment(
+    force: bool = False,
+    symbol: str = "",
+    industry: str = "",
+    themes: str = "",
+) -> dict:
+    normalized = normalize_symbol(symbol) if symbol else ""
+    profile = (
+        company_profile_service.get_profile(normalized, force=False, local_only=True)
+        if normalized
+        else {}
+    )
+    focus_terms = [value for value in (industry, themes) if str(value or "").strip()]
+    data = global_market_sentiment_service.snapshot(
+        force=force,
+        allow_network=True,
+        symbol=normalized,
+        profile=profile,
+        focus_terms=focus_terms,
+    )
     return {"ok": True, "data": data, "global_market_sentiment": data}
+
+
+@app.get("/api/market/capital-evidence/{symbol}")
+def market_capital_evidence(
+    symbol: str,
+    force: bool = False,
+    allow_network: bool = True,
+) -> dict:
+    normalized = normalize_symbol(symbol)
+    quote_obj = service.cache.get_quote(normalized, max_age_seconds=None)
+    points = service.cache.get_intraday(normalized)
+    if force:
+        try:
+            quote_obj = service.get_quote(normalized, force_refresh=True)
+        except Exception:
+            pass
+        try:
+            refreshed_points = service.get_intraday(normalized, force_refresh=True)
+            if refreshed_points:
+                points = refreshed_points
+        except Exception:
+            pass
+    quote = quote_obj.to_dict() if quote_obj is not None else {}
+    data = individual_capital_evidence_service.snapshot(
+        normalized,
+        quote=quote,
+        intraday=points,
+        force=force,
+        allow_network=allow_network,
+    )
+    profile = company_profile_service.get_local_profile(normalized, allow_stale=True)
+    data["name"] = profile.get("name") or quote.get("name") or normalized
+    data["profile_industry"] = profile.get("industry") or ""
+    return {
+        "ok": True,
+        "data": data,
+        "capital_evidence": data,
+        "disclaimer": "公开资金流和分时量价只能用于相对观察；基金持仓为滞后披露，不代表实时主力账户。",
+    }
 
 
 @app.get("/api/market/regime")
@@ -3191,15 +3258,47 @@ def decision_framework_symbol_v326(
             sources["fund_flow"] = source
         if "market_regime_score" in supports or "market_score" in supports:
             sources["market"] = source
-    recent_information = {
+    normalized_mode = decision_dimension_service._mode(mode)
+    current_snapshot: dict[str, Any] = {}
+    if normalized_mode in {"realtime_paper", "live"}:
+        quote_obj = service.cache.get_quote(symbol, max_age_seconds=None)
+        try:
+            current_snapshot = realtime_decision_service.hydrate(
+                {
+                    "symbol": symbol,
+                    "mode": normalized_mode,
+                    "strategy_family": strategy_family or str(config.get("strategy_family") or "hybrid"),
+                    "quote": quote_obj.to_dict() if quote_obj is not None else {},
+                    "score_provenance": provenance,
+                },
+                profile=profile,
+                symbols=list(config.get("symbols") or []),
+            )
+        except Exception as exc:
+            current_snapshot = {"cache_only_error": str(exc)[:200]}
+        current_scores = {
+            "fundamental": current_snapshot.get("fundamental_score"),
+            "technical": current_snapshot.get("technical_score"),
+            "information": current_snapshot.get("information_score"),
+            "fund_flow": current_snapshot.get("fund_flow_score"),
+            "market": current_snapshot.get("market_score"),
+        }
+        for key, value in current_scores.items():
+            if value not in (None, "", "--"):
+                scores[key] = value
+        current_sources = dict((current_snapshot.get("score_breakdown") or {}).get("sources") or {})
+        for key in ("fundamental", "technical", "information", "fund_flow", "market"):
+            if current_sources.get(key):
+                sources[key] = current_sources[key]
+    recent_information = dict(current_snapshot.get("recent_information") or {}) or {
         "snapshot_id": profile.get("information_snapshot_id"),
         "quality_status": profile.get("information_quality_status") or "snapshot",
         "auto_buy_eligible": profile.get("information_trade_eligible"),
         "stale": bool(profile.get("information_stale")),
     }
-    normalized_mode = decision_dimension_service._mode(mode)
     provenance_mode = decision_dimension_service._mode(str(provenance.get("mode") or ""))
     persisted_readiness = provenance.get("dimension_readiness")
+    current_readiness = current_snapshot.get("dimension_readiness")
     reuse_persisted = (
         isinstance(persisted_readiness, dict)
         and bool(persisted_readiness.get("dimensions"))
@@ -3209,6 +3308,10 @@ def decision_framework_symbol_v326(
         result = dict(persisted_readiness)
         result["snapshot_reused"] = True
         result["snapshot_note"] = "展示该评分落库时实际使用的分项门禁，未用当前摘要重新推算。"
+    elif isinstance(current_readiness, dict) and current_readiness.get("dimensions"):
+        result = dict(current_readiness)
+        result["snapshot_reused"] = False
+        result["snapshot_note"] = "没有同模式完整落库快照；使用当前本地缓存只读重建分项，不联网、不生成信号或订单。"
     else:
         result = decision_dimension_service.evaluate(
             mode=mode,
@@ -3249,6 +3352,20 @@ def decision_framework_symbol_v326(
             "raw_dimension_scores": dict(provenance.get("raw_dimension_scores") or {}),
             "execution_dimension_scores": dict(provenance.get("execution_dimension_scores") or {}),
             "excluded_by_readiness": list(provenance.get("excluded_by_readiness") or []),
+            "current_dimension_scores": {
+                "fundamental": current_snapshot.get("fundamental_score"),
+                "technical": current_snapshot.get("technical_score"),
+                "information": current_snapshot.get("information_score"),
+                "fund_flow": current_snapshot.get("fund_flow_score"),
+                "market": current_snapshot.get("market_score"),
+            },
+            "current_readiness": dict(current_readiness or {}),
+            "current_snapshot_note": "使用当前本地缓存只读重建分项，不联网、不生成信号或订单；自动交易仍需新的评分溯源和数据新鲜度门禁。",
+            "current_snapshot_at": datetime.now().isoformat(timespec="seconds"),
+            "fundamental_snapshot": dict(current_snapshot.get("fundamental_snapshot") or {}),
+            "market_regime": dict(current_snapshot.get("market_regime") or {}),
+            "individual_capital_evidence": dict(current_snapshot.get("individual_capital_evidence") or {}),
+            "cache_only_error": current_snapshot.get("cache_only_error") or "",
         }
     )
     return {

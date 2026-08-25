@@ -29,6 +29,14 @@ class MarketCache:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _storage_symbol(symbol: str | int) -> str:
+        """Keep explicit synthetic index cache keys separate from A-share codes."""
+        raw = str(symbol or "").strip().lower()
+        if raw.startswith("idx:"):
+            return raw
+        return normalize_symbol(symbol)
+
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -182,6 +190,20 @@ class MarketCache:
             source=row["source"] or "cache",
         )
 
+    def list_quotes(self, limit: int = 300, max_age_seconds: float | None = None) -> list[Quote]:
+        """Return recent cached equity quotes for market-breadth calculation."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT symbol FROM quotes ORDER BY ts DESC LIMIT ?",
+                (max(1, min(int(limit or 300), 2000)),),
+            ).fetchall()
+        result: list[Quote] = []
+        for row in rows:
+            quote = self.get_quote(str(row["symbol"]), max_age_seconds=max_age_seconds)
+            if quote is not None:
+                result.append(quote)
+        return result
+
     def save_bars(self, bars: Iterable[Bar]) -> None:
         rows = [b.to_dict() for b in bars]
         if not rows:
@@ -200,7 +222,7 @@ class MarketCache:
             conn.commit()
 
     def get_bars(self, symbol: str, frame: str, limit: int = 240, max_age_seconds: float | None = None) -> list[Bar]:
-        symbol = normalize_symbol(symbol)
+        symbol = self._storage_symbol(symbol)
         with self._connect() as conn:
             rows = conn.execute(
                 """

@@ -441,7 +441,7 @@ class ScreenerService:
         index_errors: list[str] = []
         for spec in getattr(self.market_regime_service, "index_specs", []):
             try:
-                bars = self.market_data.providers.get_kline(spec.symbol, frame="1d", limit=90, adjust="none")
+                bars = self.market_data.get_index_kline(spec.symbol, frame="1d", limit=90, adjust="none")
                 if bars:
                     index_bars[spec.key] = bars
             except Exception as exc:

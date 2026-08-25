@@ -167,7 +167,7 @@ class MarketRegimeService:
             components.append(
                 {
                     "key": "global_technology_context",
-                    "label": "全球科技时段情绪",
+                    "label": "全球宽基时段背景",
                     "score": global_score,
                     "configured_weight": 0.15,
                     "normalized_weight": 0.15,
@@ -178,10 +178,10 @@ class MarketRegimeService:
             excluded_components.append(
                 {
                     "key": "global_technology_context",
-                    "label": "全球科技时段情绪",
+                    "label": "全球宽基时段背景",
                     "raw_score": global_context.get("score"),
                     "reason": "；".join(global_context.get("missing_reasons") or [])
-                    or ("A股本地市场证据不足" if not valid_for_score else "全球科技证据不足或过期"),
+                    or ("A股本地市场证据不足" if not valid_for_score else "全球宽基证据不足或过期"),
                 }
             )
         score = sum(float(row["contribution"]) for row in components) if components else 50.0
@@ -206,9 +206,9 @@ class MarketRegimeService:
         else:
             basis = "未取到指数K线，本次仅用市场宽度兜底；样本不足时不会把大盘分顶满。"
         if global_used:
-            basis += " 全球科技时段情绪以15%上限并入，本地环境占85%；相关指数已去重。"
+            basis += " 全球宽基时段背景以15%上限并入，本地环境占85%；相关指数已去重。"
         elif global_context:
-            basis += " 全球科技证据不足、过期或本地证据未就绪，本轮不并入。"
+            basis += " 全球宽基证据不足、过期或本地证据未就绪，本轮不并入。"
         score = round(_clamp(score, 5, 95), 2)
         return {
             **breadth,
@@ -240,7 +240,7 @@ class MarketRegimeService:
             + ([] if total_weight > 0 else ["指数K线不足，当前没有指数趋势确认"])
             + ([] if valid_for_score else ["大盘评分至少需要两类独立证据（指数趋势或有效市场宽度）"]),
             "basis": basis,
-            "score_definition": "大盘环境分：50中性；60以上偏暖；72以上强势；45以下偏弱。A股本地证据是主体，全球科技情绪最多占15%，不构成独立交易信号。",
+            "score_definition": "大盘环境分：50中性；60以上偏暖；72以上强势；45以下偏弱。A股本地证据是主体，全球宽基背景最多占15%；个股再按行业映射海外参照，均不构成独立交易信号。",
         }
 
     def _score_index(self, spec: MarketIndexSpec, bars: list[Bar]) -> dict | None:

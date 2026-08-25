@@ -83,3 +83,29 @@ def test_out_of_range_dimension_is_invalid_and_blocks_required_entry():
 
     assert result["auto_entry_eligible"] is False
     assert result["dimensions"][0]["score"] is None
+
+
+def test_missing_dimension_preserves_specific_upstream_reasons():
+    sources = _ready_sources()
+    sources["fundamental"] = {
+        "source": "数据源缺失",
+        "quality_status": "missing",
+        "missing_reasons": ["财务快照缺少披露日期", "ROE字段未披露"],
+    }
+    sources["market"] = {
+        "source": "指数缓存",
+        "quality_status": "insufficient_sample",
+        "missing_reasons": ["创业板指K线缓存过期"],
+    }
+    result = DecisionDimensionService().evaluate(
+        mode="paper",
+        strategy_family="short_term",
+        scores={"technical": 68, "information": 60, "fund_flow": 58},
+        sources=sources,
+        recent_information={"auto_buy_eligible": True, "quality_status": "full_text"},
+    )
+
+    rows = {row["key"]: row for row in result["dimensions"]}
+    assert rows["fundamental"]["reason"] == "财务快照缺少披露日期；ROE字段未披露"
+    assert rows["fundamental"]["missing_reasons"] == ["财务快照缺少披露日期", "ROE字段未披露"]
+    assert result["market_context"]["reason"] == "创业板指K线缓存过期"

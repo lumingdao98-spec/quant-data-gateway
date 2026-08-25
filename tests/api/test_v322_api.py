@@ -108,6 +108,8 @@ def test_decision_framework_reuses_exact_persisted_dimension_snapshot(monkeypatc
     assert payload["dimensions"] == persisted["dimension_readiness"]["dimensions"]
     assert payload["excluded_by_readiness"] == ["information"]
     assert payload["provenance_freshness"]["recent_for_live"] is True
+    assert isinstance(payload["current_readiness"], dict)
+    assert "current_dimension_scores" in payload
 
 
 def test_invalid_information_text_is_missing_instead_of_neutral_score():

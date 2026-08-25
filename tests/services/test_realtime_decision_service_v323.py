@@ -48,6 +48,32 @@ class _GlobalContext:
         return dict(self.payload)
 
 
+class _CompanyProfile:
+    def get_local_profile(self, symbol, allow_stale=True):
+        return {
+            "symbol": symbol,
+            "name": "通威股份",
+            "industry": "光伏设备",
+            "financial_summary": {"latest_report_date": "2026-06-30"},
+            "sources": ["历史业绩", "巨潮资讯"],
+        }
+
+
+class _FundamentalScoring:
+    def evaluate(self, **kwargs):
+        return {
+            "score": 63.0,
+            "quality_status": "available",
+            "source": "公开财务快照（历史业绩/巨潮资讯）",
+            "source_ref": "/api/company/profile/600438",
+            "available_at": "2026-06-30",
+            "pit_status": "point_in_time",
+            "stale": False,
+            "evidence_fields": ["pe", "pb", "net_profit_sign"],
+            "missing_reasons": ["尚缺字段：ROE"],
+        }
+
+
 def _bars():
     now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     rows = []
@@ -150,6 +176,34 @@ def test_realtime_decision_combines_screener_daily_and_intraday_scores():
     assert weak["technical_score"] < strong["technical_score"]
     assert strong["score_source"] == "server_cache_realtime_decision_v323"
     assert "日K55%+分时45%" in strong["score_breakdown"]["formula"]
+
+
+def test_traceable_company_snapshot_replaces_stale_missing_fundamental_source():
+    cache = _Cache(bars=_bars(), points=_points(12.0), quotes={"600438": _quote()})
+    service = RealtimeDecisionService(
+        SimpleNamespace(cache=cache),
+        _InfoCache(),
+        MarketRegimeService(),
+        company_profile_service=_CompanyProfile(),
+        fundamental_scoring=_FundamentalScoring(),
+    )
+    result = service.hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={
+            "fundamental_score": 0,
+            "fundamental_source": "数据源缺失",
+            "fundamental_quality_status": "missing",
+        },
+    )
+
+    fundamental = next(row for row in result["dimension_readiness"]["dimensions"] if row["key"] == "fundamental")
+    source = result["score_breakdown"]["sources"]["fundamental"]
+    assert result["fundamental_score"] == 63.0
+    assert fundamental["ready"] is True
+    assert fundamental["quality_status"] == "available"
+    assert fundamental["source"] == "公开财务快照（历史业绩/巨潮资讯）"
+    assert source["origin"] == "snapshot"
+    assert source["available_at"] == "2026-06-30"
 
 
 def test_realtime_information_uses_recent_dated_evidence_only():
@@ -303,7 +357,7 @@ def test_realtime_market_score_uses_valid_global_context_with_a_fifteen_percent_
     assert result["market_score"] == 53.0
     assert result["market_regime"]["global_score_used"] is True
     assert result["market_regime"]["global_weight"] == 0.15
-    assert result["market_regime"]["components"][-1]["label"] == "全球科技时段情绪"
+    assert result["market_regime"]["components"][-1]["label"] == "全球行业背景·宽基"
 
 
 def test_fund_flow_score_is_missing_without_traceable_volume_or_orderbook_evidence():

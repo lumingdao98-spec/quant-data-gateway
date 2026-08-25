@@ -6,13 +6,32 @@ import quant_data.api as api
 def test_auto_trading_workbench_explains_session_aware_global_market_context():
     html = TestClient(api.app).get("/auto-trading").text
 
-    assert "全球科技时段情绪" in html
+    assert "所选板块的全球参照" in html
     assert "/api/market/global-sentiment" in html
-    assert "按各市场开盘时间分别判断" in html
+    assert "按行业选择海外基准" in html
+    assert "symbol='+encodeURIComponent(primarySymbol())" in html
+    assert "行业基准" in html
+    assert "应用参照" in html
+    assert "映射依据" in html
     assert "权重上限15%" in html
     assert "相关性去重" in html
     assert ".sector-link{color:#67e8f9!important" in html
     assert "refreshed:'已刷新'" in html
+    assert "个股资金流与机构持仓披露" in html
+    assert "/api/market/capital-evidence/" in html
+    assert "5/15/30/60" in html
+    assert "公开主力净流占比" in html
+    assert "当日分时量价方向代理" in html
+    assert "不等于逐笔主动买卖" in html
+    assert "liveAccount?.data_available===true" in html
+    assert "可用资金 --；总资产 --；持仓 --；浮盈亏 --" in html
+    assert "--（券商未连接或未授权）" in html
+    assert "当前缓存只读评估（不生成订单）" in html
+    assert "最近一次落库决策快照" in html
+    assert "不代表上方当前只读评估仍然缺失" in html
+    assert "fundamental:'基本面'" in html
+    assert "market:'大盘情绪'" in html
+    assert ".capital-window b{font-size:10px!important" in html
 
 
 def test_live_trading_page_has_read_only_multisymbol_decision_board():

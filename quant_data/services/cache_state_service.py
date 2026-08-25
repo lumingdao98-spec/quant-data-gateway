@@ -22,6 +22,9 @@ DEFAULT_TTLS = {
     "sector_mainline_cache": 2 * 60,
     "sector_mainline_daily": 45 * 24 * 60 * 60,
     "sector_mainline_intraday": 14 * 24 * 60 * 60,
+    "individual_fund_flow_daily": 15 * 60,
+    "institutional_holding_snapshot": 24 * 60 * 60,
+    "individual_capital_intraday": 45 * 24 * 60 * 60,
     "auto_trading_config": 7 * 24 * 60 * 60,
 }
 
