@@ -176,6 +176,10 @@ def build_auto_trading_workbench_ui() -> str:
                 <div><b>首页只保留快速配置</b><span>完整股票池、50+ 策略目录、逐项阈值、仓位和事件门控仍在下方折叠区；建议先读取最新筛选，再回测、模拟，最后进入实盘确认。</span></div>
                 <div class="row"><button class="btn green" onclick="oneClickConfig(this)">一键配置</button><button class="btn" onclick="loadLatestScreenerConfig(this)">读取筛选</button><button class="btn" onclick="openModule('realtime')">模拟详情</button></div>
               </div>
+              <div class="notice" style="margin:10px 0">
+                <label class="check"><input id="globalSectorReferenceToggle" type="checkbox" checked onchange="toggleGlobalReferenceStrategy(this.checked)"> 全球行业走势参照</label>
+                <span class="muted">按每只股票所属行业匹配海外指数或期货；仅在证据有效时参与大盘情绪，内部权重上限 15%，不能单独触发买入。</span>
+              </div>
               <details class="home-config-details">
                 <summary>展开完整配置与逐项参数</summary>
                 <div class="home-config-body">
@@ -200,7 +204,7 @@ def build_auto_trading_workbench_ui() -> str:
               <details class="advanced-box" id="strategyAdvancedDetails" ontoggle="onStrategyEditorToggle(this)">
                 <summary>高级自定义（完整策略目录与逐项参数）</summary>
                 <div class="advanced-body">
-                  <div class="field"><label>内部策略标识（通常无需手工编辑）</label><textarea class="compact" id="strategyCombo" oninput="renderStrategyCatalog(lastAutoConfig||{})">score_driven, low_position, avoid_chasing_high, ma_repair, macd_cross, volume_breakout, atr_risk, position_risk, risk_control, event_driven, finance_quality, market_regime</textarea></div>
+                  <div class="field"><label>内部策略标识（通常无需手工编辑）</label><textarea class="compact" id="strategyCombo" oninput="renderStrategyCatalog(lastAutoConfig||{})">score_driven, low_position, avoid_chasing_high, ma_repair, macd_cross, volume_breakout, atr_risk, position_risk, risk_control, event_driven, finance_quality, market_regime, global_sector_reference</textarea></div>
                   <div class="strategy-catalog" id="strategyCatalog"><div class="notice">展开高级自定义后加载完整策略目录。</div></div>
                   <div class="strategy-param-wrap" style="margin-top:10px">
                     <table class="strategy-param">
@@ -255,7 +259,7 @@ def build_auto_trading_workbench_ui() -> str:
 
         <div class="stack">
           <div class="panel">
-            <div class="panel-h"><span>评分与风险</span><span class="muted" id="scoreTime">--</span></div>
+            <div class="panel-h"><span>当前个股评分与风险</span><span class="muted" id="scoreTime">--</span></div>
             <div class="panel-b">
               <div class="row" style="justify-content:space-between;margin-bottom:10px"><b id="decisionAction" style="font-size:24px">等待评分</b><span class="pill" id="decisionScore">评分 --</span></div>
               <div id="scorePolicyWeights" class="score-policy" aria-label="默认执行分目标权重（实际按策略与大盘自适应）"><span><b>30%</b>技术面</span><span><b>22%</b>基本面</span><span><b>20%</b>信息面</span><span><b>16%</b>资金面</span><span><b>12%</b>大盘情绪</span></div>
@@ -268,6 +272,7 @@ def build_auto_trading_workbench_ui() -> str:
                 <div><div class="row" style="justify-content:space-between"><span>资金面</span><b id="flowScore">--</b></div><div class="barline"><i id="flowBar"></i></div></div>
                 <div><div class="row" style="justify-content:space-between"><span>大盘情绪</span><b id="marketScore">--</b></div><div class="barline"><i id="marketBar"></i></div></div>
               </div>
+              <div id="globalScoreContribution" class="mini">当前个股的全球行业走势参照：等待策略与行情快照。</div>
               <details class="score-explain">
                 <summary>这个分数怎么来的</summary>
                 <div id="scoreExplain" class="score-explain-body"><span class="muted">等待最新实时模拟信号；尚无信号时显示最近一次评分溯源。</span></div>
@@ -407,6 +412,7 @@ let globalTickerPaused=false;
 let globalStreamRefreshMs=35000;
 let globalStreamLastLoadedAt=0;
 let globalStreamLastPayload=null;
+let globalMarketRequestSeq=0;
 let strategyEditorHydrated=false;
 let deferredStrategyConfig=null;
 let dashboardPanels=[];
@@ -519,7 +525,7 @@ function reloadWorkspaceFrame(){if(currentWorkspaceUrl&&currentWorkspaceUrl!=='a
 function openWorkspaceInNewWindow(){if(currentWorkspaceUrl&&currentWorkspaceUrl!=='about:blank')window.open(currentWorkspaceUrl,'_blank','noopener')}
 function strategyNameMap(cfg){const out={};(cfg?.strategy_catalog||[]).forEach(x=>{if(x?.key)out[String(x.key)]=String(x.name||x.key)});return out}
 function strategyLabel(key,cfg){
-  const builtins={score_driven:'日常评分驱动',low_position:'低位修复',avoid_chasing_high:'高位追高过滤',source_reliability:'数据源可靠性',ma_repair:'均线修复',macd_cross:'MACD 金叉/多头',macd_hist_turn:'MACD 柱改善',volume_breakout:'温和放量',mfi_obv_resonance:'MFI/OBV 共振',rsi_kdj_resonance:'RSI/KDJ 共振',atr_risk:'ATR 风险过滤',position_risk:'仓位与止损',risk_control:'风险扣分',event_driven:'事件驱动',finance_quality:'财务质量',fundamental_quality:'基本面质量',cashflow_quality:'现金流质量',announcement_risk:'公告风险',policy_tailwind:'政策顺风',macro_liquidity:'宏观流动性',main_money_est:'主力资金估算',market_regime:'大盘情绪过滤',etf_liquidity:'ETF 流动性',adx_trend:'ADX 趋势'};
+  const builtins={score_driven:'日常评分驱动',low_position:'低位修复',avoid_chasing_high:'高位追高过滤',source_reliability:'数据源可靠性',ma_repair:'均线修复',macd_cross:'MACD 金叉/多头',macd_hist_turn:'MACD 柱改善',volume_breakout:'温和放量',mfi_obv_resonance:'MFI/OBV 共振',rsi_kdj_resonance:'RSI/KDJ 共振',atr_risk:'ATR 风险过滤',position_risk:'仓位与止损',risk_control:'风险扣分',event_driven:'事件驱动',finance_quality:'财务质量',fundamental_quality:'基本面质量',cashflow_quality:'现金流质量',announcement_risk:'公告风险',policy_tailwind:'政策顺风',macro_liquidity:'宏观流动性',main_money_est:'主力资金估算',market_regime:'大盘情绪过滤',global_sector_reference:'全球行业走势参照',etf_liquidity:'ETF 流动性',adx_trend:'ADX 趋势'};
   const map=strategyNameMap(cfg||lastAutoConfig);
   return map[key]||builtins[key]||key;
 }
@@ -534,9 +540,19 @@ function recommendPreset(){
 function renderStrategySelectionSummary(cfg){
   const combo=strategyCombo();
   const risk=cfg?.risk_controls||collectAutoConfig().risk_controls;
-  $('strategySelectedSummary').innerHTML=`<b>当前组合：</b>${esc(combo.length?combo.map(k=>strategyLabel(k,cfg)).join('、'):'尚未选择策略')}<br><b>统一风控：</b>止损 ${esc(risk.stop_loss_pct)}% · 止盈 ${esc(risk.take_profit_pct)}% · 最大回撤 ${esc(risk.max_drawdown_pct)}% · 单票 ${esc(risk.max_single_position_pct)}%`;
+  if($('globalSectorReferenceToggle'))$('globalSectorReferenceToggle').checked=combo.includes('global_sector_reference');
+  const pendingUpgrade=cfg?.strategy_combo_upgraded===true
+    ? '<br><b class="warn-text">待确认：</b>旧版极简组合已在编辑器中补全为推荐策略；点击“保存配置”或“启动模拟”后才会成为运行配置。'
+    : '';
+  $('strategySelectedSummary').innerHTML=`<b>当前组合：</b>${esc(combo.length?combo.map(k=>strategyLabel(k,cfg)).join('、'):'尚未选择策略')}<br><b>统一风控：</b>止损 ${esc(risk.stop_loss_pct)}% · 止盈 ${esc(risk.take_profit_pct)}% · 最大回撤 ${esc(risk.max_drawdown_pct)}% · 单票 ${esc(risk.max_single_position_pct)}%${pendingUpgrade}`;
 }
 function currentComboSet(){return new Set(strategyCombo())}
+function toggleGlobalReferenceStrategy(enabled){
+  const combo=currentComboSet();
+  if(enabled)combo.add('global_sector_reference');else combo.delete('global_sector_reference');
+  setComboFromList([...combo]);
+  showToast(enabled?'全球行业走势参照已加入当前编辑组合；保存后生效。':'全球行业走势参照已从当前编辑组合移除；保存后生效。',enabled?'good':'warn');
+}
 function setComboFromList(list){
   $('strategyCombo').value=[...new Set((list||[]).map(x=>String(x||'').trim()).filter(Boolean))].join(', ');
   renderStrategyCatalog(lastAutoConfig||{});
@@ -1036,6 +1052,16 @@ function renderGlobalStream(js){
 
 function renderScoreExplain(row,currentDecision={}){
   const b=row?.score_breakdown||row||{};
+  const market={...(b?.sources?.market||{}),...(row?.market_regime||{})};
+  const globalContext=market.global_context||{};
+  const configuredGlobal=currentComboSet().has('global_sector_reference');
+  const globalEnabled=typeof market.global_reference_enabled==='boolean'?market.global_reference_enabled:configuredGlobal;
+  const globalUsed=!!market.global_score_used;
+  const globalScore=finiteNumber(market.global_score??globalContext.score);
+  const globalWeight=finiteNumber(market.global_weight)??0;
+  const globalState=globalUsed?'已启用并参与本轮环境分':globalEnabled?'已启用，但证据缺失/过期，本轮权重为0%':'未启用，仅展示行情、本轮权重为0%';
+  const globalCalc=globalUsed&&globalScore!==null?`；${globalScore.toFixed(1)} × ${(globalWeight*100).toFixed(0)}% = ${(globalScore*globalWeight).toFixed(2)} 环境分`:'';
+  if($('globalScoreContribution'))$('globalScoreContribution').innerHTML=`<b>当前个股 ${esc(row?.symbol||primarySymbol())}</b>：全球行业走势参照 ${esc(globalState)}；参考 ${esc(globalContext.focus_label||'等待行业映射')}${esc(globalCalc)}。这里的15%只在“大盘情绪”内部，不是综合总分的15%。`;
   const adaptive=b.adaptive_policy||{};
   const adaptiveWeights=adaptive.weights||{};
   const adaptiveThresholds=adaptive.thresholds||b.thresholds||{};
@@ -1164,7 +1190,7 @@ function renderGlobalMarketSentiment(js){
   const d=js?.data||js?.global_market_sentiment||js||{};const selected=d.selected_evidence||[];const score=finiteNumber(d.score);const valid=!!d.valid_for_score;
   $('globalMarketScore').textContent=score!==null?score.toFixed(1)+' 分':'证据不足';
   $('globalMarketFocus').textContent=`${d.requested_symbol||primarySymbol()} · ${d.focus_label||'全球宽基背景'} · ${d.selection_mode||'等待映射'}`;
-  $('globalMarketLabel').textContent=(d.label||'数据不足')+' · '+(valid?'作为环境辅助，合计权重上限15%':'证据不足，不进入自动交易分');
+  $('globalMarketLabel').textContent=(d.label||'数据不足')+' · '+(valid?'可供环境策略使用，是否计分由“全球行业走势参照”开关决定，权重上限15%':'证据不足，不进入自动交易分');
   const status=$('globalMarketStatus');const cache=d.cache_status||{};status.textContent=`${d.focus_label||'宽基'} · ${cnEnum(d.quality_status||'missing')} · ${selected.length}组 · ${cnEnum(cache.status||'--')}`;status.className='pill '+(valid?'good':'warn');
   $('globalMarketEvidence').innerHTML=selected.length?selected.map(x=>{
     const change=Number(x.change_pct);const href=x.source_ref||'';const phase=x.session_phase||'时段未知';const weight=Number(x.normalized_weight);
@@ -1172,16 +1198,25 @@ function renderGlobalMarketSentiment(js){
     return `<div class="global-market-item ${role==='行业基准'?'industry':''}"><small class="global-market-role">${esc(role)}</small><b>${esc(x.name||x.key||'全球市场')}</b><span class="${pnlClass(change)}">${Number.isFinite(change)?(change>0?'+':'')+change.toFixed(2)+'%':'涨跌缺失'} · ${esc(phase)}</span><small>${esc(x.observed_at||'行情时间缺失')}｜实际权重 ${Number.isFinite(weight)?(weight*100).toFixed(0)+'%':'--'}</small><small>${esc(x.phase_reason||'')}</small>${href?`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">查看行情来源</a>`:''}</div>`;
   }).join(''):`<div class="global-market-item"><b>本轮不计分</b><small>${esc((d.missing_reasons||['真实全球市场证据不足']).join('；'))}</small></div>`;
   const terms=(d.matched_terms||[]).join('、')||'未匹配具体行业词';
-  $('globalMarketPolicy').innerHTML=`<b>映射依据：</b>${esc(d.focus_reason||'仅使用全球宽基背景')}<br><b>命中词：</b>${esc(terms)}；置信度 ${esc(d.focus_confidence||'--')}<br>${esc(d.time_alignment_policy||'按各市场开盘时间区分实时和前收盘。')}<br>${esc(d.correlation_policy||'相关指数只取一项。')}<br>${esc(d.truth_boundary||'缺失和过期数据不进入自动交易分。')}`;
+  const focusMode=d.focus_source==='explicit'?'手工观察板块':'按当前股票自动映射';
+  $('globalMarketPolicy').innerHTML=`<b>当前面板：</b>${esc(focusMode)}。手工选择只改变本观察面板；自动交易会按每只股票分别映射，并由策略“全球行业走势参照”决定是否计分。<br><b>映射依据：</b>${esc(d.focus_reason||'仅使用全球宽基背景')}<br><b>命中词：</b>${esc(terms)}；置信度 ${esc(d.focus_confidence||'--')}<br>${esc(d.time_alignment_policy||'按各市场开盘时间区分实时和前收盘。')}<br>${esc(d.correlation_policy||'相关指数只取一项。')}<br>${esc(d.truth_boundary||'缺失和过期数据不进入自动交易分。')}`;
 }
-async function loadGlobalMarketSentiment(force=false,btn=null){
-  const manualFocus=$('globalSectorFocus')?.value||'';
-  const run=async()=>{const js=await api('/api/market/global-sentiment?force='+(force?'true':'false')+'&symbol='+encodeURIComponent(primarySymbol())+'&industry='+encodeURIComponent(manualFocus));renderGlobalMarketSentiment(js);return js};
+async function loadGlobalMarketSentiment(force=false,btn=null,focusOverride=null){
+  const manualFocus=focusOverride===null?($('globalSectorFocus')?.value||''):String(focusOverride||'');
+  const requestSeq=++globalMarketRequestSeq;
+  const run=async()=>{
+    const status=$('globalMarketStatus');if(status){status.textContent=`${manualFocus||'自动识别'} · 更新中`;status.className='pill warn'}
+    const js=await api('/api/market/global-sentiment?force='+(force?'true':'false')+'&symbol='+encodeURIComponent(primarySymbol())+'&industry='+encodeURIComponent(manualFocus));
+    if(requestSeq===globalMarketRequestSeq)renderGlobalMarketSentiment(js);
+    return js;
+  };
   return btn?withAction(btn,'刷新中','全球行情已更新',run):run();
 }
 function changeGlobalSectorFocus(value,btn=null){
-  localStorage.setItem('qd-global-sector-focus',value||'');
-  return loadGlobalMarketSentiment(false,btn).catch(error=>showToast('行业参照更新失败：'+error,'bad'));
+  const nextFocus=String(value||'');
+  if($('globalSectorFocus'))$('globalSectorFocus').value=nextFocus;
+  localStorage.setItem('qd-global-sector-focus',nextFocus);
+  return loadGlobalMarketSentiment(false,btn,nextFocus).catch(error=>showToast('行业参照更新失败：'+error,'bad'));
 }
 function renderCapitalEvidence(js){
   const d=js?.data||js?.capital_evidence||js||{};const pub=d.public_daily_flow||{};const latest=pub.latest||{};const intra=d.intraday_proxy||{};const holding=d.institutional_holdings||{};const score=finiteNumber(d.score);
@@ -1288,10 +1323,10 @@ async function refreshAll(btn=null){
     const extra=await extraPromise;
     const extraValue=(idx,fallback={})=>extra[idx].status==='fulfilled'?extra[idx].value:fallback;
     const score=extraValue(0),macro=extraValue(1,{items:[]}),agent=extraValue(3,{data:{}}),sectors=extraValue(4,{items:[],missing_reasons:['板块服务暂不可用']}),signalData=extraValue(5,{data:[]}),eventData=extraValue(6,{data:{}}),ths=extraValue(7,{}),dimensionData=extraValue(8,{data:{}}),globalMarket=extraValue(9,{data:{missing_reasons:['全球市场服务暂不可用']}}),capitalData=extraValue(10,{data:{missing_reasons:['个股资金服务暂不可用']}}),brokerSetup=extraValue(11,{}),mobileAlerts=extraValue(12,{}),scoreTrend=extraValue(13,{data:[]}),dailyScoreStatus=extraValue(14,{});
-    renderGlobalFeed(macro);renderAgentDecision(agent);renderSectorMainline(sectors);renderGlobalMarketSentiment(globalMarket);renderCapitalEvidence(capitalData);renderScoreTrend(scoreTrend,dailyScoreStatus);
+    renderGlobalFeed(macro);renderAgentDecision(agent);renderSectorMainline(sectors);renderCapitalEvidence(capitalData);renderScoreTrend(scoreTrend,dailyScoreStatus);
     renderTonghuashun(ths);renderBrokerSetup(brokerSetup,brokerSetup.selected_broker||'qmt');renderMobileAlertStatus(mobileAlerts);
     const signalRows=signalData.data||[];
-    const liveSignal=signalRows.find(x=>String(x.symbol||'')===primarySymbol())||signalRows[0];
+    const liveSignal=signalRows.find(x=>String(x.symbol||'')===primarySymbol())||null;
     const latest={...(liveSignal||score.data||{})};
     if(!latest.market_event_context)latest.market_event_context=eventData.data||{};
     latest.score_breakdown={...(latest.score_breakdown||{}),event_factors:(latest.score_breakdown?.event_factors||eventData.data?.factors||[]),market_event_adjustment:(latest.score_breakdown?.market_event_adjustment??eventData.data?.market_adjustment??0),information_event_adjustment:(latest.score_breakdown?.information_event_adjustment??eventData.data?.information_adjustment??0)};

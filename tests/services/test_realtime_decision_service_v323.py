@@ -360,6 +360,48 @@ def test_realtime_market_score_uses_valid_global_context_with_a_fifteen_percent_
     assert result["market_regime"]["components"][-1]["label"] == "全球行业背景·宽基"
 
 
+def test_global_market_context_is_a_selectable_strategy_and_zero_weight_when_disabled():
+    cache = _Cache(bars=_bars(), points=_points(12.0), quotes={"600438": _quote()})
+    service = RealtimeDecisionService(
+        SimpleNamespace(cache=cache),
+        _InfoCache(),
+        MarketRegimeService(),
+        global_market_sentiment=_GlobalContext({
+            "score": 70,
+            "valid_for_score": True,
+            "quality_status": "available",
+            "focus_label": "光伏",
+            "missing_reasons": [],
+        }),
+    )
+
+    disabled = service.hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict(), "strategy_combo": ["market_regime"]},
+        profile={"market_score": 50, "market_quality_status": "available"},
+        symbols=["600438"],
+    )
+    enabled = service.hydrate(
+        {
+            "symbol": "600438",
+            "quote": _quote().to_dict(),
+            "strategy_combo": ["market_regime", "global_sector_reference"],
+        },
+        profile={"market_score": 50, "market_quality_status": "available"},
+        symbols=["600438"],
+    )
+
+    assert disabled["market_score"] == 50.0
+    assert disabled["market_regime"]["global_reference_enabled"] is False
+    assert disabled["market_regime"]["global_score_available"] is True
+    assert disabled["market_regime"]["global_score_used"] is False
+    assert disabled["market_regime"]["global_weight"] == 0.0
+    assert disabled["market_regime"]["components"][-1]["weight"] == 0.0
+    assert enabled["market_score"] == 53.0
+    assert enabled["market_regime"]["global_reference_enabled"] is True
+    assert enabled["market_regime"]["global_score_used"] is True
+    assert enabled["market_regime"]["global_weight"] == 0.15
+
+
 def test_fund_flow_score_is_missing_without_traceable_volume_or_orderbook_evidence():
     result = _service()._fund_flow_score(
         {"change_pct": 1.2, "last": 12.0, "source": "unit_quote"},

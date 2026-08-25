@@ -32,6 +32,20 @@ def test_auto_trading_workbench_explains_session_aware_global_market_context():
     assert "fundamental:'基本面'" in html
     assert "market:'大盘情绪'" in html
     assert ".capital-window b{font-size:10px!important" in html
+    assert "全球行业走势参照" in html
+    assert 'id="globalScoreContribution"' in html
+    assert "let globalMarketRequestSeq=0" in html
+    assert "focusOverride===null" in html
+    assert "requestSeq===globalMarketRequestSeq" in html
+    assert "loadGlobalMarketSentiment(false,btn,nextFocus)" in html
+    assert "手工选择只改变本观察面板" in html
+    assert "当前个股评分与风险" in html
+    assert "===primarySymbol())||null" in html
+    assert 'id="globalSectorReferenceToggle"' in html
+    assert "function toggleGlobalReferenceStrategy(enabled)" in html
+    assert "不能单独触发买入" in html
+    assert "旧版极简组合已在编辑器中补全为推荐策略" in html
+    assert "保存配置”或“启动模拟”后才会成为运行配置" in html
 
 
 def test_live_trading_page_has_read_only_multisymbol_decision_board():

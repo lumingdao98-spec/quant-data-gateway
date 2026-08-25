@@ -69,6 +69,7 @@ class StrategyLibraryService:
             StrategyItem("pattern_zigzag", "形态/ZigZag结构", "技术形态", ["双底", "双顶", "三角形", "ZigZag"], "识别双底/双顶/三角收敛雏形，所有形态信号均需成交量确认。", .6, False),
             StrategyItem("psy_brar_sentiment", "PSY/BRAR情绪温度", "能量/情绪", ["PSY", "BRAR", "CYR"], "心理线、BRAR与CYR综合判断市场情绪是否过热或低迷。", .6, False),
             StrategyItem("macro_liquidity", "宏观流动性框架", "宏观/大势", ["M2", "社融", "LPR", "逆回购"], "把M2、社融、LPR、逆回购、降准降息等作为大盘风险偏好和估值环境的背景项。", .7, False),
+            StrategyItem("global_sector_reference", "全球行业走势参照", "宏观/大势", ["海外行业", "全球指数", "交易时段", "环境分"], "按每只股票所属行业选择可追溯的海外行业指数或期货，并按各市场开盘时段校准；最多占大盘环境分15%，不能单独触发买入。", .7, False),
             StrategyItem("global_commodity_map", "全球商品事件映射", "宏观/大势", ["金十期货", "原油", "黄金", "美债", "美元"], "接入金十/金十期货、华尔街见闻、财联社等全球要闻，将原油、黄金、美债、美元等事件映射到行业。", .7, False),
             StrategyItem("sector_strength", "板块强度观察", "宏观/大势", ["板块", "行业", "相对强弱"], "结合行业/主题热度和宽基表现，避免个股脱离板块孤立判断。", .7, False),
             StrategyItem("market_breadth_filter", "市场宽度过滤", "宏观/大势", ["上涨家数", "宽基指数", "大盘情绪"], "使用上证、创业板、沪深300等宽基状态和市场宽度控制新增仓位。", .8, False),

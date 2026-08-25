@@ -148,7 +148,13 @@ class RealtimeDecisionService:
 
         info = self._recent_information(symbol, profile)
         screening_information_score = _number(profile.get("information_score"))
-        market = self._market_score(symbol, symbols or [], analysis_profile)
+        global_reference_enabled = self._global_reference_enabled(out, profile)
+        market = self._market_score(
+            symbol,
+            symbols or [],
+            analysis_profile,
+            global_reference_enabled=global_reference_enabled,
+        )
         event_context = self.market_event_factors.build_context(
             symbol=symbol,
             name=str(out.get("name") or analysis_profile.get("name") or symbol),
@@ -353,7 +359,10 @@ class RealtimeDecisionService:
                     "stale": bool(market.get("stale")),
                     "missing_reasons": list(market.get("missing_reasons") or []),
                     "components": list(market.get("components") or []),
+                    "global_reference_enabled": bool(market.get("global_reference_enabled")),
+                    "global_score_available": bool(market.get("global_score_available")),
                     "global_score_used": bool(market.get("global_score_used")),
+                    "global_weight": market.get("global_weight"),
                     "global_context": dict(market.get("global_context") or {}),
                 },
                 "market_events": "全球要闻/IPO/板块真实缓存",
@@ -396,7 +405,12 @@ class RealtimeDecisionService:
                 "screening_information_source": profile.get("information_source"),
                 "fund_flow_score": out.get("fund_flow_score"),
                 "market_score": out.get("market_score"),
-                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘环境-异常风险；大盘环境以A股为主体，所选行业对应的全球时段背景最多占其中15%；筛选总分仅审计，不重复计票",
+                "global_reference_enabled": bool(market.get("global_reference_enabled")),
+                "global_score_available": bool(market.get("global_score_available")),
+                "global_score_used": bool(market.get("global_score_used")),
+                "global_score": market.get("global_score"),
+                "global_weight": market.get("global_weight"),
+                "formula": "综合交易分=筛选分项底座（基本/信息/资金）+实时技术（日K55%+分时45%）+大盘环境-异常风险；大盘环境以A股为主体，启用“全球行业走势参照”时，匹配的全球时段背景最多占其中15%；筛选总分仅审计，不重复计票",
                 "sources": existing_sources,
                 "recent_information_count": info.get("recent_count", 0),
                 "recent_information_latest": info.get("latest_published_at"),
@@ -429,7 +443,7 @@ class RealtimeDecisionService:
                 f"市场事件调整：大盘 {adjusted.get('market_adjustment', 0):+.2f} / 个股信息 {adjusted.get('information_adjustment', 0):+.2f}，证据 {event_context.get('factor_count', 0)} 项",
                 (
                     f"全球行业时段背景：{self._display(market.get('global_score'))} 分，"
-                    f"{'按15%上限进入大盘环境' if market.get('global_score_used') else '证据不足/过期，本轮不计分'}"
+                    f"{'按15%上限进入大盘环境' if market.get('global_score_used') else '策略未启用，本轮权重0%' if not market.get('global_reference_enabled') else '证据不足/过期，本轮不计分'}"
                 ),
             ]
         )
@@ -650,7 +664,42 @@ class RealtimeDecisionService:
             "capital_evidence": capital,
         }
 
-    def _market_score(self, symbol: str, symbols: Iterable[str], profile: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _global_reference_enabled(payload: dict[str, Any], profile: dict[str, Any]) -> bool:
+        raw: Any = None
+        configured = False
+        for source in (payload, profile):
+            for key in ("strategy_combo", "selected_strategies", "enabled_strategies"):
+                if key in source:
+                    raw = source.get(key)
+                    configured = True
+                    break
+            if configured:
+                break
+        if not configured:
+            # Preserve cache-only callers and older saved snapshots that did not
+            # yet expose the explicit global-reference strategy switch.
+            return True
+        if isinstance(raw, str):
+            keys = {
+                item.strip()
+                for item in raw.replace("；", ",").replace("，", ",").split(",")
+                if item.strip()
+            }
+        elif isinstance(raw, (list, tuple, set)):
+            keys = {str(item).strip() for item in raw if str(item).strip()}
+        else:
+            keys = set()
+        return "global_sector_reference" in keys
+
+    def _market_score(
+        self,
+        symbol: str,
+        symbols: Iterable[str],
+        profile: dict[str, Any],
+        *,
+        global_reference_enabled: bool = True,
+    ) -> dict[str, Any]:
         requested_symbol = str(symbol or "").strip()
         quotes: list[Quote] = []
         seen: set[str] = set()
@@ -729,10 +778,14 @@ class RealtimeDecisionService:
                     "missing_reasons": [f"全球行业情绪缓存读取失败：{str(exc)[:120]}"],
                 }
         global_score = _number(global_context.get("score"))
-        global_used = bool(
-            domestic_score is not None
-            and global_context.get("valid_for_score")
+        global_available = bool(
+            global_context.get("valid_for_score")
             and global_score is not None
+        )
+        global_used = bool(
+            global_reference_enabled
+            and domestic_score is not None
+            and global_available
         )
         score = domestic_score * 0.85 + global_score * 0.15 if global_used else domestic_score
         source_parts = []
@@ -754,21 +807,32 @@ class RealtimeDecisionService:
                     "weight": 0.85 if global_used else 1.0,
                 }
             )
-        if global_used:
+        if global_score is not None:
             components.append(
                 {
                     "key": "global_technology_context",
                     "label": f"全球行业背景·{global_context.get('focus_label') or '宽基'}",
                     "score": round(float(global_score), 2),
-                    "weight": 0.15,
+                    "weight": 0.15 if global_used else 0.0,
+                    "enabled": bool(global_reference_enabled),
+                    "used": bool(global_used),
                 }
             )
         return {
             "score": round(score, 2) if score is not None else None,
             "domestic_score": round(domestic_score, 2) if domestic_score is not None else None,
             "global_score": round(global_score, 2) if global_score is not None else None,
+            "global_reference_enabled": bool(global_reference_enabled),
+            "global_score_available": global_available,
             "global_score_used": global_used,
             "global_weight": 0.15 if global_used else 0.0,
+            "global_reference_note": (
+                "已启用且证据有效，最多占大盘环境分15%"
+                if global_used
+                else "策略未启用，全球行情仅展示、权重为0%"
+                if not global_reference_enabled
+                else "策略已启用，但全球行情缺失、过期或本地大盘分缺失，权重为0%"
+            ),
             "global_context": global_context,
             "source": "+".join(source_parts) if source_parts else "市场宽度/指数证据不足",
             "sample_count": len(quotes),
@@ -786,11 +850,11 @@ class RealtimeDecisionService:
             "missing_reasons": (
                 list(live.get("missing_reasons") or [])
                 + ([] if baseline_allowed else ["筛选大盘底座缺失、过期或质量不足"])
-                + ([] if global_used or not global_context else list(global_context.get("missing_reasons") or []))
+                + ([] if global_used or not global_reference_enabled or not global_context else list(global_context.get("missing_reasons") or []))
             )
             if score is None
             else [],
-            "global_missing_reasons": [] if global_used else list(global_context.get("missing_reasons") or []),
+            "global_missing_reasons": [] if global_used or not global_reference_enabled else list(global_context.get("missing_reasons") or []),
             "components": components,
         }
 

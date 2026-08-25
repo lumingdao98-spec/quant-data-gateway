@@ -623,15 +623,24 @@ class GlobalMarketSentimentService:
             for key in focus_context.get("benchmark_keys") or []
             if key in SPEC_BY_KEY
         ]
+        mapping_source = str(focus_context.get("mapping_source") or "profile")
         return {
             "as_of": current.isoformat(timespec="seconds"),
             "target_market": "A股",
             "requested_symbol": requested_symbol,
-            "selection_mode": "行业动态映射" if mapped else "全球宽基背景",
+            "selection_mode": (
+                "手工板块选择"
+                if mapped and mapping_source == "explicit"
+                else "行业动态映射"
+                if mapped
+                else "全球宽基背景"
+            ),
             "focus_key": focus_context.get("profile_key"),
             "focus_label": focus_context.get("profile_label"),
             "focus_reason": focus_context.get("mapping_reason"),
             "focus_confidence": focus_context.get("confidence"),
+            "focus_source": mapping_source,
+            "requested_focus_terms": focus_context.get("requested_terms") or [],
             "matched_terms": focus_context.get("matched_terms") or [],
             "mapping_status": focus_context.get("mapping_status"),
             "benchmark_catalog": benchmark_catalog,
@@ -663,8 +672,7 @@ class GlobalMarketSentimentService:
     ) -> dict[str, Any]:
         data = dict(profile or {})
         explicit_values = self._as_terms(focus_terms)
-        buckets = {
-            "explicit": explicit_values,
+        profile_buckets = {
             "industry": self._as_terms([data.get("industry"), data.get("sector"), data.get("board_name")]),
             "tags": self._as_terms([data.get("business_tags"), data.get("tags"), data.get("concepts")]),
             "products": self._as_terms(
@@ -676,21 +684,33 @@ class GlobalMarketSentimentService:
                 ]
             ),
         }
-        weights = {"explicit": 6.0, "industry": 4.0, "tags": 2.0, "products": 1.0}
-        matches: list[tuple[float, int, SectorBenchmarkProfile, list[str]]] = []
-        for order, candidate in enumerate(SECTOR_BENCHMARK_PROFILES):
-            score = 0.0
-            matched: list[str] = []
-            for keyword in candidate.keywords:
-                hit = False
-                for bucket, values in buckets.items():
-                    if any(self._term_contains(value, keyword) for value in values):
-                        score += weights[bucket]
-                        hit = True
-                if hit:
-                    matched.append(keyword)
-            if score > 0:
-                matches.append((score, -order, candidate, list(dict.fromkeys(matched))))
+
+        def rank_matches(
+            buckets: dict[str, list[str]],
+            weights: dict[str, float],
+        ) -> list[tuple[float, int, SectorBenchmarkProfile, list[str]]]:
+            ranked: list[tuple[float, int, SectorBenchmarkProfile, list[str]]] = []
+            for order, candidate in enumerate(SECTOR_BENCHMARK_PROFILES):
+                score = 0.0
+                matched: list[str] = []
+                for keyword in candidate.keywords:
+                    hit = False
+                    for bucket, values in buckets.items():
+                        if any(self._term_contains(value, keyword) for value in values):
+                            score += weights[bucket]
+                            hit = True
+                    if hit:
+                        matched.append(keyword)
+                if score > 0:
+                    ranked.append((score, -order, candidate, list(dict.fromkeys(matched))))
+            return ranked
+
+        # A workbench sector selection is the requested analysis target. It must
+        # not be outvoted by the currently displayed stock's company profile.
+        matches = rank_matches({"explicit": explicit_values}, {"explicit": 6.0}) if explicit_values else []
+        mapping_source = "explicit" if matches else "profile"
+        if not matches:
+            matches = rank_matches(profile_buckets, {"industry": 4.0, "tags": 2.0, "products": 1.0})
         if not matches:
             return {
                 "profile_key": "broad_market",
@@ -700,18 +720,25 @@ class GlobalMarketSentimentService:
                 "matched_terms": [],
                 "confidence": "未映射",
                 "mapping_status": "broad_only",
+                "mapping_source": "unmapped",
+                "requested_terms": explicit_values,
             }
         score, _, selected, matched = max(matches, key=lambda item: (item[0], item[1]))
-        confidence = "高" if score >= 10 else "中" if score >= 5 else "低"
+        confidence = "手工指定" if mapping_source == "explicit" else "高" if score >= 10 else "中" if score >= 5 else "低"
+        reason = selected.reason
+        if mapping_source == "explicit":
+            reason = f"按手工选择的“{selected.label}”切换全球参照；{selected.reason}"
         return {
             "profile_key": selected.key,
             "profile_label": selected.label,
             "benchmark_keys": list(selected.benchmark_keys),
-            "mapping_reason": selected.reason,
+            "mapping_reason": reason,
             "matched_terms": matched,
             "confidence": confidence,
             "mapping_score": round(score, 2),
             "mapping_status": "matched",
+            "mapping_source": mapping_source,
+            "requested_terms": explicit_values,
         }
 
     def _observations_for_focus(self, observations: list[dict[str, Any]], focus: dict[str, Any]) -> list[dict[str, Any]]:

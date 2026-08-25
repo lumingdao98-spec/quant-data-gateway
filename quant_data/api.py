@@ -1867,6 +1867,7 @@ DEFAULT_AUTO_STRATEGY_COMBO = [
     "macro_liquidity",
     "main_money_est",
     "market_regime",
+    "global_sector_reference",
 ]
 DEFAULT_AUTO_LIVE_STRATEGY_COMBO = list(
     dict.fromkeys(
@@ -1927,6 +1928,7 @@ AUTO_TRADING_BEGINNER_PRESETS = {
             "event_driven",
             "finance_quality",
             "market_regime",
+            "global_sector_reference",
         ],
         "risk_controls": {"stop_loss_pct": 8, "take_profit_pct": 18, "max_drawdown_pct": 18, "max_single_position_pct": 20, "max_total_position_pct": 80, "min_cash_pct": 15},
     },
@@ -1945,6 +1947,7 @@ AUTO_TRADING_BEGINNER_PRESETS = {
             "risk_control",
             "announcement_risk",
             "market_regime",
+            "global_sector_reference",
         ],
         "risk_controls": {"stop_loss_pct": 6, "take_profit_pct": 12, "max_drawdown_pct": 10, "max_single_position_pct": 10, "max_total_position_pct": 45, "min_cash_pct": 35},
     },
@@ -1964,6 +1967,7 @@ AUTO_TRADING_BEGINNER_PRESETS = {
             "risk_control",
             "announcement_risk",
             "market_regime",
+            "global_sector_reference",
         ],
         "risk_controls": {"stop_loss_pct": 5, "take_profit_pct": 10, "max_drawdown_pct": 12, "max_single_position_pct": 15, "max_total_position_pct": 60, "min_cash_pct": 25},
     },
@@ -1981,6 +1985,7 @@ AUTO_TRADING_BEGINNER_PRESETS = {
             "position_risk",
             "risk_control",
             "market_regime",
+            "global_sector_reference",
         ],
         "risk_controls": {"stop_loss_pct": 5, "take_profit_pct": 0, "max_drawdown_pct": 8, "max_single_position_pct": 25, "max_total_position_pct": 90, "min_cash_pct": 10},
     },
@@ -3078,6 +3083,7 @@ def _daily_score_snapshot(target: dict[str, Any], *, refresh: bool, decision_tim
             "name": name,
             "mode": str(target.get("mode") or "realtime_paper"),
             "strategy_family": str(target.get("strategy_family") or "hybrid"),
+            "strategy_combo": list(score_config.get("strategy_combo") or []),
             "quote": quote_data,
             "data_freshness": {
                 "stale": stale,
@@ -3881,6 +3887,7 @@ def decision_framework_symbol_v326(
                     "symbol": symbol,
                     "mode": normalized_mode,
                     "strategy_family": strategy_family or str(config.get("strategy_family") or "hybrid"),
+                    "strategy_combo": list(config.get("strategy_combo") or []),
                     "quote": quote_obj.to_dict() if quote_obj is not None else {},
                     "score_provenance": provenance,
                 },
@@ -5524,6 +5531,9 @@ def _hydrate_realtime_tick_payload(payload: dict | None) -> dict:
     signal_map = session_config.get("screener_signal_map") if isinstance(session_config.get("screener_signal_map"), dict) else {}
     profile = dict(signal_map.get(symbol) or {})
     session_symbols = list((session or {}).get("symbols") or session_config.get("symbols") or [symbol])
+    for key in ("strategy_combo", "selected_strategies", "strategy_family"):
+        if key not in out and key in session_config:
+            out[key] = session_config.get(key)
     try:
         out = realtime_decision_service.hydrate(out, profile=profile, symbols=session_symbols)
     except Exception as exc:

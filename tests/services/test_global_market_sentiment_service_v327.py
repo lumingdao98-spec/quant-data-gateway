@@ -228,6 +228,29 @@ def test_selected_sector_uses_its_own_overseas_benchmark(profile, focus_key, req
     assert forbidden_key not in focus["benchmark_keys"]
 
 
+@pytest.mark.parametrize(
+    ("manual_sector", "expected_key"),
+    [
+        ("半导体", "semiconductor"),
+        ("光伏", "solar"),
+        ("银行", "financial"),
+        ("医药", "healthcare"),
+    ],
+)
+def test_manual_sector_selection_overrides_the_current_stock_profile(manual_sector, expected_key):
+    service = GlobalMarketSentimentService(cache_state=None)
+
+    focus = service.resolve_focus(
+        profile={"industry": "锂电池", "business_tags": ["动力电池", "新能源车", "储能"]},
+        focus_terms=[manual_sector],
+    )
+
+    assert focus["profile_key"] == expected_key
+    assert focus["mapping_source"] == "explicit"
+    assert focus["confidence"] == "手工指定"
+    assert focus["requested_terms"] == [manual_sector]
+
+
 def test_unmapped_sector_uses_broad_context_without_forcing_semiconductor():
     now = datetime(2026, 8, 24, 22, 0, tzinfo=SH)
     observations = [
