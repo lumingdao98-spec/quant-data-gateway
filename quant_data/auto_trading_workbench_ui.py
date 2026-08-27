@@ -28,6 +28,8 @@ def build_auto_trading_workbench_ui() -> str:
 .pill.good{border-color:#14532d;background:#0d2b1c;color:#86efac}.pill.warn{border-color:#854d0e;background:#2a1c08;color:#fcd34d}.pill.bad{border-color:#7f1d1d;background:#2a1116;color:#fecaca}.ok{color:#86efac}.bad{color:#fecaca}.warn{color:#fcd34d}
 .btn{border:0;border-radius:10px;padding:9px 12px;background:#253755;color:#e5efff;font-weight:900;cursor:pointer;white-space:nowrap}.btn:hover{filter:brightness(1.1)}.btn:disabled{opacity:.55;cursor:wait;filter:none}.btn.primary{background:var(--blue);color:#fff}.btn.green{background:#16a34a;color:#fff}.btn.red{background:#991b1b;color:#fff}.btn.ghost{background:#111c31;border:1px solid var(--line)}
 .action-toast{position:fixed;right:22px;bottom:22px;z-index:90;max-width:min(420px,calc(100vw - 44px));padding:11px 14px;border:1px solid #315077;border-radius:10px;background:#10233a;color:#dbeafe;box-shadow:var(--shadow);opacity:0;transform:translateY(14px);pointer-events:none;transition:.18s}.action-toast.show{opacity:1;transform:translateY(0)}.action-toast.good{border-color:#166534;color:#bbf7d0}.action-toast.bad{border-color:#991b1b;color:#fecaca}
+.strategy-library-backdrop{position:fixed;inset:0;z-index:130;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(2,6,23,.78);backdrop-filter:blur(4px)}.strategy-library-backdrop.show{display:flex}.strategy-library-modal{width:min(1120px,96vw);height:min(780px,92vh);display:grid;grid-template-columns:238px minmax(0,1fr);grid-template-rows:minmax(0,1fr) 58px;overflow:hidden;background:#0d1628;border:1px solid #3a5277;border-radius:12px;box-shadow:0 30px 90px rgba(0,0,0,.58)}.strategy-library-side{grid-row:1/3;min-width:0;background:#080f1e;border-right:1px solid #283a57;display:flex;flex-direction:column}.strategy-library-title{padding:20px 18px 16px;border-bottom:1px solid #283a57}.strategy-library-title b{display:block;font-size:22px}.strategy-library-title span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:6px}.strategy-library-nav{padding:12px;overflow:auto}.strategy-library-nav button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid transparent;background:transparent;color:#b9c9e2;padding:9px 10px;margin:2px 0;border-radius:8px;text-align:left;cursor:pointer}.strategy-library-nav button:hover,.strategy-library-nav button.active{background:#14213a;border-color:#31527d;color:#fff}.strategy-library-nav small{color:#7f96b8}.strategy-library-main{min-width:0;min-height:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden}.strategy-library-tools{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid #283a57;background:#111a2e}.strategy-library-tools input{min-width:0;flex:1;max-width:420px;background:#1a263a;border:1px solid #3a4d69;border-radius:999px;color:#e5efff;padding:10px 14px;outline:none}.strategy-library-tools .grow{flex:1}.strategy-library-note{margin:12px 16px 0;border:1px solid #31527d;background:#10233a;border-radius:8px;padding:9px 11px;color:#c8d8ee;font-size:12px;line-height:1.5}.strategy-library-grid{min-height:0;overflow:auto;padding:12px 16px 18px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-content:start}.strategy-library-card{min-width:0;border:1px solid #2c3e5c;background:#131d31;border-radius:8px;padding:13px;display:grid;gap:8px}.strategy-library-card.on{border-color:#3b82f6;background:#12243e}.strategy-library-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.strategy-library-card h3{margin:0;font-size:16px;line-height:1.3}.strategy-library-card p{margin:0;color:#a7b7d0;font-size:12px;line-height:1.55;overflow-wrap:anywhere}.strategy-library-card-foot{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.strategy-library-tag{display:inline-flex;border:1px solid #30496f;border-radius:5px;padding:3px 6px;color:#9fc9ff;font-size:10px}.strategy-library-rank{color:#facc15;letter-spacing:0}.strategy-library-card .pick{margin-left:auto;border:0;border-radius:7px;padding:7px 10px;background:#3155dd;color:#fff;font-weight:900;cursor:pointer}.strategy-library-card.on .pick{background:#1e3a5f;color:#bfdbfe}.strategy-library-python{display:none;min-height:0;overflow:auto;padding:14px 16px}.strategy-library-python.show{display:block}.strategy-library-python textarea{width:100%;min-height:260px;resize:vertical;background:#080f1e;border:1px solid #3a4d69;border-radius:8px;color:#dbeafe;padding:12px;font-family:Consolas,monospace;line-height:1.55}.strategy-library-python .status{margin-top:9px;color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}.strategy-library-footer{min-width:0;display:flex;align-items:center;gap:8px;padding:9px 16px;border-top:1px solid #283a57;background:#111a2e}.strategy-library-footer .grow{flex:1}.strategy-library-empty{grid-column:1/-1;border:1px dashed #3a4d69;border-radius:8px;padding:24px;text-align:center;color:var(--muted)}
+.strategy-library-grid,.strategy-library-python{grid-row:3;grid-column:1}@media(max-width:760px){.strategy-library-backdrop{padding:8px}.strategy-library-modal{width:calc(100vw - 16px);height:calc(100vh - 16px);grid-template-columns:112px minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}.strategy-library-title{padding:14px 10px}.strategy-library-title b{font-size:17px}.strategy-library-title span{font-size:10px}.strategy-library-nav{padding:7px}.strategy-library-nav button{padding:8px 7px;font-size:11px}.strategy-library-nav small{display:none}.strategy-library-tools{padding:9px;flex-wrap:wrap}.strategy-library-tools input{max-width:none;flex:1 0 calc(100% - 74px)}.strategy-library-note{margin:8px 9px 0}.strategy-library-grid{grid-template-columns:1fr;padding:8px 9px 12px}.strategy-library-python{padding:9px}.strategy-library-footer{padding:8px 9px;flex-wrap:wrap}.strategy-library-footer .muted{display:none}}
 .main{padding:18px 22px 30px;min-width:0;max-width:100%;overflow-x:hidden}.hero{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:14px;min-width:0;max-width:100%;align-items:start}.hero>.panel{align-self:start}.panel,.card,.module{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);min-width:0;max-width:100%}.panel{overflow:hidden}.panel-h{min-height:46px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 14px;background:#121e33;border-bottom:1px solid var(--line);font-weight:1000;min-width:0}.panel-h>.row{min-width:0}.panel-b{padding:14px;min-width:0;max-width:100%}.muted{color:var(--muted)}.notice{border:1px solid #315077;background:#0d1728;border-radius:12px;padding:11px 12px;color:#c9d8ee;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
 .kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:14px}.card{padding:13px}.card span{display:block;color:var(--muted);font-size:12px}.card b{display:block;font-size:22px;margin-top:8px;overflow-wrap:anywhere}.card small{display:block;color:var(--muted);margin-top:5px;line-height:1.35}
 .flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.flow .step{background:#0f1b2e;border:1px solid var(--line);border-radius:14px;padding:12px;min-width:0}.step strong{display:flex;align-items:center;gap:8px;margin-bottom:6px}.step i{font-style:normal;width:24px;height:24px;border-radius:99px;background:#123a4a;color:#67e8f9;display:grid;place-items:center}.step p{margin:0;color:var(--muted);font-size:12px;line-height:1.55;overflow-wrap:anywhere}.step .row{margin-top:9px}
@@ -105,7 +107,7 @@ def build_auto_trading_workbench_ui() -> str:
             <div class="notice">这个首页只做总览和关键动作。点击左侧模块后，会在右侧打开完整功能页；关闭或切换模块时会释放旧页面，避免越用越慢。原有功能和独立页面入口全部保留。</div>
             <div class="flow" style="margin-top:12px">
               <div class="step"><strong><i>1</i>先筛选</strong><p>股票池、四面评分、风险标签和策略适配是自动交易方向的来源。</p><div class="row"><button class="btn" onclick="openModule('screener')">打开筛选</button></div></div>
-              <div class="step"><strong><i>2</i>一键配置</strong><p>从筛选结果生成策略组合、仓位、止损止盈、最大回撤和事件监控。</p><div class="row"><button class="btn green" onclick="oneClickConfig(this)">一键配置</button></div></div>
+              <div class="step"><strong><i>2</i>选择策略</strong><p>从完整策略库选择主策略、确认因子与风控，再生成仓位和止损止盈配置。</p><div class="row"><button class="btn primary" onclick="openStrategyLibraryModal()">选择策略</button><button class="btn green" onclick="oneClickConfig(this)">一键配置</button></div></div>
               <div class="step"><strong><i>3</i>先验证</strong><p>同一套配置先跑回测，再进入实时模拟，不直接上真实账户。</p><div class="row"><button class="btn" onclick="runConfigBacktest(this)">配置回测</button><button class="btn" onclick="startPaper(this)">启动模拟</button></div></div>
               <div class="step"><strong><i>4</i>后实盘</strong><p>QMT/PTrade 默认关闭；真实订单必须预检查、风控、确认队列和 kill switch。</p><div class="row"><button class="btn red" onclick="openModule('live')">实盘确认</button></div></div>
             </div>
@@ -390,6 +392,26 @@ MOBILE_ALERT_COOLDOWN_SECONDS=60</pre></details>
     </main>
   </section>
 </div>
+<div id="strategyLibraryModal" class="strategy-library-backdrop" role="dialog" aria-modal="true" aria-labelledby="strategyLibraryTitle" onclick="if(event.target===this)closeStrategyLibraryModal()">
+  <div class="strategy-library-modal">
+    <aside class="strategy-library-side">
+      <div class="strategy-library-title"><b id="strategyLibraryTitle">策略库</b><span>为当前股票池配置策略。选择结果与回测、实时模拟和实盘预检查共用。</span></div>
+      <nav id="strategyLibrarySidebar" class="strategy-library-nav"></nav>
+    </aside>
+    <section class="strategy-library-main">
+      <div class="strategy-library-tools"><input id="strategyLibrarySearch" type="search" placeholder="搜索策略名称、分类或说明" oninput="filterStrategyLibraryModal(this.value)"><span id="strategyLibraryModalCount" class="pill">等待策略目录</span><div class="grow"></div><button class="btn" aria-label="关闭策略库" onclick="closeStrategyLibraryModal()">关闭</button></div>
+      <div class="strategy-library-note">建议选择 1 个主方向、2 至 4 个确认因子，并保留数据质量、仓位和风险门控。星级仅按默认权重换算用于浏览，不代表收益评级。</div>
+      <div id="strategyLibraryGrid" class="strategy-library-grid"></div>
+      <div id="strategyLibraryPython" class="strategy-library-python">
+        <div class="notice"><b>Python 自定义策略仍然保留</b><br>当前只做代码结构校验和本地草稿保存，不执行任意 Python，不参与评分、回测或下单。后续只有接入隔离沙箱、资源限制和版本审计后才可启用执行。</div>
+        <textarea id="workbenchCustomCode" spellcheck="false" placeholder="def score(context):\n    return {'score': 60, 'tags': ['自定义观察']}"></textarea>
+        <div class="row" style="margin-top:10px"><button class="btn primary" onclick="validateWorkbenchPythonStrategy(this)">校验结构</button><button class="btn" onclick="saveWorkbenchPythonDraft(this)">保存本地草稿</button></div>
+        <div id="workbenchCustomStatus" class="status">未执行代码，仅提供安全语法检查。</div>
+      </div>
+    </section>
+    <footer class="strategy-library-footer"><button class="btn" onclick="selectWorkbenchDefaultStrategies()">推荐组合</button><button class="btn" onclick="clearWorkbenchStrategies()">清空</button><div class="grow"></div><span class="muted">先保存到统一配置，再用于回测、模拟和实盘预检查</span><button class="btn green" onclick="saveStrategyLibrarySelection(this)">保存并应用</button><button class="btn" onclick="closeStrategyLibraryModal()">仅关闭</button></footer>
+  </div>
+</div>
 <section class="iframe-shell" id="workspaceShell" aria-hidden="true">
   <header class="iframe-head">
     <b id="workspaceTitle">模块页面</b>
@@ -438,6 +460,9 @@ let globalStreamLastPayload=null;
 let globalMarketRequestSeq=0;
 let strategyEditorHydrated=false;
 let deferredStrategyConfig=null;
+let strategyLibraryCategory='全部策略';
+let strategyLibrarySearchText='';
+const PYTHON_STRATEGY_DRAFT_KEY='quant_custom_python_strategy_draft';
 let dashboardPanels=[];
 let dashboardLayoutKey='';
 function arrangeDashboardPanels(){
@@ -633,8 +658,42 @@ function toggleGlobalReferenceStrategy(enabled){
 function setComboFromList(list){
   $('strategyCombo').value=[...new Set((list||[]).map(x=>String(x||'').trim()).filter(Boolean))].join(', ');
   renderStrategyCatalog(lastAutoConfig||{});
+  renderStrategyLibraryModal();
   renderWorkflow();
 }
+function workbenchStrategyCatalog(){return (lastAutoConfig?.strategy_catalog||deferredStrategyConfig?.strategy_catalog||[]).filter(item=>item&&item.key)}
+function workbenchStrategyCategories(){return [...new Set(workbenchStrategyCatalog().map(item=>String(item.category||'其他')))];}
+function openStrategyLibraryModal(){
+  const modal=$('strategyLibraryModal');if(!modal)return;
+  strategyLibraryCategory='全部策略';strategyLibrarySearchText='';if($('strategyLibrarySearch'))$('strategyLibrarySearch').value='';
+  if($('workbenchCustomCode'))$('workbenchCustomCode').value=localStorage.getItem(PYTHON_STRATEGY_DRAFT_KEY)||'';
+  modal.classList.add('show');document.body.style.overflow='hidden';renderStrategyLibraryModal();
+  if(!workbenchStrategyCatalog().length)api('/api/strategy/library').then(js=>{lastAutoConfig={...(lastAutoConfig||{}),strategy_catalog:js.data||[]};renderStrategyLibraryModal()}).catch(error=>{if($('strategyLibraryGrid'))$('strategyLibraryGrid').innerHTML=`<div class="strategy-library-empty">策略目录读取失败：${esc(error.message||error)}</div>`});
+}
+function closeStrategyLibraryModal(){const modal=$('strategyLibraryModal');if(modal)modal.classList.remove('show');document.body.style.overflow='';renderStrategySelectionSummary(lastAutoConfig||{})}
+function setStrategyLibraryCategory(category){strategyLibraryCategory=category;renderStrategyLibraryModal()}
+function filterStrategyLibraryModal(value){strategyLibrarySearchText=String(value||'').trim().toLowerCase();renderStrategyLibraryModal()}
+function strategyWeightStars(value){const count=Math.max(1,Math.min(3,Math.round(Number(value||0.5)*3)));return '★'.repeat(count)+'☆'.repeat(3-count)}
+function renderStrategyLibraryModal(){
+  const side=$('strategyLibrarySidebar'),grid=$('strategyLibraryGrid'),python=$('strategyLibraryPython');if(!side||!grid||!python)return;
+  const catalog=workbenchStrategyCatalog(),selected=currentComboSet(),categories=['全部策略','已选策略','Python 自定义',...workbenchStrategyCategories()];
+  side.innerHTML=categories.map(category=>{const count=category==='全部策略'?catalog.length:category==='已选策略'?selected.size:category==='Python 自定义'?'草稿':catalog.filter(item=>String(item.category||'其他')===category).length;return `<button class="${category===strategyLibraryCategory?'active':''}" onclick="setStrategyLibraryCategory('${esc(category)}')"><span>${esc(category)}</span><small>${esc(count)}</small></button>`}).join('');
+  const pythonMode=strategyLibraryCategory==='Python 自定义';grid.style.display=pythonMode?'none':'grid';python.classList.toggle('show',pythonMode);
+  if(pythonMode){$('strategyLibraryModalCount').textContent='Python 草稿 · 不执行';return}
+  let items=catalog;
+  if(strategyLibraryCategory==='已选策略')items=items.filter(item=>selected.has(String(item.key)));
+  else if(strategyLibraryCategory!=='全部策略')items=items.filter(item=>String(item.category||'其他')===strategyLibraryCategory);
+  if(strategyLibrarySearchText)items=items.filter(item=>[item.name,item.key,item.category,item.description,item.beginner_note,...(item.tags||[])].join(' ').toLowerCase().includes(strategyLibrarySearchText));
+  $('strategyLibraryModalCount').textContent=`已选 ${selected.size} 项 / 显示 ${items.length} 项`;
+  grid.innerHTML=items.map(item=>{const key=String(item.key),on=selected.has(key),note=item.beginner_note||item.description||'暂无说明';return `<article class="strategy-library-card ${on?'on':''}"><div class="strategy-library-card-head"><div><h3>${esc(item.name||key)}</h3><span class="strategy-library-tag">${esc(item.category||'其他')}</span></div><span class="strategy-library-rank" title="默认权重换算，不代表收益评级">${strategyWeightStars(item.default_weight)}</span></div><p>${esc(note)}</p><div class="strategy-library-card-foot">${(item.tags||[]).slice(0,3).map(tag=>`<span class="strategy-library-tag">${esc(tag)}</span>`).join('')}<button class="pick" data-strategy-key="${esc(key)}" onclick="toggleWorkbenchStrategy(this.dataset.strategyKey)">${on?'移除':'添加'}</button></div></article>`}).join('')||'<div class="strategy-library-empty">当前分类或搜索条件下没有策略。</div>';
+}
+function toggleWorkbenchStrategy(key){const selected=currentComboSet();if(selected.has(key))selected.delete(key);else selected.add(key);setComboFromList([...selected])}
+function selectWorkbenchDefaultStrategies(){const cfg=lastAutoConfig||{},preset=cfg.beginner_presets?.balanced;const keys=preset?.strategy_combo||(cfg.strategy_catalog||[]).filter(item=>item.enabled!==false).map(item=>item.key);setComboFromList(keys);showActionToast('已载入推荐组合，保存配置后生效','good')}
+function clearWorkbenchStrategies(){setComboFromList([]);showActionToast('当前编辑组合已清空，尚未保存','good')}
+async function saveStrategyLibrarySelection(btn=null){try{await saveAutoConfig(btn);closeStrategyLibraryModal()}catch(_error){}}
+function saveWorkbenchPythonDraft(btn=null){const code=$('workbenchCustomCode')?.value||'';localStorage.setItem(PYTHON_STRATEGY_DRAFT_KEY,code);if($('workbenchCustomStatus'))$('workbenchCustomStatus').textContent='草稿已保存在当前浏览器；未执行、未参与评分或下单。';showActionToast('Python 策略草稿已保存','good')}
+async function validateWorkbenchPythonStrategy(btn=null){return withAction(btn,'校验中','Python 结构校验完成',async()=>{const code=$('workbenchCustomCode')?.value||'';localStorage.setItem(PYTHON_STRATEGY_DRAFT_KEY,code);const js=await api('/api/strategy/custom/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code})});const notes=[...(js.blocked_reasons||[]),...(js.warnings||[])];if($('workbenchCustomStatus')){$('workbenchCustomStatus').textContent=(js.message||'校验完成')+(notes.length?'；'+notes.join('；'):'；未发现结构问题')+'。代码仍未执行。';$('workbenchCustomStatus').className='status '+(js.ok?'ok':'bad')}return js})}
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('strategyLibraryModal')?.classList.contains('show'))closeStrategyLibraryModal()});
 function strategyEditorIsOpen(){return !!$('strategyAdvancedDetails')?.open}
 function onStrategyEditorToggle(details){
   if(!details?.open||strategyEditorHydrated)return;

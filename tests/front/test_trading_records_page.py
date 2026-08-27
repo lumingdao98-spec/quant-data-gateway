@@ -17,3 +17,8 @@ def test_trading_records_page_visible():
     assert "display_amount" in html
     assert "display_pnl_pct" in html
     assert "display_cost_price" in html
+    assert 'id="queryStatus"' in html
+    assert "AbortController" in html
+    assert "Promise.allSettled" in html
+    assert "beforeunload" in html
+    assert "alert('查询失败" not in html

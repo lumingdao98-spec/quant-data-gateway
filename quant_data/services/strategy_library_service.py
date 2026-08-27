@@ -90,16 +90,30 @@ class StrategyLibraryService:
     def validate_custom_code(self, code: str) -> dict[str, Any]:
         code = code or ""
         if not code.strip():
-            return {"ok": True, "message": "未填写自定义策略代码", "warnings": []}
+            return {
+                "ok": True,
+                "message": "未填写自定义策略代码",
+                "warnings": [],
+                "validation_only": True,
+                "execution_enabled": False,
+            }
         warnings: list[str] = []
+        blocked_reasons: list[str] = []
         try:
             tree = ast.parse(code)
         except SyntaxError as exc:
-            return {"ok": False, "message": f"语法错误: {exc}", "warnings": warnings}
+            return {
+                "ok": False,
+                "message": f"语法错误: {exc}",
+                "warnings": warnings,
+                "blocked_reasons": ["语法错误"],
+                "validation_only": True,
+                "execution_enabled": False,
+            }
         forbidden = {"exec", "eval", "open", "compile", "__import__", "subprocess", "socket", "requests", "os", "sys"}
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                warnings.append("当前版本不允许自定义策略中使用 import；后续会提供安全沙箱和白名单。")
+                blocked_reasons.append("当前版本不允许自定义策略中使用 import")
             if isinstance(node, ast.Call):
                 name = ""
                 if isinstance(node.func, ast.Name):
@@ -107,8 +121,16 @@ class StrategyLibraryService:
                 elif isinstance(node.func, ast.Attribute):
                     name = node.func.attr
                 if name in forbidden:
-                    warnings.append(f"检测到潜在不安全调用: {name}")
+                    blocked_reasons.append(f"检测到潜在不安全调用: {name}")
         has_func = any(isinstance(n, ast.FunctionDef) and n.name == "score" for n in tree.body)
         if not has_func:
             warnings.append("建议定义 score(context) 函数，返回 0-100 分或包含 score/tags/risk 的字典。")
-        return {"ok": not any("不安全" in w for w in warnings), "message": "自定义策略代码结构检查完成", "warnings": list(dict.fromkeys(warnings))}
+        blocked_reasons = list(dict.fromkeys(blocked_reasons))
+        return {
+            "ok": not blocked_reasons,
+            "message": "自定义策略代码结构检查完成" if not blocked_reasons else "自定义策略代码未通过安全结构检查",
+            "warnings": list(dict.fromkeys(warnings)),
+            "blocked_reasons": blocked_reasons,
+            "validation_only": True,
+            "execution_enabled": False,
+        }

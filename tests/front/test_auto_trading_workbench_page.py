@@ -169,6 +169,16 @@ def test_auto_trading_workbench_page_visible():
     assert "展开自动复评、持仓复核和会话计数" in html
     assert "展开券商预检查、同花顺提醒和持仓复核" in html
     assert ".sector-table-wrap{overflow:auto;max-width:100%;max-height:280px" in html
+    assert 'id="strategyLibraryModal"' in html
+    assert "openStrategyLibraryModal" in html
+    assert "strategy-library-grid" in html
+    assert "已选策略" in html
+    assert "Python 自定义" in html
+    assert "/api/strategy/custom/validate" in html
+    assert "不执行任意 Python，不参与评分、回测或下单" in html
+    assert "quant_custom_python_strategy_draft" in html
+    assert "saveStrategyLibrarySelection" in html
+    assert "保存并应用" in html
 
 
 def test_auto_trading_workbench_uses_single_right_overlay_iframe():

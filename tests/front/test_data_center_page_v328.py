@@ -18,6 +18,11 @@ def test_data_center_page_exposes_truthful_readiness_and_explicit_refresh_contro
     assert "WAL 检查点" in html
     assert "刷新此项" in html
     assert "overflow-wrap:anywhere" in html
+    assert "Promise.allSettled" in html
+    assert "requestCancelled" in html
+    assert "beforeunload" in html
+    assert "诊断已部分完成" in html
+    assert "无法连接，请确认当前总控台服务仍在运行" in html
 
 
 def test_workbench_can_refresh_each_decision_dimension_without_creating_orders():

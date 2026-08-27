@@ -66,7 +66,24 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;
 const labels={fundamental:'基本面',technical:'技术面',information:'信息面',fund_flow:'资金面',market:'大盘情绪',quote:'实时行情',kline:'K线',fundamentals:'基本面',capital:'资金面',global_market:'大盘/全球市场',available:'可用',partial:'部分可用',missing:'缺失',stale:'已过期',not_applicable:'不适用',unusable:'不可交易',insufficient_sample:'样本不足'};
 const scopeFor={fundamental:'fundamentals',technical:'kline',information:'information',fund_flow:'capital',market:'global_market'};
 function toast(message,bad=false){const el=$('toast');el.textContent=message;el.className='toast show'+(bad?' bad':'');clearTimeout(window.__toastTimer);window.__toastTimer=setTimeout(()=>el.className='toast',4500)}
-async function api(url,options){const response=await fetch(url,options);let data={};try{data=await response.json()}catch(_){throw new Error('接口未返回有效 JSON')}if(!response.ok||data.ok===false)throw new Error(data.detail||data.message||('请求失败 '+response.status));return data}
+let pageUnloading=false;
+window.addEventListener('beforeunload',()=>{pageUnloading=true});
+function requestCancelled(error){return pageUnloading||error?.name==='AbortError'||error?.cancelled===true}
+async function api(url,options={}){
+  const requestOptions={cache:'no-store',credentials:'same-origin',...options};
+  const timeoutMs=Number(requestOptions.timeoutMs||30000);delete requestOptions.timeoutMs;
+  const controller=requestOptions.signal?null:new AbortController();
+  if(controller)requestOptions.signal=controller.signal;
+  const timer=controller?setTimeout(()=>controller.abort(),timeoutMs):null;
+  let response;
+  try{response=await fetch(new URL(url,location.origin),requestOptions)}catch(error){
+    if(requestCancelled(error)){const cancelled=new Error('请求已取消');cancelled.cancelled=true;throw cancelled}
+    throw new Error(`接口 ${url} 无法连接，请确认当前总控台服务仍在运行`)
+  }finally{if(timer)clearTimeout(timer)}
+  let data={};try{data=await response.json()}catch(_){throw new Error(`接口 ${url} 未返回有效 JSON`)}
+  if(!response.ok||data.ok===false)throw new Error(data.detail||data.message||`接口 ${url} 请求失败（HTTP ${response.status}）`);
+  return data
+}
 function selectedScopes(){return [...document.querySelectorAll('#scopes input:checked')].map(x=>x.value)}
 function query(){return new URLSearchParams({symbols:$('symbols').value.trim(),mode:$('mode').value,strategy_family:$('strategy').value}).toString()}
 async function busy(button,label,task){const old=button.textContent;button.disabled=true;button.textContent=label;try{return await task()}finally{button.disabled=false;button.textContent=old}}
@@ -82,12 +99,30 @@ function renderReadiness(payload){const rows=payload.data||[];let ready=0,missin
 function renderSources(sourcePayload){const data=sourcePayload.data||{},health=data.news_sources||{};const render=(id,rows)=>{$(id).innerHTML=(rows||[]).map(row=>`<div class="item"><strong>${esc(row.source_name||row.source||row.name||'未知来源')} <span class="pill ${Number(row.count||0)>0?'ok':'warn'}">${esc(row.quality_status||row.status||'未检查')}</span></strong><small class="muted">有效条目 ${esc(row.count||0)}${row.error?' · '+esc(row.error):''}${row.skipped_reason?' · '+esc(row.skipped_reason):''}</small></div>`).join('')||'<div class="item muted">本进程尚未执行过该类抓取；请显式刷新信息面后再查看。</div>'};render('stockSources',health.stock_sources);render('globalSources',health.global_sources);const circuits=health.active_circuits||[];$('sourcePolicy').textContent=(health.truth_boundary||'未提供信息源诊断')+(circuits.length?' 当前短时熔断：'+circuits.map(x=>x.source).join('、'):'')}
 function bytes(value){let n=Number(value||0);for(const unit of ['B','KB','MB','GB']){if(n<1024||unit==='GB')return `${n.toFixed(unit==='B'?0:1)} ${unit}`;n/=1024}return '--'}
 function renderDatabases(payload){$('databasePolicy').textContent=`${payload.policy||''} 共 ${payload.existing_count||0}/${payload.database_count||0} 个数据库，合计 ${bytes(payload.total_size_bytes)}，WAL ${bytes(payload.total_wal_bytes)}。`;$('databaseRows').innerHTML=(payload.data||[]).map(row=>{const tables=(row.tables||[]).map(x=>`${x.name} ${x.rows===null?'?':x.rows}`).join('；');const state=row.quick_check==='ok'?'ok':row.exists?'warn':'bad';return `<tr><td><b>${esc(row.label||row.key)}</b><br><small class="muted">${esc(row.purpose||'')}</small></td><td class="db-path">${esc(row.path||'')}</td><td>${bytes(row.size_bytes)}<br><small class="muted">${esc(row.modified_at||'尚未创建')}</small></td><td>${bytes(row.wal_size_bytes)}<br><small class="muted">共享内存 ${bytes(row.shm_size_bytes)}</small></td><td><span class="db-state ${state}">${esc(row.quick_check||'未检查')}</span>${row.error?`<br><small class="bad">${esc(row.error)}</small>`:''}</td><td class="db-tables">${row.table_count||0} 张表 / ${row.total_rows||0} 条<br>${esc(tables||'无表')}</td><td><div class="db-actions"><button class="mini-btn" onclick="checkpointDb('${esc(row.key)}',false,this)" ${row.exists?'':'disabled'}>安全检查点</button><button class="mini-btn" onclick="checkpointDb('${esc(row.key)}',true,this)" ${row.exists?'':'disabled'}>截断空闲 WAL</button></div></td></tr>`}).join('')||'<tr><td colspan="7" class="muted">未发现系统数据库</td></tr>'}
-async function loadDatabases(button){const run=async()=>{const data=await api('/api/data-center/databases');renderDatabases(data);return data};return button?busy(button,'检查中...',run):run()}
-async function checkpointDb(key,truncate,button){if(truncate&&!confirm('只截断已写回数据库的空闲 WAL，不删除业务记录。继续吗？'))return;return busy(button,'处理中...',async()=>{const data=await api('/api/data-center/databases/'+encodeURIComponent(key)+'/checkpoint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({truncate})});toast(data.message||'检查点已完成',!data.ok);await loadDatabases()})}
-async function diagnose(button){return busy(button,'诊断中...',async()=>{const [readiness,status,missing,errors,databases]=await Promise.all([api('/api/data-center/decision-readiness?'+query()),api('/api/data-center/status'),api('/api/data-center/missing-fields'),api('/api/data-center/source-errors'),api('/api/data-center/databases')]);renderReadiness(readiness);renderSources(errors);renderDatabases(databases);$('rawStatus').textContent=JSON.stringify(status,null,2);$('rawMissing').textContent=JSON.stringify(missing,null,2);$('rawErrors').textContent=JSON.stringify(errors,null,2);toast('缓存与数据库诊断已更新，未访问外部网络')})}
+async function loadDatabases(button){const run=async()=>{const data=await api('/api/data-center/databases');renderDatabases(data);return data};try{return await (button?busy(button,'检查中...',run):run())}catch(error){if(!requestCancelled(error))toast(error.message,true)}}
+async function checkpointDb(key,truncate,button){if(truncate&&!confirm('只截断已写回数据库的空闲 WAL，不删除业务记录。继续吗？'))return;try{return await busy(button,'处理中...',async()=>{const data=await api('/api/data-center/databases/'+encodeURIComponent(key)+'/checkpoint',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({truncate})});toast(data.message||'检查点已完成',!data.ok);await loadDatabases()})}catch(error){if(!requestCancelled(error))toast(error.message,true)}}
+async function diagnose(button){return busy(button,'诊断中...',async()=>{
+  const requests=[
+    ['readiness',api('/api/data-center/decision-readiness?'+query())],
+    ['status',api('/api/data-center/status')],
+    ['missing',api('/api/data-center/missing-fields')],
+    ['errors',api('/api/data-center/source-errors')],
+    ['databases',api('/api/data-center/databases')],
+  ];
+  const settled=await Promise.allSettled(requests.map(x=>x[1]));if(pageUnloading)return;
+  const values={},failures=[],componentLabels={readiness:'决策就绪度',status:'缓存状态',missing:'缺失字段',errors:'数据源错误',databases:'数据库'};
+  settled.forEach((result,index)=>{const key=requests[index][0];if(result.status==='fulfilled')values[key]=result.value;else if(!requestCancelled(result.reason))failures.push(`${componentLabels[key]||key}：${result.reason?.message||result.reason}`)});
+  if(values.readiness)renderReadiness(values.readiness);
+  if(values.errors)renderSources(values.errors);
+  if(values.databases)renderDatabases(values.databases);
+  if(values.status)$('rawStatus').textContent=JSON.stringify(values.status,null,2);
+  if(values.missing)$('rawMissing').textContent=JSON.stringify(values.missing,null,2);
+  $('rawErrors').textContent=JSON.stringify({source_errors:values.errors||null,request_failures:failures},null,2);
+  if(failures.length)toast(`诊断已部分完成；${failures.join('；')}`,true);else toast('缓存与数据库诊断已更新，未访问外部网络');
+})}
 async function doRefresh(symbols,scopes,force,button){return busy(button,force?'强制抓取中...':'刷新中...',async()=>{const result=await api('/api/data-center/refresh',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({symbols,scopes,force,mode:$('mode').value,strategy_family:$('strategy').value})});renderReadiness(result.readiness||{data:[]});$('rawErrors').textContent=JSON.stringify(result,null,2);const failed=(result.results||[]).filter(x=>!x.ok);toast(`刷新完成：${(result.results||[]).length-failed.length} 项成功，${failed.length} 项缺失/失败`,failed.length>0);const errors=await api('/api/data-center/source-errors');renderSources(errors);return result})}
-async function refreshSelected(button,force){const scopes=selectedScopes();if(!scopes.length){toast('请至少勾选一个数据类别',true);return}return doRefresh($('symbols').value.trim(),scopes,force,button)}
-async function refreshOne(symbol,scope,button){return doRefresh(symbol,[scope],true,button)}
-window.addEventListener('DOMContentLoaded',()=>diagnose(document.querySelector('.btn.primary')).catch(error=>toast(error.message,true)));
+async function refreshSelected(button,force){const scopes=selectedScopes();if(!scopes.length){toast('请至少勾选一个数据类别',true);return}try{return await doRefresh($('symbols').value.trim(),scopes,force,button)}catch(error){if(!requestCancelled(error))toast(error.message,true)}}
+async function refreshOne(symbol,scope,button){try{return await doRefresh(symbol,[scope],true,button)}catch(error){if(!requestCancelled(error))toast(error.message,true)}}
+window.addEventListener('DOMContentLoaded',()=>diagnose(document.querySelector('.btn.primary')).catch(error=>{if(!requestCancelled(error))toast(error.message,true)}));
 </script>
 </body></html>"""
