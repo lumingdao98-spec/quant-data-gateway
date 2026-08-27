@@ -28,6 +28,7 @@ SECTION_ONLY_TITLES = {
     "千股千评", "资金流向", "大单统计", "大宗交易", "融资融券", "收入构成", "公司运作",
     "首页概览", "概念题材", "核心题材", "产品业务", "控股参股", "投资评级", "评级统计",
     "个股点评", "机构预测", "估值分析", "盘口数据", "阶段排行", "技术分析",
+    "期货热点追踪", "热点追踪", "市场热点追踪", "快讯直播",
 }
 MENU_WORDS = SECTION_ONLY_TITLES | {"首页", "概览", "行情", "资讯", "股吧", "数据", "交易", "登录", "注册", "自选股", "更多"}
 RAW_HTML_FRAGMENT_RE = re.compile(r"(?is)(href=|src=|class=|style=|rel=|target=|stat=|menu\s*:|padding-left|layui-|<a\b|</a>|<div|</div>|javascript:|\.phtml|/news/|/finance/|stockid/|stockpage)")
@@ -62,6 +63,42 @@ EVENT_TYPE_RULES: list[tuple[str, tuple[str, ...]]] = [
     ("derivatives_settlement", ("股指期货交割", "股指期权交割", "交割日", "最后交易日", "合约到期")),
     ("market_macro", ("降息", "加息", "降准", "美债", "原油", "黄金", "汇率", "关税", "出口管制")),
 ]
+
+
+def current_scoring_window_days(
+    source_type: str = "",
+    event_type: str = "",
+    risk_tag: str = "",
+    sentiment_score: float | int | None = None,
+) -> int:
+    """Return the maximum age for evidence that may affect the current score.
+
+    Historical evidence remains queryable. This window only controls whether a
+    dated event can alter today's score or automatic-trading risk state.
+    """
+    source = str(source_type or "news").strip().lower()
+    event = str(event_type or "general_news").strip().lower()
+    risk = str(risk_tag or "").strip()
+    try:
+        negative = sentiment_score is not None and float(sentiment_score) <= 45
+    except (TypeError, ValueError):
+        negative = False
+
+    if source in {"macro", "global"} or event in {"market_macro", "derivatives_settlement"}:
+        return 7
+    if event == "financial_report":
+        return 120
+    if event == "regulatory" or risk or (source == "announcement" and negative):
+        return 90
+    if source == "announcement":
+        if event in {"contract_order", "investment_project", "holder_change", "dividend"}:
+            return 60
+        return 45
+    if source == "policy":
+        return 45
+    if source == "research" or event == "research_report":
+        return 30
+    return 21
 
 SOURCE_REAL_TERMS = ("公告", "资讯", "快讯", "财经", "财联社", "金十", "华尔街见闻", "东方财富", "新浪", "同花顺", "巨潮", "交易所", "股吧", "雪球")
 RELATION_TERMS = (

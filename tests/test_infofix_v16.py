@@ -18,6 +18,21 @@ def test_v16_rejects_boilerplate_titles_and_html_fragments():
         assert not ok, (title, reason)
 
 
+def test_v328_rejects_stream_section_headers_as_news():
+    svc = NewsAnalysisService()
+    ok, reason = svc.valid_news_item(
+        "期货热点追踪",
+        "期货热点追踪",
+        source="金十数据7x24",
+        url="https://flash.jin10.com/detail/section-header",
+        source_type="macro",
+        allow_macro=True,
+    )
+
+    assert ok is False
+    assert reason == "boilerplate_or_invalid_title"
+
+
 def test_v16_distinguishes_publish_event_and_crawl_time():
     svc = NewsAnalysisService()
     item = svc._score_item(
@@ -98,6 +113,14 @@ def test_v16_snapshot_id_helper_contract():
     sid = _make_snapshot_id("688599", 180)
     assert sid.startswith("snap-")
     assert "688599" in sid and sid.endswith("180")
+
+
+def test_v328_info_page_defaults_to_compact_evidence_pagination():
+    from quant_data.info_ui import build_info_ui
+
+    html = build_info_ui()
+    assert 'id="pageSize" type="number" value="15"' in html
+    assert "Number($('pageSize').value)||15" in html
 
 
 def test_v16_1_rejects_stockpage_menu_and_table_fragments():

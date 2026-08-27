@@ -127,7 +127,8 @@ def test_duplicate_event_keeps_sources_but_scores_once():
     assert set(deduped[0].duplicate_sources or []) == {"巨潮资讯公告", "新浪财经"}
     assert len(deduped[0].duplicate_source_refs or []) == 2
     assert aggregate["data_quality"]["merged_duplicate_count"] == 1
-    assert aggregate["data_quality"]["event_core_count"] == 1
+    assert aggregate["data_quality"]["event_core_count"] == 0
+    assert aggregate["data_quality"]["upcoming_observation_count"] == 1
 
 
 def test_similar_progress_announcements_on_different_dates_are_not_duplicates():

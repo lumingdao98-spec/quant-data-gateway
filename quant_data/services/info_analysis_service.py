@@ -65,6 +65,13 @@ class InfoAnalysisService:
             force=(deep_refresh and allow_network),
             local_only=(mode != "deep" or not allow_network),
         )
+        profile = self.company_profile_service.merge_market_context(
+            profile,
+            symbol,
+            name=qname,
+            industry=str(getattr(quote, "industry", "") or ""),
+            source=str(getattr(quote, "source", "quote_snapshot") or "quote_snapshot"),
+        )
         # A stock refresh must not synchronously fan out to every macro source.
         # Normal mode reuses the short global cache; only an explicit deep
         # refresh asks the global stream to go back to the network.
@@ -85,7 +92,13 @@ class InfoAnalysisService:
         policy["policy_clue_count"] = int(policy.get("policy_clue_count") or 0) + int(global_mapping.get("related_count") or 0)
         related_mapped = [x for x in policy["industry_mapped_items"] if x.get("score_included")]
         if related_mapped:
-            adjust = sum(1.5 if x.get("impact_direction") == "positive" else -1.8 if x.get("impact_direction") == "negative" else 0.4 for x in related_mapped[:10])
+            adjust = 0.0
+            for item in related_mapped[:10]:
+                direction = str(item.get("impact_direction") or "neutral")
+                severity = str(item.get("event_severity") or "medium")
+                reliability = max(0.0, min(1.0, safe_float(item.get("score_reliability"), 0.35)))
+                magnitude = 2.4 if severity == "high" else 1.5 if severity == "medium" else 0.8
+                adjust += (magnitude if direction == "positive" else -magnitude if direction == "negative" else 0.0) * reliability
             policy["policy_score"] = round(max(0, min(100, safe_float(policy.get("policy_score"), 50) + adjust)), 2)
         evidence_counts = self._evidence_counts(news, finance, policy)
         score_detail = self._info_score_detail(news, finance, policy)
@@ -120,9 +133,13 @@ class InfoAnalysisService:
             "message_framework": self._message_framework(),
             "source_policy": self.news_service.message_source_policy() if hasattr(self.news_service, "message_source_policy") else {},
             "company_profile": profile,
+            "company_exposure": global_mapping.get("company_exposure", {}),
+            "industry_coverage": (global_mapping.get("company_exposure") or {}).get("coverage_catalog", {}),
             "global_news_used": {
                 "count": len((global_news or {}).get("items", [])),
                 "related_count": int(global_mapping.get("related_count") or 0),
+                "direct_related_count": int(global_mapping.get("direct_related_count") or 0),
+                "early_warning_count": int(global_mapping.get("early_warning_count") or 0),
                 "updated_at": (global_news or {}).get("updated_at"),
                 "sources_used": (global_news or {}).get("sources_used", []),
                 "domestic_count": (global_news or {}).get("domestic_count", 0),
@@ -131,7 +148,7 @@ class InfoAnalysisService:
                 "mapped_industries": global_mapping.get("mapped_industries", []),
                 "mapped_concepts": global_mapping.get("mapped_concepts", []),
                 "mapped_symbols": global_mapping.get("mapped_symbols", []),
-                "note": "全球要闻自动短缓存刷新；只有与公司画像/行业暴露匹配时才进入信息面映射分。",
+                "note": "全球要闻自动短缓存刷新；直接相关但尚未确认的快讯只显示预警，只有官方原文或多源交叉确认后才进入个股信息分。",
             },
             "global_items": (global_news or {}).get("items", []),
             "industry_mapped_items": global_mapping.get("industry_mapped_items", []),
@@ -258,6 +275,11 @@ class InfoAnalysisService:
             "total_market_cap": cap or None,
             "amount": amount or None,
             "turnover": turnover,
+            "industry": qd.get("industry") or None,
+            "quote_source": qd.get("source") or None,
+            "metric_sources": qd.get("metric_sources") or {},
+            "metric_missing_reasons": qd.get("metric_missing_reasons") or [],
+            "quote_timestamp": qd.get("ts") or None,
             "tags": tags,
             "risk_flags": risks,
             "akshare": ak,

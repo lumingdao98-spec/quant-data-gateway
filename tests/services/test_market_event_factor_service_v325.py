@@ -2,6 +2,7 @@ from datetime import datetime
 
 from quant_data.data import EarningsSnapshot, IpoSnapshot, PITStore
 from quant_data.services.market_event_factor_service import MarketEventFactorService
+from quant_data.services.policy_event_intelligence import PolicyEventIntelligence
 
 
 NOW = datetime(2026, 7, 20, 12, 0, 0)
@@ -133,6 +134,60 @@ def test_yoy_growth_text_is_not_mistaken_for_earnings_surprise():
     )
 
     assert "earnings_surprise" not in {row["factor_key"] for row in context["factors"]}
+
+
+def test_unconfirmed_fast_event_is_a_warning_but_cannot_change_scores():
+    event = PolicyEventIntelligence().enrich_items(
+        [
+            {
+                "title": "消息人士称美国正考虑限制中国半导体设备进口",
+                "source": "金十数据7x24",
+                "source_ref": "https://flash.jin10.com/detail/test-warning",
+                "published_at": "2026-07-20T10:00:00",
+                "content_quality_status": "structured_excerpt",
+            }
+        ]
+    )[0]
+
+    context = MarketEventFactorService().build_context(
+        symbol="688001",
+        name="半导体设备公司",
+        profile={"industry": "半导体设备", "main_business": "半导体设备"},
+        global_items=[event],
+        now=NOW,
+    )
+
+    assert context["market_adjustment"] == 0
+    assert context["information_adjustment"] == 0
+    assert context["excluded_unconfirmed"] == 1
+    assert context["early_warnings"][0]["is_related_to_symbol"] is True
+
+
+def test_official_direct_negative_event_can_adjust_information_score():
+    event = PolicyEventIntelligence().enrich_items(
+        [
+            {
+                "title": "美国正式宣布限制外国半导体设备进口",
+                "summary": "官方命令对外国半导体设备实施进口限制。",
+                "source": "美国联邦公报",
+                "source_ref": "https://www.federalregister.gov/documents/test-semiconductor-rule",
+                "published_at": "2026-07-20T10:00:00",
+                "content_quality_status": "structured_excerpt",
+            }
+        ]
+    )[0]
+
+    context = MarketEventFactorService().build_context(
+        symbol="688001",
+        name="半导体设备公司",
+        profile={"industry": "半导体设备", "main_business": "半导体设备"},
+        global_items=[event],
+        now=NOW,
+    )
+
+    assert context["information_adjustment"] < 0
+    assert context["excluded_unconfirmed"] == 0
+    assert "mapped_industry_information" in {row["factor_key"] for row in context["factors"]}
 
 
 def test_competitor_listing_pressure_requires_explicit_symbol_mapping():

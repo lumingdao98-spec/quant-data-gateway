@@ -65,7 +65,8 @@ class MarketCache:
                     order_diff REAL,
                     market TEXT,
                     asset_type TEXT,
-                    source TEXT
+                    source TEXT,
+                    industry TEXT
                 )
                 """
             )
@@ -77,6 +78,7 @@ class MarketCache:
                 "float_market_cap": "REAL",
                 "order_ratio": "REAL",
                 "order_diff": "REAL",
+                "industry": "TEXT",
             }
             for col, typ in extra_cols.items():
                 if col not in existing_cols:
@@ -144,10 +146,10 @@ class MarketCache:
                 """
                 INSERT OR REPLACE INTO quotes (
                     symbol,name,ts,last,pre_close,open,high,low,volume,amount,change,change_pct,
-                    turnover,amplitude,pe_dynamic,pb,volume_ratio,total_market_cap,float_market_cap,order_ratio,order_diff,market,asset_type,source
+                    turnover,amplitude,pe_dynamic,pb,volume_ratio,total_market_cap,float_market_cap,order_ratio,order_diff,market,asset_type,source,industry
                 ) VALUES (
                     :symbol,:name,:ts,:last,:pre_close,:open,:high,:low,:volume,:amount,:change,:change_pct,
-                    :turnover,:amplitude,:pe_dynamic,:pb,:volume_ratio,:total_market_cap,:float_market_cap,:order_ratio,:order_diff,:market,:asset_type,:source
+                    :turnover,:amplitude,:pe_dynamic,:pb,:volume_ratio,:total_market_cap,:float_market_cap,:order_ratio,:order_diff,:market,:asset_type,:source,:industry
                 )
                 """,
                 rows,
@@ -188,6 +190,7 @@ class MarketCache:
             market=row["market"] or "CN",
             asset_type=AssetType(row["asset_type"] or "stock"),
             source=row["source"] or "cache",
+            industry=row["industry"] if "industry" in row.keys() else None,
         )
 
     def list_quotes(self, limit: int = 300, max_age_seconds: float | None = None) -> list[Quote]:

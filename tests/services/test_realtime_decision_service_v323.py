@@ -283,6 +283,69 @@ def test_realtime_information_quality_shrinks_title_only_evidence():
     assert full_result["quality_coverage"] == 1.0
 
 
+def test_global_draft_warning_is_visible_but_cannot_veto_realtime_buy():
+    now = datetime.now()
+    result = _service(
+        info={
+            "industry_mapped_items": [
+                {
+                    "title": "消息人士称美国拟限制中国逆变器",
+                    "source": "路透 Reuters",
+                    "source_type": "macro",
+                    "published_at": (now - timedelta(hours=2)).isoformat(),
+                    "sentiment_score": 25,
+                    "credibility_score": 92,
+                    "impact_score": 90,
+                    "content_quality_status": "structured_excerpt",
+                    "is_related_to_symbol": True,
+                    "score_included": False,
+                    "confirmation_level": "multi_source_confirmed",
+                    "event_stage": "draft",
+                    "mapped_trade_gate": "manual_confirmation",
+                }
+            ]
+        }
+    ).hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60},
+    )["recent_information"]
+
+    assert result["negative_veto"] is False
+    assert result["early_warning_count"] == 1
+    assert result["scoreable_count"] == 0
+
+
+def test_official_direct_global_negative_can_veto_realtime_buy():
+    now = datetime.now()
+    result = _service(
+        info={
+            "industry_mapped_items": [
+                {
+                    "title": "官方发布电网设备进口限制",
+                    "source": "美国白宫总统行动",
+                    "source_type": "macro",
+                    "published_at": (now - timedelta(hours=2)).isoformat(),
+                    "sentiment_score": 22,
+                    "credibility_score": 98,
+                    "impact_score": 95,
+                    "content_quality_status": "structured_excerpt",
+                    "is_related_to_symbol": True,
+                    "score_included": True,
+                    "confirmation_level": "official_confirmed",
+                    "event_stage": "official",
+                    "mapped_trade_gate": "block_new_position",
+                }
+            ]
+        }
+    ).hydrate(
+        {"symbol": "600438", "quote": _quote().to_dict()},
+        profile={"final_score": 60},
+    )["recent_information"]
+
+    assert result["negative_veto"] is True
+    assert result["negative_veto_evidence"][0]["mapped_trade_gate"] == "block_new_position"
+
+
 def test_future_outcome_and_boilerplate_do_not_enter_current_information_score():
     now = datetime.now()
     result = _service(

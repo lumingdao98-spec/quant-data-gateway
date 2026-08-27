@@ -9,6 +9,7 @@
 - 股票筛选：股票池、策略组合、四面评分、市场环境、风险标签和缓存恢复；
 - 行情详情：分时、日/周/月 K 线、成交量、MACD、KDJ、五档盘口、近 7 日异常和订单成交标注；
 - 信息面：官方公告、财经新闻、全球事件、未来日程、去重、来源链接、影响股票/行业/概念和传导链；
+- 多角色证据复核：评分技术、基本面、信息面、资金主线和大盘环境分别出具证据/反证/缺失项，再由独立风险委员会和组合裁决汇总；
 - 资金与市场：公开资金流、分时量价方向代理、板块主线、市场宽度、国内指数和可映射的海外行业背景；
 - 历史回测：point-in-time 数据、组合策略、资金管理、止损止盈、交易成本、买卖点、买入持有对比和完整流水；
 - 实时模拟：真实行情驱动、会话恢复、交易时段门禁、模拟撮合、持仓复核、账户/订单/成交/标注/审计落库；
@@ -19,14 +20,16 @@
 
 ## 启动
 
-首次使用双击 `install.bat`，之后直接双击 `run_api_8001.bat`。启动脚本会依次寻找项目 `.venv`、Windows Python 3.11、`D:\software\python\python.exe`、其他 `py` 启动器和系统 Python，因此不要求全局存在 `python` 命令。QMT 用户推荐 Python 3.11。
+日常使用只需双击项目根目录的 `QuantDataGateway.exe`。它会使用项目自带的 `.venv`，自动选择空闲端口、启动服务、等待健康检查通过并打开自动交易总控台；重复双击只会打开已运行的总控台，不会重复启动服务。关闭启动器时会一并停止由它启动的后台服务。
+
+首次部署仍需由开发者安装依赖；普通使用不需要系统全局存在 `python` 命令。QMT 用户推荐 Python 3.11。以下命令仅用于开发和维护，不是日常入口：
 
 ```powershell
 py -3 -m pip install -r requirements_full.txt
 py -3 -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 ```
 
-浏览器打开 `http://127.0.0.1:8001/auto-trading`。主页面通过右侧 iframe 打开并释放各模块，原页面和 API 仍可独立使用。
+默认打开 `http://127.0.0.1:8001/auto-trading`。总控台通过右侧完整功能页打开并释放各模块，原页面和 API 仍可独立使用。
 
 ## 页面
 
@@ -58,6 +61,8 @@ py -3 -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 7. 订单、成交、持仓、账户、风控、原始回执和图表标注统一落 SQLite。
 
 缺失或无效维度不会被填成 50 分；可选维度缺失时剩余有效权重重新归一化，必需维度缺失、数据过期或来源不可追溯会阻断自动新增仓位。
+
+总控台的多角色复核借鉴 TradingAgents 的角色分工、正反辩论、独立风控和结果复盘结构，但不把语言模型放进订单执行路径。`GET /api/agent/market-brief` 返回稳定复核编号、五角色观点、支持/反对证据、风险裁决和复盘基准；只有用户主动联网复核时才覆盖写入审计记录。可选外部模型只能解释已有可追溯证据，始终保持 `order_capability=false`。
 
 ## 券商与同花顺
 
@@ -103,6 +108,7 @@ BROKER_PROVIDER=disabled
 ```text
 GET  /api/auto-trading/config
 GET  /api/auto-trading/readiness
+GET  /api/agent/market-brief
 GET  /api/live-broker/setup
 POST /api/live-broker/setup/validate
 GET  /api/score/trend/{symbol}
@@ -131,8 +137,8 @@ POST /api/notifications/mobile/test
 ## 测试
 
 ```powershell
-python_runtime.bat -m compileall -q quant_data
-python_runtime.bat -m pytest -q
+.\.venv\Scripts\python.exe -m compileall -q quant_data
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 测试覆盖数据真实性、新鲜度、评分溯源、自适应策略、仓位、风控、订单生命周期、模拟会话恢复、实盘默认禁用、确认队列、QMT/PTrade import guard、同花顺能力边界、移动提醒、交易记录和主要页面。

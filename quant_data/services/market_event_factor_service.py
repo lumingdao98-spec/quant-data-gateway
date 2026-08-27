@@ -101,6 +101,8 @@ class MarketEventFactorService:
         excluded = 0
         future_excluded = 0
         undated_excluded = 0
+        unconfirmed_excluded = 0
+        early_warnings: list[dict[str, Any]] = []
 
         for raw in items:
             item = dict(raw or {})
@@ -125,6 +127,27 @@ class MarketEventFactorService:
             mapped = self.mapper.map_item(item, symbol, exposure)
             source = str(item.get("source") or item.get("source_name") or "来源未标明")
             source_ref = str(item.get("source_ref") or item.get("source_url") or item.get("url") or "")
+            has_event_schema = "confirmation_level" in item or "event_stage" in item
+            event_specific = bool(item.get("event_type") and item.get("event_type") != "general_information")
+            confirmed = (
+                item.get("confirmation_level") in {"official_confirmed", "multi_source_confirmed"}
+                and item.get("event_stage") not in {"rumor", "draft"}
+            )
+            if has_event_schema and (not event_specific or not confirmed):
+                unconfirmed_excluded += 1
+                if event_specific:
+                    early_warnings.append({
+                        "title": item.get("title") or item.get("summary") or "未命名事件",
+                        "published_at": published.isoformat(timespec="seconds"),
+                        "source": source,
+                        "source_ref": source_ref,
+                        "event_type_cn": item.get("event_type_cn") or "待分类事件",
+                        "event_stage_cn": item.get("event_stage_cn") or "阶段待确认",
+                        "confirmation_level_cn": item.get("confirmation_level_cn") or "证据待确认",
+                        "is_related_to_symbol": bool(mapped.get("is_related_to_symbol")),
+                        "trade_gate_cn": item.get("trade_gate_cn") or "仅预警，需人工核验",
+                    })
+                continue
 
             tech_factor = self._global_technology_factor(text, mapped, published, source, source_ref)
             self._keep_strongest(factors, tech_factor)
@@ -189,6 +212,8 @@ class MarketEventFactorService:
             "excluded_expired": excluded,
             "excluded_future": future_excluded,
             "excluded_undated": undated_excluded,
+            "excluded_unconfirmed": unconfirmed_excluded,
+            "early_warnings": early_warnings[:20],
             "cache_status": cache_status,
             "pit_input_status": pit_input_status,
             "company_exposure": exposure,
@@ -667,8 +692,9 @@ class MarketEventFactorService:
         return rows
 
     def _mapped_industry_factor(self, text: str, mapped: dict[str, Any], published: datetime, source: str, source_ref: str) -> dict[str, Any] | None:
-        positive = any(word in text for word in ("增长", "支持", "中标", "回暖", "增持", "上调", "超预期"))
-        negative = any(word in text for word in ("下滑", "亏损", "处罚", "立案", "制裁", "下调", "低于预期"))
+        event_direction = str(mapped.get("event_direction") or mapped.get("impact_direction") or "")
+        positive = event_direction == "positive" or any(word in text for word in ("增长", "支持", "中标", "回暖", "增持", "上调", "超预期"))
+        negative = event_direction == "negative" or any(word in text for word in ("下滑", "亏损", "处罚", "立案", "制裁", "限制", "禁令", "下调", "低于预期"))
         if not (positive or negative):
             return None
         adjustment = 3.0 if positive and not negative else -4.0 if negative and not positive else 0.0

@@ -36,7 +36,7 @@ class EastmoneyProvider(MarketDataProvider):
     QUOTE_FIELDS = ",".join(
         [
             "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
-            "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f20", "f21", "f23",
+            "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f20", "f21", "f23", "f100",
         ]
     )
 
@@ -74,7 +74,10 @@ class EastmoneyProvider(MarketDataProvider):
         return v / 100.0 if abs(v) > 100 else v
 
     def _supplement_quote_metrics(self, q: Quote) -> Quote:
-        missing = any(getattr(q, f, None) in (None, 0, "") for f in ["pe_dynamic", "pb", "turnover", "total_market_cap", "float_market_cap"])
+        missing = (not q.industry) or any(
+            getattr(q, f, None) in (None, 0, "")
+            for f in ["pe_dynamic", "pb", "turnover", "total_market_cap", "float_market_cap"]
+        )
         if not missing or q.asset_type == AssetType.ETF:
             return q
         try:
@@ -84,7 +87,7 @@ class EastmoneyProvider(MarketDataProvider):
                     "secid": to_eastmoney_secid(q.symbol),
                     "fltt": "2",
                     "invt": "2",
-                    "fields": "f57,f58,f84,f85,f116,f117,f162,f167,f168",
+                    "fields": "f57,f58,f84,f85,f100,f116,f117,f162,f167,f168",
                 },
             )
         except Exception:
@@ -106,6 +109,8 @@ class EastmoneyProvider(MarketDataProvider):
             updates["total_share"] = safe_float(row.get("f84"))
         if q.float_share in (None, 0, "") and safe_float(row.get("f85")):
             updates["float_share"] = safe_float(row.get("f85"))
+        if not q.industry and str(row.get("f100") or "").strip() not in {"", "-", "--"}:
+            updates["industry"] = str(row.get("f100")).strip()
         if not updates:
             return q
         updates["source"] = f"{q.source}+eastmoney_stock_get" if q.source else "eastmoney_stock_get"
@@ -123,7 +128,7 @@ class EastmoneyProvider(MarketDataProvider):
             "invt": "2",
             "fid": "f3",
             "fs": fs,
-            "fields": self.QUOTE_FIELDS + ",f100",
+            "fields": self.QUOTE_FIELDS,
         }
         data = self._get_json(self.CLIST_URL, params=params)
         diff = ((data or {}).get("data") or {}).get("diff") or []
@@ -342,6 +347,7 @@ class EastmoneyProvider(MarketDataProvider):
             market="CN",
             asset_type=asset_type,
             source=self.name,
+            industry=str(row.get("f100") or "").strip() or None,
         )
 
     def search_assets(self, keyword: str, limit: int = 30) -> list[Asset]:

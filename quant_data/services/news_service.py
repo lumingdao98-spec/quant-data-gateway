@@ -5,9 +5,11 @@ import html as html_lib
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -21,6 +23,7 @@ except Exception:  # pragma: no cover
 from quant_data.utils import ThrottledSession, infer_exchange, normalize_symbol, to_eastmoney_secid
 from quant_data.services.news_store_service import NewsStoreService
 from quant_data.services.news_cleaner import (
+    current_scoring_window_days,
     document_id_from_url,
     extract_time_fields,
     is_page_chrome_summary,
@@ -28,6 +31,7 @@ from quant_data.services.news_cleaner import (
     strip_html_boilerplate,
     valid_news_item as _valid_news_item,
 )
+from quant_data.services.policy_event_intelligence import PolicyEventIntelligence
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,8 @@ class NewsAnalysisService:
         "cls.cn": 75,
         "jin10.com": 74,
         "wallstcn.com": 74,
+        "whitehouse.gov": 98,
+        "federalregister.gov": 99,
         "stcn.com": 76,
         "cnstock.com": 74,
         "sina.com.cn": 62,
@@ -149,6 +155,7 @@ class NewsAnalysisService:
 
     def __init__(self, cache_file: str | Path = "data/news_cache.json", cache_ttl_seconds: int = 30 * 60) -> None:
         self.http = ThrottledSession(min_interval=1.0, timeout=10)
+        self.policy_http = ThrottledSession(min_interval=0.0, timeout=4)
         # 新闻搜索页面通常更像浏览器请求，补充可接受的HTML头。
         self.http.session.headers.update({
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,text/plain,*/*;q=0.8",
@@ -158,6 +165,7 @@ class NewsAnalysisService:
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
         self.cache_ttl_seconds = cache_ttl_seconds
         self.store = NewsStoreService()
+        self.event_intelligence = PolicyEventIntelligence()
         self._source_status: list[dict[str, Any]] = []
         self._last_source_status: list[dict[str, Any]] = []
         self._last_source_checked_at: str = ""
@@ -377,7 +385,7 @@ class NewsAnalysisService:
 
 
 
-    def fetch_global_news(self, limit: int = 80, force: bool = False, ttl_seconds: int = 45, budget_seconds: float = 7.0) -> dict[str, Any]:
+    def fetch_global_news(self, limit: int = 80, force: bool = False, ttl_seconds: int = 45, budget_seconds: float = 5.0) -> dict[str, Any]:
         """多源获取全球/国内/商品/政策要闻，并和个股新闻严格分开展示。
 
         V3.15 修复点：
@@ -416,8 +424,66 @@ class NewsAnalysisService:
                 "skipped_reason": "budget_exhausted",
             })
 
+        # Fast alerts come first for latency, then primary policy documents for
+        # confirmation.  Slow broad aggregators can no longer consume the
+        # whole refresh budget before the time-sensitive sources are queried.
+        try:
+            if not can_continue():
+                raise TimeoutError("总刷新时限已到")
+            jin10_rows = self._bounded_value(
+                lambda: self._search_jin10_flash(limit=min(limit, 100)),
+                timeout=min(1.4, budget_left()),
+                label="金十/金十期货快讯",
+            )
+            raw_rows.extend(jin10_rows)
+            status.append({"source": "金十/金十期货快讯", "count": len(jin10_rows), "status": "ok" if jin10_rows else "无公开数据或接口结构变化"})
+        except Exception as exc:
+            status.append({"source": "金十/金十期货快讯", "count": 0, "status": str(exc)[:160]})
+
+        try:
+            if not can_continue():
+                raise TimeoutError("总刷新时限已到")
+            official_rows = self._bounded_value(
+                lambda: self._search_white_house_actions(limit=min(limit, 30)),
+                timeout=min(1.8, budget_left()),
+                label="美国白宫总统行动",
+            )
+            raw_rows.extend(official_rows)
+            status.append({
+                "source": "美国白宫总统行动",
+                "count": len(official_rows),
+                "status": "ok" if official_rows else "公开RSS暂无产业/市场相关条目",
+            })
+        except Exception as exc:
+            status.append({"source": "美国白宫总统行动", "count": 0, "status": str(exc)[:160]})
+
+        try:
+            if not can_continue():
+                raise TimeoutError("总刷新时限已到")
+            federal_rows = self._bounded_value(
+                lambda: self._search_federal_register(limit=min(limit, 50)),
+                timeout=min(1.4, budget_left()),
+                label="美国联邦公报",
+            )
+            raw_rows.extend(federal_rows)
+            status.append({
+                "source": "美国联邦公报",
+                "count": len(federal_rows),
+                "status": "ok" if federal_rows else "官方API暂无产业/市场相关条目",
+            })
+        except Exception as exc:
+            status.append({"source": "美国联邦公报", "count": 0, "status": str(exc)[:160]})
+
         # 东方财富全球财经快讯：优先作为国内可访问的 7x24 要闻源。
         for category, url in self._eastmoney_kuaixun_urls().items():
+            if len(raw_rows) >= max(12, min(24, limit // 3)):
+                status.append({
+                    "source": "东方财富快讯补充源",
+                    "count": 0,
+                    "status": "高优先级快讯与官方源已返回足够候选，本轮跳过慢速补充抓取",
+                    "skipped_reason": "priority_sources_sufficient",
+                })
+                break
             if len(raw_rows) >= limit * 2:
                 break
             if not can_continue():
@@ -434,25 +500,21 @@ class NewsAnalysisService:
             except Exception as exc:
                 status.append({"source": f"东方财富快讯:{category}", "count": 0, "status": str(exc)[:160]})
 
-        # 金十/金十期货：全球7x24、期货宏观、黑色/农副/金属/能化快讯。
-        try:
-            if not can_continue():
-                raise TimeoutError("总刷新时限已到")
-            jin10_rows = self._bounded_value(
-                lambda: self._search_jin10_flash(limit=min(limit, 100)),
-                timeout=min(1.8, budget_left()),
-                label="金十/金十期货快讯",
-            )
-            raw_rows.extend(jin10_rows)
-            status.append({"source": "金十/金十期货快讯", "count": len(jin10_rows), "status": "ok" if jin10_rows else "无公开数据或接口结构变化"})
-        except Exception as exc:
-            status.append({"source": "金十/金十期货快讯", "count": 0, "status": str(exc)[:160]})
-
-        try:
-            import akshare as ak  # type: ignore
-        except Exception as exc:
+        priority_sufficient = len(raw_rows) >= max(12, min(24, limit // 3))
+        if priority_sufficient:
             ak = None  # type: ignore
-            status.append({"source": "akshare", "count": 0, "status": f"不可用：{exc}"[:160]})
+            status.append({
+                "source": "AKShare全球快讯补充源",
+                "count": 0,
+                "status": "高优先级来源候选充足，本轮跳过慢速补充抓取",
+                "skipped_reason": "priority_sources_sufficient",
+            })
+        else:
+            try:
+                import akshare as ak  # type: ignore
+            except Exception as exc:
+                ak = None  # type: ignore
+                status.append({"source": "akshare", "count": 0, "status": f"不可用：{exc}"[:160]})
 
         def records(df: Any) -> list[dict[str, Any]]:
             if df is None:
@@ -493,7 +555,16 @@ class NewsAnalysisService:
             ("华尔街见闻市场", "https://api-one.wallstcn.com/apiv1/content/lives", {"channel": "global", "limit": str(min(limit, 80))}),
             ("财联社电报Web", "https://www.cls.cn/nodeapi/telegraphList", {"app": "CailianpressWeb", "category": "", "lastTime": "", "os": "web", "sv": "8.4.6"}),
         ]
+        supplemental_completed = False
         for source_name, url, params in api_calls:
+            if priority_sufficient and supplemental_completed:
+                status.append({
+                    "source": "华尔街见闻/财联社补充源",
+                    "count": 0,
+                    "status": "已尝试一个独立快讯源；候选充足，本轮不再扩展慢速补充抓取",
+                    "skipped_reason": "priority_sources_sufficient",
+                })
+                break
             if not can_continue():
                 budget_status(source_name)
                 break
@@ -507,6 +578,9 @@ class NewsAnalysisService:
                 rows = self._extract_global_json_rows(data, source_name, limit=min(limit, 100))
                 raw_rows.extend(rows)
                 status.append({"source": source_name, "count": len(rows), "status": "ok" if rows else "无有效JSON条目"})
+                supplemental_completed = bool(rows)
+                if priority_sufficient and rows:
+                    break
             except Exception as exc:
                 status.append({"source": source_name, "count": 0, "status": str(exc)[:160]})
 
@@ -520,6 +594,20 @@ class NewsAnalysisService:
             pub = self._clean_text(str(r.get("发布时间") or r.get("发布日期") or r.get("时间") or r.get("datetime") or r.get("pub_time") or "")) or None
             url = self._clean_text(str(r.get("链接") or r.get("新闻链接") or r.get("url") or ""))
             ok, _reason = self.valid_news_item(title, summary, source=source or "全球要闻", url=url, source_type="macro", allow_macro=True)
+            if not ok and title and url and not self._is_noise_title(title):
+                event_probe = self.event_intelligence.enrich_item({
+                    "title": title,
+                    "summary": summary,
+                    "source": source,
+                    "url": url,
+                    "published_at": pub,
+                    "credibility_score": self._credibility(url, source, "macro"),
+                    "content_quality_status": str(r.get("_content_quality_status") or "title_only"),
+                })
+                ok = bool(
+                    event_probe.get("event_type") != "general_information"
+                    and event_probe.get("source_tier") in {"official_primary", "trusted_media", "fast_alert"}
+                )
             if not ok:
                 continue
             cat_hint = self._clean_text(str(r.get("_category") or ""))
@@ -537,25 +625,57 @@ class NewsAnalysisService:
                 "dedup_reason": "全球/国内要闻按事件标题+时间窗口合并，自动刷新时同事件不重复计分",
                 "event_key": self._event_key(text, meta.get("event_label", "宏观政策"), self._parse_item_date(pub) or self._extract_date_from_text(text) or self._extract_date_from_url(url)),
                 "industry_tags": self._industry_tags(text),
+                "content_loaded": bool(r.get("_content_loaded")),
+                "content_source": str(r.get("_content_source") or url),
+                "content_quality_status": str(r.get("_content_quality_status") or "title_only"),
+                "content_missing_reason": str(r.get("_content_missing_reason") or ""),
             })
             items.append(item)
 
         deduped = self._deduplicate(items)[:limit]
-        aggregate = self._aggregate("", "全球要闻", deduped)
-        domestic_count = sum(1 for x in deduped if (x.message_dimension or "").startswith("国内"))
-        global_count = sum(1 for x in deduped if (x.message_dimension or "") in {"国际消息/全球市场", "海外央行/全球利率", "外汇债券/美元美债"})
-        commodity_count = sum(1 for x in deduped if x.category in {"商品/原材料", "能源/原油", "贵金属/黄金"})
+        enriched_items = self.event_intelligence.enrich_items([item.to_dict() for item in deduped])
+        enriched_items = self.event_intelligence.collapse_event_clusters(enriched_items)[:limit]
+        representative_keys = {
+            (str(item.get("url") or item.get("source_ref") or ""), str(item.get("title") or ""))
+            for item in enriched_items
+        }
+        representative_items = [
+            item for item in deduped
+            if (str(item.url or ""), str(item.title or "")) in representative_keys
+        ]
+        aggregate = self._aggregate("", "全球要闻", representative_items)
+        domestic_count = sum(1 for x in enriched_items if str(x.get("message_dimension") or "").startswith("国内"))
+        global_count = sum(1 for x in enriched_items if x.get("message_dimension") in {"国际消息/全球市场", "海外央行/全球利率", "外汇债券/美元美债"})
+        commodity_count = sum(1 for x in enriched_items if x.get("category") in {"商品/原材料", "能源/原油", "贵金属/黄金"})
         result = {
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "count": len(deduped),
+            "count": len(enriched_items),
+            "pre_cluster_count": len(deduped),
             **aggregate,
-            "items": [x.to_dict() for x in deduped],
+            "items": enriched_items,
             "domestic_count": domestic_count,
             "global_count": global_count,
             "commodity_count": commodity_count,
-            "market_category_counts": self._counts([x.category for x in deduped]),
-            "sources_used": sorted(list({x.source for x in deduped})),
+            "market_category_counts": self._counts([str(x.get("category") or "") for x in enriched_items]),
+            "sources_used": sorted({source for item in enriched_items for source in (item.get("duplicate_sources") or [item.get("source")]) if source}),
             "sources_status": status,
+            "event_radar": {
+                "confirmed_count": sum(
+                    1 for item in enriched_items
+                    if item.get("score_candidate")
+                ),
+                "early_warning_count": sum(
+                    1 for item in enriched_items
+                    if item.get("early_warning_candidate")
+                ),
+                "candidate_block_count": sum(
+                    1 for item in enriched_items if item.get("trade_gate") == "candidate_block"
+                ),
+                "display_only_count": sum(
+                    1 for item in enriched_items if item.get("decision_use") == "display_only"
+                ),
+                "rule": "快讯负责尽早发现；官方原文或两个独立高可信来源负责确认。单一快讯只能预警，不能直接阻断或触发自动交易。",
+            },
             "refresh_elapsed_ms": round((time.monotonic() - started_at) * 1000, 2),
             "refresh_budget_seconds": float(budget_seconds or 0.0),
             "source_policy": self.message_source_policy(),
@@ -611,6 +731,124 @@ class NewsAnalysisService:
             "基金": "https://kuaixun.eastmoney.com/jj.html",
             "股市直播": "https://kuaixun.eastmoney.com/zhibo.html",
         }
+
+    def _search_white_house_actions(self, limit: int = 30) -> list[dict[str, Any]]:
+        """Read industry-relevant presidential actions from the official RSS."""
+        feed_url = "https://www.whitehouse.gov/presidential-actions/feed/"
+        response = self.policy_http.get(
+            feed_url,
+            headers={
+                "Accept": "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.5",
+                "Referer": "https://www.whitehouse.gov/presidential-actions/",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        raw = response.content if getattr(response, "content", None) else response.text.encode("utf-8", "ignore")
+        root = ET.fromstring(raw)
+        relevant_terms = (
+            "bulk-power", "electric grid", "inverter", "battery energy storage",
+            "semiconductor", "artificial intelligence", "critical mineral",
+            "export control", "sanction", "tariff", "trade", "technology",
+            "energy", "financial market", "national emergency", "china",
+        )
+        rows: list[dict[str, Any]] = []
+        for node in root.findall(".//item"):
+            original_title = self._clean_text(node.findtext("title") or "")
+            link = self._clean_text(node.findtext("link") or "")
+            description_html = html_lib.unescape(node.findtext("description") or "")
+            description = self._clean_text(re.sub(r"<[^>]+>", " ", description_html))
+            haystack = f"{original_title} {description}".lower()
+            if not original_title or not any(term in haystack for term in relevant_terms):
+                continue
+            published_raw = self._clean_text(node.findtext("pubDate") or "")
+            published = published_raw
+            if published_raw:
+                try:
+                    published = parsedate_to_datetime(published_raw).isoformat(timespec="seconds")
+                except Exception:
+                    pass
+
+            title = original_title
+            summary = description or original_title
+            if "declaring a national emergency to secure the united states bulk-power system" in original_title.lower():
+                title = "美国宣布国家紧急状态以保护大容量电力系统"
+                summary = (
+                    "白宫官方文件将公用事业级及其他并网逆变器、电池储能系统等列入大容量电力系统设备范围；"
+                    "对涉及受覆盖外国实体且被认定构成安全风险的采购、进口、转让或安装可实施限制。"
+                    "是否影响具体企业和订单仍取决于后续认定、许可及实施规则，并非对全部外国设备的一概禁令。"
+                    f" 原文标题：{original_title}"
+                )
+            elif "adjusting imports of polysilicon" in original_title.lower():
+                title = "美国调整多晶硅及其衍生品进口措施"
+                summary = f"白宫发布多晶硅及其衍生品进口调整文件；措施范围和生效条件以官方原文为准。原文标题：{original_title}"
+            else:
+                title = f"美国白宫政策文件：{original_title}"
+                summary = f"官方英文政策摘要：{description or original_title}"
+            rows.append({
+                "标题": title,
+                "内容": summary,
+                "发布时间": published,
+                "链接": link,
+                "_source_name": "美国白宫总统行动",
+                "_category": "美国政策/产业安全",
+                "_official_title": original_title,
+                "_source_api": feed_url,
+                "_source_page": "https://www.whitehouse.gov/presidential-actions/",
+                "_content_loaded": True,
+                "_content_source": link or feed_url,
+                "_content_quality_status": "structured_excerpt",
+            })
+            if len(rows) >= max(1, int(limit or 30)):
+                break
+        return rows
+
+    def _search_federal_register(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Read recent market-relevant rules from the official public API."""
+        api_url = "https://www.federalregister.gov/api/v1/documents.json"
+        response = self.policy_http.get(
+            api_url,
+            params={"per_page": str(max(20, min(int(limit or 50), 100))), "order": "newest"},
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+        )
+        payload = response.json()
+        rows: list[dict[str, Any]] = []
+        for raw in payload.get("results") or []:
+            if not isinstance(raw, dict):
+                continue
+            title = self._clean_text(raw.get("title") or "")
+            abstract = self._clean_text(raw.get("abstract") or "")
+            agency_names = "、".join(
+                self._clean_text(agency.get("name") or agency.get("raw_name") or "")
+                for agency in (raw.get("agencies") or [])
+                if isinstance(agency, dict)
+            )
+            probe = self.event_intelligence.enrich_item({
+                "title": title,
+                "summary": abstract,
+                "source": "美国联邦公报",
+                "url": raw.get("html_url") or "",
+                "published_at": raw.get("publication_date") or "",
+                "credibility_score": 99,
+                "content_quality_status": "structured_excerpt" if abstract else "title_only",
+            })
+            if probe.get("event_type") == "general_information" and not probe.get("affected_industries_cn"):
+                continue
+            summary = abstract or f"美国联邦公报发布《{title}》；文件类型：{raw.get('type') or '官方文件'}；发布机构：{agency_names or '未列明'}。具体范围以官方原文为准。"
+            rows.append({
+                "标题": f"美国联邦公报：{title}",
+                "内容": summary,
+                "发布时间": raw.get("publication_date") or "",
+                "链接": raw.get("html_url") or "",
+                "_source_name": "美国联邦公报",
+                "_category": "美国政策/监管规则",
+                "_document_number": raw.get("document_number") or "",
+                "_source_api": api_url,
+                "_source_page": raw.get("html_url") or api_url,
+                "_content_loaded": bool(abstract),
+                "_content_source": raw.get("html_url") or api_url,
+                "_content_quality_status": "structured_excerpt" if abstract else "title_only",
+            })
+        return rows
 
     def _search_eastmoney_kuaixun(self, url: str, category: str, limit: int = 80) -> list[dict[str, Any]]:
         """东方财富 7x24 快讯页面抽取。失败时返回空，不伪造数据。"""
@@ -766,7 +1004,12 @@ class NewsAnalysisService:
                 break
             try:
                 resp = self.http.get(url, params=params, headers=headers)
-                data = self._decode_jsonish(resp.text)
+                response_text = (
+                    resp.content.decode("utf-8", "replace")
+                    if getattr(resp, "content", None)
+                    else resp.text
+                )
+                data = self._decode_jsonish(response_text)
                 extracted = self._extract_jin10_flash_rows(data, src, limit=limit-len(rows)) if data is not None else []
                 for r in extracted:
                     r["_source_name"] = src
@@ -775,11 +1018,16 @@ class NewsAnalysisService:
                     key = re.sub(r"\W+", "", str(r.get("标题") or r.get("内容") or ""))[:120]
                     if key and not any(re.sub(r"\W+", "", str(x.get("标题") or x.get("内容") or ""))[:120] == key for x in rows):
                         rows.append(r)
+                # The endpoint already returns a latest-page batch. Continuing
+                # through near-identical channel variants adds seconds but
+                # mostly duplicates the same events.
+                if rows:
+                    break
             except Exception:
                 continue
         # HTML 摘要兜底：xnews/jin10 与 qihuo 首页常能返回最新标题片段。
         html_candidates = [("金十市场参考", "https://xnews.jin10.com/"), ("金十期货", "https://qihuo.jin10.com/")]
-        for src, url in html_candidates:
+        for src, url in (html_candidates if not rows else []):
             if len(rows) >= limit:
                 break
             try:
@@ -832,8 +1080,20 @@ class NewsAnalysisService:
             pub = str(item.get("time") or payload.get("time") or item.get("created_at") or "")
             real_source = str(payload.get("source") or source_name or "金十快讯").strip() or source_name
             ok, _reason = self.valid_news_item(title, summary, source=real_source, url=source_link, source_type="macro", allow_macro=True)
-            if not ok and ("金十" not in real_source or len(title) < 8):
-                continue
+            if not ok:
+                event_probe = self.event_intelligence.enrich_item({
+                    "title": title,
+                    "summary": summary,
+                    "source": real_source or source_name,
+                    "url": source_link,
+                    "published_at": pub,
+                    "content_quality_status": "structured_excerpt",
+                })
+                if (
+                    event_probe.get("event_type") == "general_information"
+                    or event_probe.get("source_tier") not in {"official_primary", "trusted_media", "fast_alert"}
+                ) and ("金十" not in real_source or len(title) < 8):
+                    continue
             key = re.sub(r"\W+", "", title + summary)[:160]
             if key in seen:
                 continue
@@ -848,6 +1108,9 @@ class NewsAnalysisService:
                     "_source_channel": source_name,
                     "_source_item_id": source_item_id,
                     "_source_page": "https://qihuo.jin10.com/" if "期货" in source_name else "https://www.jin10.com/",
+                    "_content_loaded": True,
+                    "_content_source": source_link or "https://www.jin10.com/",
+                    "_content_quality_status": "structured_excerpt",
                 }
             )
         return rows[:limit]
@@ -1891,7 +2154,8 @@ class NewsAnalysisService:
             and x.content_quality_status != "boilerplate_rejected"
         ]
         core_items = [x for x in eligible_core_items if self._is_current_scoring_item(x)]
-        historical_excluded_count = len(eligible_core_items) - len(core_items)
+        upcoming_core_items = [x for x in eligible_core_items if self._is_upcoming_observation_item(x)]
+        historical_excluded_count = max(0, len(eligible_core_items) - len(core_items) - len(upcoming_core_items))
         # 事件级聚合：同一财报亏损、同一监管事项、多源转载只计一次主权重。
         event_best: dict[str, NewsItem] = {}
         event_counts: dict[str, int] = {}
@@ -1902,6 +2166,10 @@ class NewsAnalysisService:
             if prev is None or self._item_priority(x) > self._item_priority(prev):
                 event_best[key] = x
         unique_core = list(event_best.values())
+        upcoming_event_count = len({
+            x.event_key or x.duplicate_group or self._fingerprint(x.title)
+            for x in upcoming_core_items
+        })
         def w(x: NewsItem) -> float:
             content_factor = {
                 "full_text": 1.0,
@@ -1940,6 +2208,8 @@ class NewsAnalysisService:
         risk_flags = []
         if not unique_core:
             risk_flags.append("近期计分窗口内无可核验信息，当前信息分保持中性")
+        if upcoming_event_count:
+            risk_flags.append(f"未来观察事件 {upcoming_event_count} 组：提高监控频率，不直接加减当前信息分")
         if quality_excluded_count:
             risk_flags.append(f"网页导航/免责声明正文 {quality_excluded_count} 条已排除，等待重新抓取")
         if weighted_neg >= max(1.3, weighted_pos + 0.6):
@@ -1974,7 +2244,7 @@ class NewsAnalysisService:
         ][:12]
         event_family_counts = self._counts([x.event_label for x in unique_core])
         summary = (
-            f"中文信息 {len(items)} 条，近期事件级计分 {len(unique_core)} 组（社区舆情 {forum_count} 条、网页壳 {quality_excluded_count} 条不进核心计分，过期/日期缺失 {historical_excluded_count} 条仅供查阅）："
+            f"中文信息 {len(items)} 条，近期事件级计分 {len(unique_core)} 组（未来观察 {upcoming_event_count} 组、社区舆情 {forum_count} 条、网页壳 {quality_excluded_count} 条不进核心计分，过期/日期缺失 {historical_excluded_count} 条仅供查阅）："
             f"正面 {pos}组/权重{weighted_pos:.1f}，负面 {neg}组/权重{weighted_neg:.1f}，中性 {neu}组/权重{weighted_neu:.1f}；"
             f"近90天 {recent90_count} 条，官方/高可信 {official_count} 条，平均可信度 {avg_cred:.1f}，疑似噪声 {avg_fake:.1f}，未知日期 {date_unknown_count} 条。"
         )
@@ -2005,7 +2275,7 @@ class NewsAnalysisService:
             "summary": summary,
             "event_family_counts": event_family_counts,
             "duplicate_groups": duplicate_groups,
-            "data_quality": {"date_unknown_count": date_unknown_count, "official_count": official_count, "official_negative_count": official_neg, "item_count": len(items), "core_item_count": len(core_items), "event_core_count": len(unique_core), "current_scoring_count": len(unique_core), "historical_excluded_count": historical_excluded_count, "quality_excluded_count": quality_excluded_count, "forum_count": forum_count, "duplicate_group_count": len(duplicate_groups), "merged_duplicate_count": merged_duplicate_count, "verified_full_text_count": verified_full_text_count, "structured_excerpt_count": structured_excerpt_count, "title_only_count": title_only_count, "boilerplate_rejected_count": boilerplate_rejected_count, "search_engine_evidence": 0},
+            "data_quality": {"date_unknown_count": date_unknown_count, "official_count": official_count, "official_negative_count": official_neg, "item_count": len(items), "core_item_count": len(core_items), "event_core_count": len(unique_core), "current_scoring_count": len(unique_core), "upcoming_observation_count": upcoming_event_count, "historical_excluded_count": historical_excluded_count, "quality_excluded_count": quality_excluded_count, "forum_count": forum_count, "duplicate_group_count": len(duplicate_groups), "merged_duplicate_count": merged_duplicate_count, "verified_full_text_count": verified_full_text_count, "structured_excerpt_count": structured_excerpt_count, "title_only_count": title_only_count, "boilerplate_rejected_count": boilerplate_rejected_count, "search_engine_evidence": 0},
             "credibility_method": "可信度为规则化来源权重：交易所/巨潮/公司公告最高，权威财经媒体较高，搜索聚合与社区较低；社区帖不作为核心利多利空证据。",
             "scoring_note": "V3.15/V16.2采用源头候选准入+详情正文准入+深度清洗+事件簇去重+实时全球要闻行业映射+时效权重：官方公告/交易所/巨潮为核心事实源，权威快讯进入宏观/行业映射，社区只作舆情，搜索引擎关键词页不参与评分；同一亏损/问询/减持/订单事件多源转载只计一次主权重。",
         }
@@ -2128,19 +2398,36 @@ class NewsAnalysisService:
         dt = self._parse_item_date(item.published_at_norm or item.published_at or item.date_display)
         if not dt:
             return False
-        age_days = (datetime.now() - dt).days
+        now = datetime.now()
+        age_days = (now - dt).days
         if age_days < -1:
             return False
-        source_type = str(item.source_type or "news").lower()
-        if source_type == "macro":
-            max_days = 14
-        elif source_type == "announcement":
-            max_days = 180
-        elif source_type in {"policy", "research"}:
-            max_days = 90
-        else:
-            max_days = 45
+        event_time = self._parse_item_date(item.event_time)
+        if event_time and event_time > now:
+            return False
+        max_days = current_scoring_window_days(
+            item.source_type,
+            item.event_type,
+            item.risk_tag,
+            item.sentiment_score,
+        )
         return age_days <= max_days
+
+    def _is_upcoming_observation_item(self, item: NewsItem) -> bool:
+        """Keep announced future events visible without treating outcomes as known."""
+        now = datetime.now()
+        published = self._parse_item_date(item.published_at_norm or item.published_at or item.date_display)
+        event_time = self._parse_item_date(item.event_time)
+        if not published or not event_time or event_time <= now:
+            return False
+        age_days = (now - published).days
+        max_days = current_scoring_window_days(
+            item.source_type,
+            item.event_type,
+            item.risk_tag,
+            item.sentiment_score,
+        )
+        return -1 <= age_days <= max_days
 
     def _rule_sentiment(self, text: str, source_type: str, event_meta: dict[str, str]) -> tuple[float, list[str]]:
         t = text or ""

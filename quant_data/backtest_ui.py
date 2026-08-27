@@ -19,6 +19,8 @@ def build_backtest_ui() -> str:
 <style>
 .auto-config-box{margin-top:10px;background:#0d1428;border:1px solid #26364f;border-radius:12px;padding:10px}.auto-config-box .head{display:flex;align-items:center;justify-content:space-between;gap:8px}.auto-config-box .mini-line{font-size:12px;color:#9fb4d4;line-height:1.5;margin-top:6px;overflow-wrap:anywhere}.auto-catalog{display:grid;grid-template-columns:1fr;gap:6px;max-height:146px;overflow:auto;margin-top:8px;padding-right:2px}.auto-catalog label{display:flex;gap:8px;align-items:flex-start;background:#121c31;border:1px solid #26364f;border-radius:10px;padding:7px;font-size:12px;line-height:1.35}.auto-catalog input{width:auto;margin-top:2px}.auto-catalog b{color:#bfdbfe}.auto-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .marker-controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.marker-controls button{padding:5px 8px;border-radius:8px;font-size:12px;background:#253149}.marker-controls button.active{background:#1d4ed8}
+.action-toast{position:fixed;right:22px;bottom:104px;z-index:80;max-width:min(420px,calc(100vw - 44px));padding:11px 14px;border:1px solid #166534;border-radius:10px;background:#10233a;color:#bbf7d0;box-shadow:0 18px 55px rgba(0,0,0,.45);opacity:0;transform:translateY(10px);pointer-events:none;transition:.18s}.action-toast.show{opacity:1;transform:none}.action-toast.bad{border-color:#991b1b;color:#fecaca}
+.work{grid-template-columns:minmax(0,1fr) minmax(300px,380px);min-width:0}
 </style>
 </head>
 <body>
@@ -136,8 +138,10 @@ def build_backtest_ui() -> str:
     </div>
   </div>
 </div>
+<div id="actionToast" class="action-toast" role="status" aria-live="polite"></div>
 <script>
 const $=id=>document.getElementById(id);
+let actionToastTimer=null;function showActionToast(message,bad=false){const box=$('actionToast');if(!box)return;box.textContent=String(message||'操作完成');box.className='action-toast show'+(bad?' bad':'');clearTimeout(actionToastTimer);actionToastTimer=setTimeout(()=>box.className='action-toast',3200)}
 const esc=s=>String(s??'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
 const money=n=>Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2});
 const pct=n=>(Number(n||0)).toFixed(2)+'%';
@@ -228,7 +232,7 @@ function params(){
   p.set('market_weight',$('marketWeight')?.value||'0.12');
   return p
 }
-async function runBacktest(useAutoConfig=false){const btn=$('runBtn');btn.disabled=true;btn.textContent='运行中...';try{log(useAutoConfig?'开始回测（使用总控台自动交易配置）':'开始回测');const p=params();if(useAutoConfig)p.set('use_auto_config','true');const resp=await fetch('/api/backtest/run?'+p.toString(),{cache:'no-store'});const js=await resp.json();if(!resp.ok||!js.ok)throw new Error(js.message||('HTTP '+resp.status));render(js.data);log('完成：'+js.data.symbol+' '+js.data.strategy_name+(js.data.auto_trading_config_applied?' · 已接入自动交易配置':''))}catch(e){log('ERROR '+e);$('assumptions').innerHTML='<div class="warn">回测失败：'+esc(e)+'</div>'}finally{btn.disabled=false;btn.textContent='运行回测'}}
+async function runBacktest(useAutoConfig=false){const btn=$('runBtn');btn.disabled=true;btn.textContent='运行中...';showActionToast('回测任务已提交，正在读取历史K线并计算交易流水');try{log(useAutoConfig?'开始回测（使用总控台自动交易配置）':'开始回测');const p=params();if(useAutoConfig)p.set('use_auto_config','true');const resp=await fetch('/api/backtest/run?'+p.toString(),{cache:'no-store'});const js=await resp.json();if(!resp.ok||!js.ok)throw new Error(js.message||('HTTP '+resp.status));render(js.data);log('完成：'+js.data.symbol+' '+js.data.strategy_name+(js.data.auto_trading_config_applied?' · 已接入自动交易配置':''));showActionToast(`回测完成：${js.data.symbol}，${js.data.trade_count||0} 笔交易`)}catch(e){log('ERROR '+e);$('assumptions').innerHTML='<div class="warn">回测失败：'+esc(e)+'</div>';showActionToast('回测失败：'+e,true)}finally{btn.disabled=false;btn.textContent='运行回测'}}
 function render(d){
   lastBacktest=d;
   $('title').textContent=d.name+' '+d.symbol+' · '+d.strategy_name;

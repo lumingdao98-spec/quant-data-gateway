@@ -3,6 +3,15 @@ from fastapi.testclient import TestClient
 import quant_data.api as api
 
 
+def test_connected_market_agent_status_exposes_non_trading_multi_role_review():
+    data = TestClient(api.app).get("/api/agent/status").json()
+
+    assert data["multi_role_review"]["status"] == "ready"
+    assert len(data["multi_role_review"]["roles"]) == 5
+    assert data["multi_role_review"]["independent_risk_veto"] is True
+    assert data["multi_role_review"]["order_capability"] is False
+
+
 def test_connected_market_agent_brief_uses_real_stream_shape_and_safety(monkeypatch):
     def fake_stream(limit=80, force=False, live=True):
         return (
@@ -74,6 +83,13 @@ def test_connected_market_agent_brief_uses_real_stream_shape_and_safety(monkeypa
     assert "LIVE_TRADING_ENABLED=false" in "；".join(brief["risk_flags"])
     assert "不能直接下单" in brief["llm_status"]
     assert "不构成投资建议" in brief["disclaimer"]
+    review = brief["multi_role_review"]
+    assert review["review_id"].startswith("MRR-")
+    assert len(review["roles"]) == 5
+    assert review["debate"]["bull_case"]
+    assert review["risk_committee"]["verdict"] == "blocked"
+    assert review["portfolio_committee"]["order_capability"] is False
+    assert review["checkpoint"]["persisted"] is False
 
 
 def test_connected_market_agent_exposes_traceable_theme_trends(monkeypatch):

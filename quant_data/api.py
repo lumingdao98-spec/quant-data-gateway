@@ -37,6 +37,7 @@ from quant_data.services.candidate_pool_service import CandidatePoolService
 from quant_data.services.market_regime_service import MarketRegimeService
 from quant_data.services.global_market_sentiment_service import GlobalMarketSentimentService
 from quant_data.services.market_ai_service import MarketAiService
+from quant_data.services.multi_role_market_review_service import MultiRoleMarketReviewService
 from quant_data.services.realtime_decision_service import RealtimeDecisionService
 from quant_data.services.decision_dimension_service import DecisionDimensionService
 from quant_data.services.sector_mainline_service import SectorMainlineService
@@ -46,6 +47,7 @@ from quant_data.services.market_behavior_engine import MarketBehaviorEngine
 from quant_data.services.cache_state_service import CacheStateService
 from quant_data.services.fundamental_library_service import FundamentalLibraryService
 from quant_data.services.news_service import NewsAnalysisService
+from quant_data.services.news_cleaner import current_scoring_window_days
 from quant_data.services.info_analysis_service import InfoAnalysisService
 from quant_data.services.company_profile_service import CompanyProfileService
 from quant_data.services.fundamental_snapshot_scoring_service import FundamentalSnapshotScoringService
@@ -135,6 +137,7 @@ technical_factor_registry_service = TechnicalFactorRegistryService()
 candidate_pool_service = CandidatePoolService()
 market_regime_service = MarketRegimeService()
 market_ai_service = MarketAiService()
+multi_role_market_review_service = MultiRoleMarketReviewService()
 sector_mainline_service = SectorMainlineService()
 market_behavior_engine = MarketBehaviorEngine()
 orderbook_behavior_service = OrderBookBehaviorService()
@@ -332,6 +335,54 @@ app.add_middleware(
 )
 
 
+def _embedded_module_page(html: str, embedded: bool, kind: str) -> str:
+    """Apply the shared iframe shell without duplicating a module's own navigation."""
+    if not embedded:
+        return html
+    safe_kind = re.sub(r"[^a-z0-9_-]", "", str(kind or "page").lower()) or "page"
+    layout_css = {
+        "screener": """
+body.qd-embedded-module .app{grid-template-rows:minmax(0,1fr) 92px!important;grid-template-areas:\"left main right\" \"log log log\"!important}
+""",
+        "backtest": """
+body.qd-embedded-module .app{grid-template-rows:minmax(0,1fr) 74px!important;grid-template-areas:\"side main\" \"log log\"!important}
+""",
+        "realtime": """
+body.qd-embedded-module .app{grid-template-columns:240px minmax(0,1fr) 260px!important;grid-template-rows:minmax(0,1fr) 42px!important;grid-template-areas:\"side main right\" \"log log log\"!important}
+@media(max-width:960px){body.qd-embedded-module .app{height:auto!important;grid-template-columns:1fr!important;grid-template-rows:auto auto auto 42px!important;grid-template-areas:\"side\" \"main\" \"right\" \"log\"!important}body.qd-embedded-module{overflow:auto!important}}
+""",
+        "live": "body.qd-embedded-module main{min-height:100vh!important}",
+        "records": "body.qd-embedded-module .table-wrap{max-height:calc(100vh - 190px)!important}",
+        "info": "body.qd-embedded-module main{max-width:none!important;padding:12px!important}",
+    }.get(safe_kind, "")
+    style = f"""<style id=\"qd-v328-embedded-module-shell\">
+html,body.qd-embedded-module{{height:100%;min-height:100%;overflow-x:hidden}}
+body.qd-embedded-module>header,
+body.qd-embedded-module>.app>.top,
+body.qd-embedded-module>.app>header.top{{display:none!important}}
+body.qd-embedded-module>.app{{height:100vh!important;min-height:100vh!important}}
+body.qd-embedded-module main,
+body.qd-embedded-module .main,
+body.qd-embedded-module .wrap{{max-width:100%!important}}
+body.qd-embedded-module a[href=\"/auto-trading\"]{{display:none!important}}
+body.qd-embedded-module button,
+body.qd-embedded-module a{{scroll-margin-top:12px}}
+{layout_css}
+</style>"""
+    html = html.replace("</head>", style + "</head>", 1)
+    if "<body>" in html:
+        html = html.replace("<body>", f'<body class="qd-embedded-module qd-embedded-{safe_kind}">', 1)
+    else:
+        html = re.sub(
+            r"<body\b([^>]*)>",
+            rf'<body\1 class="qd-embedded-module qd-embedded-{safe_kind}">',
+            html,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return html
+
+
 @app.get("/docs", include_in_schema=False)
 def swagger_api_docs() -> HTMLResponse:
     return get_swagger_ui_html(
@@ -410,7 +461,7 @@ def _render_chinese_api_docs() -> str:
                 ("POST", "/api/live/review-positions", "只读复核真实券商持仓；不会调用券商下单，减仓/退出仍需风控和人工确认。"),
                 ("GET", "/api/live/position-reviews", "读取真实持仓复核记录；broker_submitted 始终为 false。"),
                 ("GET", "/api/news/jin10/realtime", "金十/金十期货直连快讯流；优先公开 JSON 接口，页面摘要兜底，不抓搜索结果页。"),
-                ("GET", "/api/agent/market-brief", "联网证据代理：聚合金十快讯、全球宏观事件、评分溯源和实盘安全状态，只做辅助判断，不自动下单。"),
+                ("GET", "/api/agent/market-brief", "多角色证据复核：分别核验评分技术、基本面、信息面、资金主线和大盘环境，再输出正反观点、风险裁决和复盘检查点；只做辅助判断，不自动下单。"),
                 ("POST", "/api/live/orders/preview-batch", "真实交易多股票批量预检查；逐只经过风控、白名单、kill switch 和确认要求，不会直接下单。"),
                 ("POST", "/api/live/orders/place-batch", "真实交易多股票批量提交入口；默认配置下会被禁用或进入确认队列，不能绕过安全门控。"),
                 ("GET", "/api/score/trend/{symbol}", "查看每日自动评分、盘中评分溯源和手工筛选评分的分源走势。"),
@@ -482,8 +533,8 @@ a{color:#93c5fd}</style></head><body><header><h1>量化数据网关 API 文档</
 
 
 @app.get("/docs-cn", response_class=HTMLResponse, include_in_schema=False)
-def chinese_api_docs() -> str:
-    return _render_chinese_api_docs()
+def chinese_api_docs(embedded: bool = False) -> str:
+    return _embedded_module_page(_render_chinese_api_docs(), embedded, "docs")
     groups = [
         ("行情与盘口", [
             ("GET", "/api/quotes?symbols=300750,600519&force=false", "批量实时行情，返回最新价、涨跌幅、成交额、换手率、量比、市值、缺失原因。"),
@@ -609,7 +660,7 @@ def _apply_company_profile_metrics(q: Quote) -> Quote:
         return q
     needs_profile = any(
         getattr(q, field, None) in (None, 0, "")
-        for field in ["total_market_cap", "float_market_cap", "pe_dynamic"]
+        for field in ["total_market_cap", "float_market_cap", "pe_dynamic", "industry"]
     )
     if not needs_profile:
         return q
@@ -618,6 +669,9 @@ def _apply_company_profile_metrics(q: Quote) -> Quote:
     except Exception:
         return q
     updates: dict = {}
+    profile_industry = str(profile.get("market_industry") or profile.get("industry") or "").strip()
+    if not q.industry and profile_industry not in {"", "-", "--", "未知"}:
+        updates["industry"] = profile_industry
     total_cap = _parse_cny_amount(profile.get("total_market_value"))
     float_cap = _parse_cny_amount(profile.get("float_market_value"))
     last = _safe_float(q.last)
@@ -654,6 +708,8 @@ def _apply_company_profile_metrics(q: Quote) -> Quote:
             sources.setdefault(key, "company_profile")
         if key == "pe_dynamic":
             sources.setdefault("pe_ttm", "company_profile_eps")
+        if key == "industry":
+            sources.setdefault("industry", "company_profile")
     reasons = [
         r for r in (q.metric_missing_reasons or [])
         if not any(token in str(r) for token in ["总市值", "流通市值", "total_market_cap", "float_market_cap"])
@@ -752,6 +808,7 @@ def _quote_from_dict(data: dict | None) -> Quote | None:
         market=str(data.get("market") or "CN"),
         asset_type=asset_type,
         source=str(data.get("source") or "quote_cache"),
+        industry=str(data.get("industry") or "").strip() or None,
     )
 
 
@@ -762,6 +819,7 @@ def _merge_quote_from_cache(q: Quote, cached_q: Quote | None, cache_status: dict
         "turnover", "volume_ratio", "amount", "pe_dynamic", "pb", "total_market_cap",
         "float_market_cap", "circulating_market_cap", "total_share", "float_share",
         "market_cap_style", "metric_sources",
+        "industry",
     ]
     updates = {}
     for field in fields:
@@ -788,7 +846,7 @@ def _quote_dict_with_aliases(q: Quote, cache_status: dict | None = None) -> dict
     if str(data.get("market_cap_style") or "").strip() in {"未知", "鏈煡", "δ֪", "--", "-"}:
         data["market_cap_style"] = _market_cap_style(data.get("float_market_cap") or data.get("total_market_cap")) or "未知"
     sources = dict(data.get("metric_sources") or {})
-    for field in ["turnover_rate", "volume_ratio", "amount", "pe_ttm", "pb", "total_market_cap", "float_market_cap", "total_share", "float_share"]:
+    for field in ["turnover_rate", "volume_ratio", "amount", "pe_ttm", "pb", "total_market_cap", "float_market_cap", "total_share", "float_share", "industry"]:
         if data.get(field) not in (None, 0, ""):
             sources.setdefault(field, q.source or "quote_snapshot")
     data["metric_sources"] = sources
@@ -899,7 +957,12 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
             published = None
         if published is None:
             continue
-        max_days = 14 if any(token in source_type for token in ("macro", "宏观", "全球")) else 90 if any(token in source_type for token in ("announcement", "公告")) else 45 if any(token in source_type for token in ("policy", "research", "政策", "研报")) else 30
+        max_days = current_scoring_window_days(
+            source_type,
+            str(item.get("event_type") or ""),
+            str(item.get("risk_tag") or ""),
+            item.get("sentiment_score"),
+        )
         age_days = (now - published).days
         if age_days < -1 or age_days > max_days:
             derived_historical_count += 1
@@ -921,7 +984,7 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "historical_excluded_count": int(_safe_float(quality_historical) if quality_historical is not None else derived_historical_count),
         "unknown_date_count": int(_safe_float(quality.get("unknown_date_count")) or stats.get("unknown_date_count") or 0),
         "latest_published_at": latest_published_at,
-        "score_scope": "仅近期、可核验、事件级去重且正文质量合格的信息参与当前评分；历史信息、日期缺失条目和未来事件结果只供观察。",
+        "score_scope": "仅近期、可核验、事件级去重且正文质量合格的信息参与当前评分；宏观/交割7天、普通新闻21天、研报30天、普通公告45天，财报与未解除的高可信风险使用更长窗口；历史信息、日期缺失条目和未来事件结果只供观察。",
     }
     future_event_calendar = data.get("future_event_calendar")
     if not isinstance(future_event_calendar, dict):
@@ -961,26 +1024,162 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
     return data
 
 
+def _ensure_global_event_schema(payload: dict) -> tuple[dict, bool]:
+    payload = dict(payload or {})
+    items = [dict(item) for item in (payload.get("items") or []) if isinstance(item, dict)]
+    legacy = bool(
+        items
+        and any(
+            "confirmation_level" not in item
+            or "decision_scope" not in item
+            or "decision_use" not in item
+            for item in items
+        )
+    )
+    if legacy:
+        items = news_service.event_intelligence.enrich_items(items)
+    items = news_service.event_intelligence.collapse_event_clusters(items)
+    payload["items"] = items
+    payload["event_radar"] = {
+        "confirmed_count": sum(
+            1 for item in items
+            if item.get("score_candidate")
+        ),
+        "early_warning_count": sum(
+            1 for item in items
+            if item.get("early_warning_candidate")
+        ),
+        "candidate_block_count": sum(1 for item in items if item.get("trade_gate") == "candidate_block"),
+        "display_only_count": sum(1 for item in items if item.get("decision_use") == "display_only"),
+        "rule": "快讯负责尽早发现；官方原文或两个独立高可信来源负责确认。单一快讯只能预警，不能直接阻断或触发自动交易。",
+    }
+    payload["event_schema_version"] = "v328_early_event_radar"
+    return payload, legacy
+
+
+def _global_payload_rank(payload: dict | None, cache_status: dict | None = None) -> tuple[float, float, int]:
+    """Prefer the cache containing the newest real evidence, not a matching limit key."""
+    latest_evidence = 0.0
+    for item in (payload or {}).get("items") or []:
+        raw = item.get("published_at") or item.get("publish_time") or item.get("date") or item.get("created_at")
+        if not raw:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+            latest_evidence = max(latest_evidence, parsed.timestamp())
+        except (TypeError, ValueError, OSError):
+            continue
+    created = 0.0
+    raw_created = (cache_status or {}).get("created_at") or (payload or {}).get("_cache_updated_at") or (payload or {}).get("updated_at") or (payload or {}).get("created_at")
+    if raw_created:
+        try:
+            created = datetime.fromisoformat(str(raw_created).replace("Z", "+00:00")).replace(tzinfo=None).timestamp()
+        except (TypeError, ValueError, OSError):
+            created = 0.0
+    return latest_evidence, created, len((payload or {}).get("items") or [])
+
+
+def _dedupe_global_source_logs(rows: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str, str], dict] = {}
+    for row in rows:
+        source = str(row.get("source") or row.get("source_name") or "未知来源")
+        status = str(row.get("status") or row.get("quality_status") or "")
+        ref = str(row.get("source_url") or row.get("source_ref") or row.get("url") or "")
+        key = source, status, ref
+        current = merged.setdefault(key, dict(row))
+        current["count"] = max(int(current.get("count") or 0), int(row.get("count") or 0))
+    return list(merged.values())
+
+
+def _merge_global_cache_candidates(candidates: list[tuple[dict, dict]], limit: int) -> tuple[dict, dict, bool]:
+    """Merge recent cache windows so a tiny fresh poll cannot erase a recent official event."""
+    selected_data, selected_status = max(candidates, key=lambda row: _global_payload_rank(row[0], row[1]))
+    merged_items: list[dict] = []
+    merged_sources: list[dict] = []
+    merged_keys: list[str] = []
+    legacy_seen = False
+    for raw_payload, status in candidates:
+        normalized, legacy = _ensure_global_event_schema(raw_payload)
+        legacy_seen = legacy_seen or legacy
+        merged_items.extend(dict(item) for item in (normalized.get("items") or []) if isinstance(item, dict))
+        merged_sources.extend(
+            dict(row)
+            for row in (normalized.get("source_logs") or normalized.get("sources_status") or [])
+            if isinstance(row, dict)
+        )
+        key = str(status.get("snapshot_id") or raw_payload.get("_cache_key") or "")
+        if key:
+            merged_keys.append(key)
+
+    merged_items = news_service.event_intelligence.collapse_event_clusters(merged_items)
+
+    def item_rank(item: dict) -> tuple[float, int, float]:
+        latest = _global_payload_rank({"items": [item]})[0]
+        confirmed = int(item.get("confirmation_level") in {"official_confirmed", "multi_source_confirmed"})
+        reliability = float(item.get("evidence_reliability") or item.get("source_reliability") or 0)
+        return latest, confirmed, reliability
+
+    merged_items.sort(key=item_rank, reverse=True)
+    payload = dict(selected_data)
+    payload["items"] = merged_items[:limit]
+    payload["source_logs"] = _dedupe_global_source_logs(merged_sources)
+    payload["cache_selection"] = {
+        "requested_key": f"global:{limit}",
+        "selected_key": selected_status.get("snapshot_id"),
+        "merged_keys": list(dict.fromkeys(merged_keys)),
+        "reason_cn": "合并近期不同抓取窗口并按事件级去重，避免一轮少量新快讯覆盖近7日仍有效的官方事件。",
+    }
+    payload, final_legacy = _ensure_global_event_schema(payload)
+    return payload, selected_status, bool(legacy_seen or final_legacy)
+
+
 def _read_global_news_cached(limit: int = 120, *, force: bool = False, schedule_refresh: bool = True) -> tuple[dict, dict]:
     limit = max(30, min(int(limit or 120), 500))
     if not force:
-        cached = cache_state_service.get("global_news_cache", f"global:{limit}", allow_stale=True)
-        if cached.data and cached.data.get("items"):
-            payload = dict(cached.data)
-            if cached.cache_status.get("stale") and schedule_refresh:
+        exact = cache_state_service.get("global_news_cache", f"global:{limit}", allow_stale=True)
+        latest = cache_state_service.latest("global_news_cache", allow_stale=True)
+        candidates: list[tuple[dict, dict]] = []
+        seen_keys: set[str] = set()
+        for cached in (exact, latest):
+            key = str((cached.cache_status or {}).get("snapshot_id") or "")
+            if key in seen_keys or not cached.data or not cached.data.get("items"):
+                continue
+            seen_keys.add(key)
+            candidates.append((dict(cached.data), dict(cached.cache_status or {})))
+        try:
+            recent_cutoff = datetime.now().timestamp() - 7 * 24 * 60 * 60
+            for cached_payload in cache_state_service.list_kind("global_news_cache", limit=20):
+                raw_updated = cached_payload.get("_cache_updated_at")
+                try:
+                    updated_ts = datetime.fromisoformat(str(raw_updated).replace("Z", "+00:00")).replace(tzinfo=None).timestamp()
+                except (TypeError, ValueError, OSError):
+                    updated_ts = 0.0
+                key = str(cached_payload.get("_cache_key") or "")
+                if not key or key in seen_keys or updated_ts < recent_cutoff or not cached_payload.get("items"):
+                    continue
+                seen_keys.add(key)
+                candidates.append(
+                    (
+                        dict(cached_payload),
+                        {
+                            "status": "stale" if cached_payload.get("_cache_stale") else "hit",
+                            "snapshot_id": key,
+                            "created_at": raw_updated,
+                            "source": cached_payload.get("_cache_source") or "global_news_cache",
+                            "stale": bool(cached_payload.get("_cache_stale")),
+                        },
+                    )
+                )
+        except Exception:
+            pass
+        if candidates:
+            payload, selected_status, legacy = _merge_global_cache_candidates(candidates, limit)
+            if (selected_status.get("stale") or legacy) and schedule_refresh:
                 payload["refreshing"] = _submit_background_job(
                     f"global-news-{limit}",
                     lambda: _read_global_news_cached(limit=limit, force=True),
                 )
-            return payload, cached.cache_status
-        latest = cache_state_service.latest("global_news_cache", allow_stale=True)
-        if latest.data and latest.data.get("items"):
-            payload = dict(latest.data)
-            payload["refreshing"] = _submit_background_job(
-                f"global-news-{limit}",
-                lambda: _read_global_news_cached(limit=limit, force=True),
-            ) if schedule_refresh else False
-            return payload, latest.cache_status
+            return payload, selected_status
         refreshing = _submit_background_job(
             f"global-news-{limit}",
             lambda: _read_global_news_cached(limit=limit, force=True),
@@ -993,19 +1192,67 @@ def _read_global_news_cached(limit: int = 120, *, force: bool = False, schedule_
             "missing_reason": "暂无全球要闻缓存，已在后台刷新真实来源；当前不生成替代新闻。" if refreshing else "暂无全球要闻缓存；本次只读请求未启动联网刷新。",
         }, cache_state_service.status("miss", key=f"global:{limit}", source="global_news_cache", error="background refresh scheduled" if refreshing else "cache-only request")
     data = news_service.fetch_global_news(limit=limit, force=force)
-    status = cache_state_service.put("global_news_cache", f"global:{limit}", {
-        "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
-        "items": data.get("items", []),
-        "mapped_industries": data.get("mapped_industries", []),
-        "mapped_concepts": data.get("mapped_concepts", []),
-        "mapped_symbols": data.get("mapped_symbols", []),
-        "source_logs": data.get("sources_status", []),
-    }, source="news_global")
+    data, _legacy = _ensure_global_event_schema(data)
+    status = cache_state_service.put(
+        "global_news_cache",
+        f"global:{limit}",
+        {
+            **data,
+            "created_at": data.get("updated_at") or datetime.now().isoformat(timespec="seconds"),
+            "source_logs": data.get("sources_status", []),
+        },
+        source="news_global",
+    )
     return data, status
 
 
 def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limit: int, *, allow_history_fallback: bool = True, allow_background_global: bool = True) -> dict:
     data = dict(data or {})
+    try:
+        _quote, quote_data, quote_cache_status = _enrich_quote_real(symbol, force=False)
+        quote_context = dict(quote_data or {})
+        _clean_screener_metric_missing_reasons(quote_context)
+        data["quote_snapshot"] = quote_context
+        finance = dict(data.get("finance") or {})
+        for key, source_key in {
+            "pe_dynamic": "pe_ttm",
+            "pb": "pb",
+            "turnover": "turnover_rate",
+            "total_market_cap": "total_market_cap",
+            "float_market_cap": "float_market_cap",
+            "amount": "amount",
+            "industry": "industry",
+            "quote_source": "source",
+            "quote_timestamp": "ts",
+            "metric_sources": "metric_sources",
+            "metric_missing_reasons": "metric_missing_reasons",
+        }.items():
+            value = quote_context.get(source_key)
+            if value not in (None, "", [], {}):
+                finance[key] = value
+        finance["metric_missing_reasons"] = list(quote_context.get("metric_missing_reasons") or [])
+        data["finance"] = finance
+        current_profile = data.get("company_profile") if isinstance(data.get("company_profile"), dict) else {}
+        if not current_profile:
+            current_profile = company_profile_service.get_profile(symbol, force=False, local_only=True)
+        data["company_profile"] = company_profile_service.merge_market_context(
+            current_profile,
+            symbol,
+            name=name or data.get("name") or quote_context.get("name") or symbol,
+            industry=str(quote_context.get("industry") or ""),
+            source=str(quote_context.get("source") or "quote_snapshot"),
+        )
+        data["quote_context_status"] = {
+            "status": "reconciled",
+            "cache_status": quote_cache_status,
+            "note_cn": "已用最新统一行情快照纠正旧筛选/信息快照中的失效缺失提示。",
+        }
+    except Exception as exc:
+        data["quote_context_status"] = {
+            "status": "unavailable",
+            "note_cn": "当前无法读取统一行情快照；保留原快照并明确显示缺失。",
+            "error": str(exc)[:160],
+        }
     source_logs = list(data.get("source_logs") or [])
     errors = list(data.get("errors") or [])
     items = list(data.get("items") or [])
@@ -1029,29 +1276,47 @@ def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limi
         source_logs.append({"source": "history_news_store", "status": "skipped", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": "request ended in fetch error; avoid unrelated persisted history fallback"})
     global_items = list(data.get("global_items") or [])
     global_status = None
-    if not global_items:
-        try:
-            global_data, global_status = _read_global_news_cached(limit=min(max(limit, 60), 180), force=False, schedule_refresh=allow_background_global)
-            global_items = list(global_data.get("items") or [])
+    try:
+        global_data, global_status = _read_global_news_cached(limit=min(max(limit, 60), 180), force=False, schedule_refresh=allow_background_global)
+        cached_global_items = list(global_data.get("items") or [])
+        embedded_payload = {"items": global_items, "created_at": data.get("created_at") or data.get("updated_at")}
+        if cached_global_items and (not global_items or _global_payload_rank(global_data, global_status) > _global_payload_rank(embedded_payload, data.get("cache_status") or {})):
+            global_items = cached_global_items
             data["global_items"] = global_items
-            source_logs.append({"source": "global_news_cache", "status": global_status.get("status") if global_status else "hit", "count": len(global_items), "mode": data.get("mode") or "snapshot"})
-        except Exception as exc:
-            errors.append(f"global news cache fallback failed: {str(exc)[:160]}")
-            source_logs.append({"source": "global_news_cache", "status": "error", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": str(exc)[:160]})
+            data["global_cache_selection"] = global_data.get("cache_selection") or {
+                "reason_cn": "全局缓存中的证据比信息快照更新，已替换旧背景流。",
+            }
+        source_logs.append({"source": "global_news_cache", "status": global_status.get("status") if global_status else "hit", "count": len(global_items), "mode": data.get("mode") or "snapshot"})
+    except Exception as exc:
+        errors.append(f"global news cache fallback failed: {str(exc)[:160]}")
+        source_logs.append({"source": "global_news_cache", "status": "error", "count": 0, "mode": data.get("mode") or "snapshot", "skipped_reason": str(exc)[:160]})
     if global_items:
         try:
-            profile = company_profile_service.get_profile(symbol, force=False, local_only=True)
+            profile = data.get("company_profile") or company_profile_service.get_profile(symbol, force=False, local_only=True)
         except Exception:
             profile = {}
         mapped = global_industry_mapper.map_items(global_items, symbol, name or data.get("name") or symbol, profile=profile)
-        mapped_items = sorted(mapped.get("industry_mapped_items") or [], key=lambda x: (not bool(x.get("included_in_score") or x.get("score_included")), -float(x.get("relevance_score") or 0)))
+        mapped_items = sorted(
+            mapped.get("industry_mapped_items") or [],
+            key=lambda x: (
+                not bool(x.get("is_related_to_symbol")),
+                not bool(x.get("included_in_score") or x.get("score_included")),
+                -float(x.get("relevance_score") or 0),
+            ),
+        )
         data.update({
             "company_exposure": mapped.get("company_exposure"),
             "industry_mapped_items": mapped_items,
             "mapped_industries": mapped.get("mapped_industries") or [],
             "mapped_concepts": mapped.get("mapped_concepts") or [],
             "mapped_symbols": mapped.get("mapped_symbols") or [],
-            "global_news_used": {"related_count": mapped.get("related_count", 0), "cache_status": global_status or {}},
+            "global_news_used": {
+                "related_count": mapped.get("related_count", 0),
+                "direct_related_count": mapped.get("direct_related_count", 0),
+                "early_warning_count": mapped.get("early_warning_count", 0),
+                "cache_status": global_status or {},
+            },
+            "industry_coverage": (mapped.get("company_exposure") or {}).get("coverage_catalog", {}),
         })
         source_logs.append({"source": "global_industry_mapper", "status": "mapped", "count": len(data.get("industry_mapped_items") or []), "mode": data.get("mode") or "snapshot", "skipped_reason": ""})
     stats = dict(data.get("stats") or {})
@@ -1071,7 +1336,23 @@ def _ensure_info_visible_content(data: dict, symbol: str, name: str | None, limi
         diagnostics["summary"] = "个股历史信息已从持久化库恢复"
     data["stats"] = stats
     data["diagnostics"] = diagnostics
-    data["source_logs"] = source_logs
+    deduped_logs: list[dict] = []
+    seen_logs: set[tuple] = set()
+    for row in source_logs:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            str(row.get("source") or row.get("source_name") or ""),
+            str(row.get("status") or ""),
+            int(row.get("count") or 0),
+            str(row.get("mode") or ""),
+            str(row.get("skipped_reason") or ""),
+        )
+        if key in seen_logs:
+            continue
+        seen_logs.add(key)
+        deduped_logs.append(row)
+    data["source_logs"] = deduped_logs
     data["errors"] = errors
     return data
 
@@ -1509,6 +1790,7 @@ def _merge_screener_item_quote_metrics(item: dict, *, force: bool = False) -> No
         item.setdefault("metric_missing_reasons", []).append(f"quote enrichment failed: {str(exc)[:120]}")
         return
     mapping = {
+        "industry": "industry",
         "turnover": "turnover",
         "turnover_rate": "turnover_rate",
         "volume_ratio": "volume_ratio",
@@ -1576,6 +1858,13 @@ def _fill_screener_theme_from_profile(item: dict) -> None:
         profile = company_profile_service.get_profile(symbol, force=False, local_only=True)
     except Exception:
         profile = {}
+    profile = company_profile_service.merge_market_context(
+        profile,
+        symbol=symbol,
+        name=str(item.get("name") or symbol),
+        industry=str(item.get("industry") or "").strip() or None,
+        source=str((item.get("metric_sources") or {}).get("industry") or "quote_snapshot"),
+    )
     try:
         exposure = global_industry_mapper.company_exposure(symbol, profile=profile, name=str(item.get("name") or symbol))
     except Exception:
@@ -1601,6 +1890,69 @@ def _fill_screener_theme_from_profile(item: dict) -> None:
         }
         if item.get("theme_stage") in (None, "", "--", "未知", "未识别题材"):
             item["theme_stage"] = "题材待确认"
+
+
+def _reconcile_screener_rows_from_quote_cache(rows: list[dict] | None) -> list[dict]:
+    """Refresh restored screener metrics from the local quote cache without network I/O."""
+    reconciled: list[dict] = []
+    mapping = {
+        "industry": "industry",
+        "turnover": "turnover",
+        "turnover_rate": "turnover_rate",
+        "volume_ratio": "volume_ratio",
+        "amount": "amount",
+        "pe_dynamic": "pe_dynamic",
+        "pe_ttm": "pe_ttm",
+        "pb": "pb",
+        "total_market_cap": "total_market_cap",
+        "float_market_cap": "float_market_cap",
+        "circulating_market_cap": "circulating_market_cap",
+        "total_share": "total_share",
+        "float_share": "float_share",
+        "market_cap_style": "market_cap_style",
+    }
+    for raw in rows or []:
+        item = dict(raw or {})
+        symbol = str(item.get("symbol") or "").strip()
+        if symbol:
+            cache_read = cache_state_service.get("quote_cache", symbol, allow_stale=True)
+            quote_data = ((cache_read.data or {}).get("quote") or {}) if cache_read.data else {}
+            for dest, src in mapping.items():
+                value = quote_data.get(src)
+                if value not in (None, "", 0, "--", "未知"):
+                    item[dest] = value
+            if quote_data:
+                item["metric_sources"] = {
+                    **(item.get("metric_sources") or {}),
+                    **(quote_data.get("metric_sources") or {}),
+                }
+                item["quote_cache_status"] = cache_read.cache_status
+                item["metric_missing_reasons"] = list(
+                    dict.fromkeys(
+                        (item.get("metric_missing_reasons") or [])
+                        + (quote_data.get("metric_missing_reasons") or [])
+                    )
+                )
+        _clean_screener_metric_missing_reasons(item)
+        _fill_screener_theme_from_profile(item)
+        reconciled.append(item)
+    return reconciled
+
+
+def _reconcile_screener_snapshot_payload(payload: dict | None) -> dict:
+    data = dict(payload or {})
+    rows = data.get("results") or data.get("data") or []
+    reconciled = _reconcile_screener_rows_from_quote_cache(rows)
+    data["results"] = reconciled
+    data["data"] = reconciled
+    selected_symbol = str(data.get("selected_symbol") or "").strip()
+    if selected_symbol:
+        data["selected_row"] = next(
+            (row for row in reconciled if str(row.get("symbol") or "") == selected_symbol),
+            data.get("selected_row"),
+        )
+    data["restored_quote_reconciled"] = bool(reconciled)
+    return data
 
 
 def _attach_screener_sector_context(item: dict, sector_snapshot: dict) -> None:
@@ -7487,13 +7839,15 @@ def watchlists_delete_v323(watchlist_id: str) -> dict:
 @app.get("/api/screener/session/latest")
 def screener_session_latest_v323() -> dict:
     latest = cache_state_service.latest("screener_snapshot")
-    return {"ok": bool(latest.data), "data": latest.data, "cache_status": latest.cache_status, "missing_reason": "" if latest.data else "暂无筛选快照缓存"}
+    data = _reconcile_screener_snapshot_payload(latest.data) if latest.data else None
+    return {"ok": bool(data), "data": data, "cache_status": latest.cache_status, "missing_reason": "" if data else "暂无筛选快照缓存"}
 
 
 @app.get("/api/screener/session/{session_id}")
 def screener_session_get_v323(session_id: str) -> dict:
     snap = cache_state_service.get("screener_snapshot", session_id)
-    return {"ok": bool(snap.data), "data": snap.data, "cache_status": snap.cache_status, "errors": [] if snap.data else ["session_id not found"]}
+    data = _reconcile_screener_snapshot_payload(snap.data) if snap.data else None
+    return {"ok": bool(data), "data": data, "cache_status": snap.cache_status, "errors": [] if data else ["session_id not found"]}
 
 
 @app.post("/api/screener/session/save")
@@ -8344,7 +8698,7 @@ def screener_run(
 @app.get("/api/screener/snapshot/{snapshot_id}")
 def screener_snapshot(snapshot_id: str) -> dict:
     cached = cache_state_service.get_screener_snapshot(snapshot_id)
-    data = cached.data or {}
+    data = _reconcile_screener_snapshot_payload(cached.data)
     results = data.get("results") or data.get("data") or []
     return {
         "ok": bool(cached.data),
@@ -8376,7 +8730,7 @@ def cache_status() -> dict:
 @app.get("/api/cache/screener/latest")
 def cache_screener_latest() -> dict:
     cached = cache_state_service.latest_screener_snapshot()
-    data = cached.data or {}
+    data = _reconcile_screener_snapshot_payload(cached.data)
     results = data.get("results") or data.get("data") or []
     return {
         "ok": bool(cached.data),
@@ -8684,7 +9038,14 @@ def _screener_anomaly_features(row: dict) -> dict:
         "turnover": _safe_float(row.get("turnover"), 0.0),
         "ma20_deviation_pct": _safe_float(row.get("ma20_deviation_pct"), 0.0),
         "vwap_distance_pct": _safe_float(row.get("vwap_distance_pct"), 0.0),
-        "negative_news": "负面" in " ".join(str(x) for x in risk_items),
+        "negative_news": bool(
+            row.get("info_negative_veto")
+            or row.get("major_negative_news")
+            or (
+                isinstance(row.get("recent_information"), dict)
+                and row.get("recent_information", {}).get("negative_veto")
+            )
+        ),
         "sector_score": _safe_float(row.get("sector_score"), 50.0),
         "amount_change_pct": _safe_float(row.get("amount_change_pct"), 0.0),
         "stale_data": bool(row.get("cache_status", {}).get("stale")) if isinstance(row.get("cache_status"), dict) else False,
@@ -9020,8 +9381,52 @@ def news_analyze(symbol: str, name: str | None = None, limit: int = 120, force: 
 
 
 @app.get("/api/news/global")
-def global_news(limit: int = 80, force: bool = False) -> dict:
+def global_news(limit: int = 80, force: bool = False, symbol: str | None = None, name: str | None = None) -> dict:
     data, cache_status = _read_global_news_cached(limit=limit, force=force)
+    normalized_symbol = normalize_symbol(symbol) if symbol else ""
+    if normalized_symbol:
+        try:
+            profile = company_profile_service.get_profile(normalized_symbol, force=False, local_only=True)
+        except Exception:
+            profile = {}
+        try:
+            _quote, quote_context, _quote_status = _enrich_quote_real(normalized_symbol, force=False)
+            profile = company_profile_service.merge_market_context(
+                profile,
+                normalized_symbol,
+                name=name or str(quote_context.get("name") or normalized_symbol),
+                industry=str(quote_context.get("industry") or ""),
+                source=str(quote_context.get("source") or "quote_snapshot"),
+            )
+            data["quote_snapshot"] = quote_context
+        except Exception:
+            profile = company_profile_service.merge_market_context(
+                profile,
+                normalized_symbol,
+                name=name or str(profile.get("name") or normalized_symbol),
+            )
+        mapped = global_industry_mapper.map_items(
+            list(data.get("items") or []),
+            normalized_symbol,
+            name=name or str(profile.get("name") or normalized_symbol),
+            profile=profile,
+        )
+        data["company_exposure"] = mapped.get("company_exposure") or {}
+        data["industry_mapped_items"] = sorted(
+            mapped.get("industry_mapped_items") or [],
+            key=lambda row: (
+                not bool(row.get("is_related_to_symbol")),
+                not bool(row.get("included_in_score") or row.get("score_included")),
+                -float(row.get("relevance_score") or 0),
+            ),
+        )
+        data["mapped_industries"] = mapped.get("mapped_industries") or []
+        data["mapped_concepts"] = mapped.get("mapped_concepts") or []
+        data["mapped_symbols"] = mapped.get("mapped_symbols") or []
+        data["related_count"] = int(mapped.get("related_count") or 0)
+        data["direct_related_count"] = int(mapped.get("direct_related_count") or 0)
+        data["early_warning_count"] = int(mapped.get("early_warning_count") or 0)
+        data["industry_coverage"] = (mapped.get("company_exposure") or {}).get("coverage_catalog", {})
     data["cache_status"] = cache_status
     return {"ok": True, "cache_status": cache_status, "data": data}
 
@@ -9214,9 +9619,12 @@ def _global_stream_items(items: list[dict]) -> list[dict]:
                 "event_label": item.get("event_label") or "",
                 "is_jin10": ("金十" in source) or ("jin10" in url.lower()),
                 "quality_status": "ok",
+                "content_quality_status": item.get("content_quality_status") or "title_only",
             }
         )
-    return stream
+    return news_service.event_intelligence.collapse_event_clusters(
+        news_service.event_intelligence.enrich_items(stream)
+    )
 
 
 def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全球快讯") -> list[dict]:
@@ -9268,9 +9676,12 @@ def _global_stream_items_from_rows(rows: list[dict], fallback_source: str = "全
                 "event_label": "",
                 "is_jin10": ("金十" in source) or ("jin10" in url.lower()),
                 "quality_status": "ok",
+                "content_quality_status": row.get("_content_quality_status") or row.get("content_quality_status") or "title_only",
             }
         )
-    return out
+    return news_service.event_intelligence.collapse_event_clusters(
+        news_service.event_intelligence.enrich_items(out)
+    )
 
 
 def _dedupe_stream_items(items: list[dict], limit: int) -> list[dict]:
@@ -9310,6 +9721,10 @@ def _stream_source_id(item: dict) -> str:
         return "cls"
     if "新浪" in text or "sina.com" in text:
         return "sina_news"
+    if "白宫" in text or "whitehouse.gov" in text:
+        return "whitehouse_actions"
+    if "联邦公报" in text or "federalregister.gov" in text:
+        return "us_federal_register"
     return ""
 
 
@@ -9356,11 +9771,11 @@ def _sync_global_news_items_to_pit(items: list[dict]) -> dict:
                 "published_at": published_at,
                 "available_at": str(item.get("available_at") or published_at),
                 "symbols": symbols,
-                "sectors": list(item.get("affected_sectors") or []),
+                "sectors": list(item.get("affected_industries_cn") or item.get("affected_sectors") or []),
                 "markets": list(item.get("affected_assets") or []),
-                "impact_direction": str(item.get("sentiment_label") or "neutral"),
+                "impact_direction": str(item.get("event_direction") or item.get("sentiment_label") or "neutral"),
                 "impact_score": _as_float(item.get("impact_score"), 0.0),
-                "confidence": 0.72,
+                "confidence": _as_float(item.get("evidence_reliability"), 0.72),
                 "quality_status": str(item.get("quality_status") or "ok"),
                 "payload": {
                     "category": item.get("category"),
@@ -9371,6 +9786,26 @@ def _sync_global_news_items_to_pit(items: list[dict]) -> dict:
                     "impact_evidence": item.get("impact_evidence") or [],
                     "source_api": item.get("source_api") or "",
                     "source_page": item.get("source_page") or "",
+                    "event_type": item.get("event_type") or "general_information",
+                    "event_type_cn": item.get("event_type_cn") or "一般信息",
+                    "event_stage": item.get("event_stage") or "reported",
+                    "event_stage_cn": item.get("event_stage_cn") or "媒体已报道",
+                    "event_direction": item.get("event_direction") or "neutral",
+                    "event_severity": item.get("event_severity") or "low",
+                    "source_tier": item.get("source_tier") or "other",
+                    "confirmation_level": item.get("confirmation_level") or "single_source",
+                    "confirmation_sources": item.get("confirmation_sources") or [],
+                    "event_fingerprint": item.get("event_fingerprint") or "",
+                    "trade_gate": item.get("trade_gate") or "observe",
+                    "decision_scope": item.get("decision_scope") or "unmapped",
+                    "decision_use": item.get("decision_use") or "display_only",
+                    "score_candidate": bool(item.get("score_candidate")),
+                    "named_subject": item.get("named_subject") or "",
+                    "event_cluster_size": int(item.get("event_cluster_size") or 1),
+                    "duplicate_count": int(item.get("duplicate_count") or 1),
+                    "affected_products_cn": item.get("affected_products_cn") or [],
+                    "affected_industries_cn": item.get("affected_industries_cn") or [],
+                    "affected_regions_cn": item.get("affected_regions_cn") or [],
                 },
                 "tags": [
                     str(value)
@@ -9528,7 +9963,7 @@ def _fetch_global_stream_fast(limit: int = 80, *, force: bool = False) -> tuple[
 
 
 def _slice_global_stream_payload(payload: dict, limit: int, *, mode: str | None = None) -> dict:
-    out = dict(payload or {})
+    out, _legacy = _ensure_global_event_schema(dict(payload or {}))
     out["items"] = [x for x in list(out.get("items") or []) if isinstance(x, dict)][:limit]
     out["raw_count"] = len(out["items"])
     out["requested_limit"] = limit
@@ -10037,6 +10472,14 @@ def agent_market_status() -> dict:
             "mode": "evidence_only_online_agent",
             "order_capability": False,
         },
+        "multi_role_review": {
+            "status": "ready",
+            "version": multi_role_market_review_service.version,
+            "roles": ["评分与技术核验", "基本面核验", "信息面核验", "资金与主线板块核验", "大盘与全球环境核验"],
+            "debate": True,
+            "independent_risk_veto": True,
+            "order_capability": False,
+        },
     }
 
 
@@ -10147,6 +10590,20 @@ def agent_market_brief(
         action = "hold_or_collect_data"
     if risk_flags:
         headline += " 真实交易仍受安全门控约束。"
+    broker_connected = bool((broker_status.get("broker") or {}).get("connected"))
+    multi_role_review = multi_role_market_review_service.build(
+        symbols=symbol_list,
+        decisions=decisions,
+        score_rows=scores,
+        evidence=evidence[:16],
+        symbol_impacts=symbol_global_impacts,
+        theme_trends=theme_trends,
+        macro_watchlist=macro_watch,
+        risk_flags=list(dict.fromkeys(risk_flags)),
+        safety=safety,
+        broker_connected=broker_connected,
+        recommended_action=action,
+    )
     provider_status = market_ai_service.status()
     if use_llm:
         ai_analysis = market_ai_service.analyze(
@@ -10168,6 +10625,21 @@ def agent_market_brief(
                     for x in sector_items[:8]
                 ],
                 "theme_trends": theme_trends[:10],
+                "multi_role_review": {
+                    "review_id": multi_role_review.get("review_id"),
+                    "roles": [
+                        {
+                            "role": row.get("role"),
+                            "status": row.get("status"),
+                            "stance": row.get("stance"),
+                            "summary": row.get("summary"),
+                        }
+                        for row in multi_role_review.get("roles") or []
+                    ],
+                    "debate": multi_role_review.get("debate"),
+                    "risk_committee": multi_role_review.get("risk_committee"),
+                    "portfolio_committee": multi_role_review.get("portfolio_committee"),
+                },
             },
             force=force,
         )
@@ -10186,6 +10658,29 @@ def agent_market_brief(
         llm_status = str(ai_analysis.get("reason") or "联网模型未返回有效分析；保留规则证据结论。")
     else:
         llm_status = "联网数据 + 规则证据代理；外部模型仅在用户显式点击后调用，不能直接下单。"
+    if force:
+        try:
+            trading_store_v323.put(
+                "audit_events",
+                {
+                    "id": multi_role_review.get("review_id"),
+                    "event_type": "multi_role_market_review",
+                    "mode": "research",
+                    "symbol": symbol_list[0] if symbol_list else "",
+                    "symbols": symbol_list,
+                    "review": multi_role_review,
+                    "external_model_requested": bool(use_llm),
+                    "external_model_status": ai_analysis.get("status"),
+                    "order_capability": False,
+                    "created_at": (multi_role_review.get("checkpoint") or {}).get("generated_at"),
+                },
+                mode="research",
+                symbol=symbol_list[0] if symbol_list else "",
+                record_id=str(multi_role_review.get("review_id") or ""),
+            )
+            multi_role_review.setdefault("checkpoint", {})["persisted"] = True
+        except Exception as exc:
+            multi_role_review.setdefault("checkpoint", {})["persistence_error"] = str(exc)[:160]
     return {
         "ok": True,
         "data": {
@@ -10200,6 +10695,7 @@ def agent_market_brief(
             "global_stream_mode": stream_data.get("stream_mode"),
             "sector_mainline": sector_snapshot,
             "theme_trends": theme_trends,
+            "multi_role_review": multi_role_review,
             "agent_roles": {
                 "market_analyst": "读取大盘环境、板块强度、公开资金净流与涨跌家数宽度。",
                 "news_analyst": "读取可追溯全球/国内信息面并映射影响对象。",
@@ -10893,33 +11389,33 @@ def cache_page() -> str:
 
 
 @app.get("/info", response_class=HTMLResponse)
-def info_page() -> str:
-    return build_info_ui()
+def info_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_info_ui(), embedded, "info")
 
 
 @app.get("/screener", response_class=HTMLResponse)
-def screener_page() -> str:
-    return build_screener_ui()
+def screener_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_screener_ui(), embedded, "screener")
 
 
 @app.get("/backtest", response_class=HTMLResponse)
-def backtest_page() -> str:
-    return build_backtest_ui()
+def backtest_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_backtest_ui(), embedded, "backtest")
 
 
 @app.get("/backtest/trades", response_class=HTMLResponse)
-def backtest_trades_page() -> str:
-    return build_backtest_trades_ui()
+def backtest_trades_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_backtest_trades_ui(), embedded, "backtest-trades")
 
 
 @app.get("/paper", response_class=HTMLResponse)
-def paper_page() -> str:
-    return build_paper_ui()
+def paper_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_paper_ui(), embedded, "paper")
 
 
 @app.get("/realtime-paper", response_class=HTMLResponse)
-def realtime_paper_page() -> str:
-    return build_realtime_paper_ui()
+def realtime_paper_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_realtime_paper_ui(), embedded, "realtime")
 
 
 @app.get("/auto-trading", response_class=HTMLResponse)
@@ -10928,23 +11424,23 @@ def auto_trading_page() -> str:
 
 
 @app.get("/broker-setup", response_class=HTMLResponse)
-def broker_setup_page() -> str:
-    return build_broker_setup_ui()
+def broker_setup_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_broker_setup_ui(), embedded, "broker")
 
 
 @app.get("/live-trading", response_class=HTMLResponse)
-def live_trading_page() -> str:
-    return build_live_trading_ui()
+def live_trading_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_live_trading_ui(), embedded, "live")
 
 
 @app.get("/trading-records", response_class=HTMLResponse)
-def trading_records_page() -> str:
-    return build_trading_records_ui()
+def trading_records_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_trading_records_ui(), embedded, "records")
 
 
 @app.get("/data-center", response_class=HTMLResponse)
-def data_center_page() -> str:
-    return build_data_center_ui()
+def data_center_page(embedded: bool = False) -> str:
+    return _embedded_module_page(build_data_center_ui(), embedded, "data")
 
 
 @app.get("/detail/{symbol}", response_class=HTMLResponse)

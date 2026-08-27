@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from quant_data.utils import normalize_symbol, infer_exchange, safe_float
+from quant_data.services.global_industry_mapper import PROFILE_SECTOR_RULES
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -346,6 +347,53 @@ class CompanyProfileService:
         self._cache[code] = (time.time(), profile)
         return profile
 
+    def merge_market_context(
+        self,
+        profile: dict[str, Any] | None,
+        symbol: str,
+        *,
+        name: str = "",
+        industry: str = "",
+        source: str = "quote_snapshot",
+    ) -> dict[str, Any]:
+        """Merge a real quote industry into a local profile without inventing data.
+
+        This is deliberately side-effect free: the quote cache remains the
+        owner of the market industry, while the company-profile database keeps
+        only fetched/verified company documents.
+        """
+        code = normalize_symbol(symbol) or str(symbol or "").strip()
+        result = json.loads(json.dumps(profile or self._empty_profile(code), ensure_ascii=False, default=_json_default))
+        result["code"] = code
+        if name and not result.get("name"):
+            result["name"] = _clean(name, 80)
+        market_industry = _clean(industry, 120)
+        if market_industry and market_industry not in {"-", "--", "未知"}:
+            result["market_industry"] = market_industry
+            result["industry"] = result.get("industry") or market_industry
+            result.setdefault("sources", []).append(f"行情源行业:{source}")
+            result.setdefault("source_status", []).append({
+                "source": source,
+                "status": "行业字段可用",
+                "count": 1,
+            })
+        self._enrich_business_profile(result)
+        self._finalize_summary(result)
+        if result.get("business_tags"):
+            result["quality_status"] = "market_industry_profile" if market_industry else result.get("quality_status") or "local_profile"
+            result["missing_reasons"] = [
+                reason for reason in (result.get("missing_reasons") or [])
+                if "公司画像" not in str(reason) and "行业" not in str(reason)
+            ]
+        else:
+            result["quality_status"] = result.get("quality_status") or "missing"
+            result["missing_reasons"] = list(dict.fromkeys(
+                (result.get("missing_reasons") or [])
+                + ["行情和本地资料均未提供可归类的行业/主营字段"]
+            ))
+        result.setdefault("cache_info", {})["market_context_merged"] = bool(market_industry)
+        return result
+
     def _mark(self, profile: dict[str, Any], source: str, status: str, count: int | None = None) -> None:
         row = {"source": source, "status": status[:160]}
         if count is not None:
@@ -597,7 +645,7 @@ class CompanyProfileService:
         }
 
     def _infer_business_from_text(self, profile: dict[str, Any]) -> dict[str, list[str]]:
-        text = " ".join(str(profile.get(k) or "") for k in ["name", "company_name", "industry", "main_business", "business_scope", "org_intro"])
+        text = " ".join(str(profile.get(k) or "") for k in ["name", "company_name", "industry", "market_industry", "main_business", "business_scope", "org_intro"])
         rules = {
             "光伏": ["光伏", "硅料", "多晶硅", "硅片", "组件", "太阳能", "电池片"],
             "动力电池": ["动力电池", "锂电", "储能电池", "新能源车", "固态电池"],
@@ -615,6 +663,13 @@ class CompanyProfileService:
         products = []
         for k in tags:
             products.extend(rules.get(k, [])[:5])
+        for rule in PROFILE_SECTOR_RULES:
+            matched_keywords = [word for word in rule.get("keywords", []) if str(word).lower() in text.lower()]
+            if not matched_keywords:
+                continue
+            tags.extend(rule.get("industries", []))
+            tags.extend(rule.get("concepts", []))
+            products.extend(matched_keywords[:5])
         return {"tags": tags, "products": list(dict.fromkeys(products))[:12]}
 
     def _enrich_business_profile(self, profile: dict[str, Any]) -> None:
@@ -636,7 +691,7 @@ class CompanyProfileService:
         profile["tags"] = list(profile["business_tags"])
         profile["main_products"] = list(dict.fromkeys((profile.get("main_products") or []) + inferred.get("products", [])))[:20]
         exposure_parts = []
-        for k in ["name", "company_name", "industry", "main_business", "business_scope"]:
+        for k in ["name", "company_name", "industry", "market_industry", "main_business", "business_scope"]:
             if profile.get(k):
                 exposure_parts.append(str(profile.get(k)))
         for key in ["business_tags", "main_products", "upstream", "downstream", "business_segments"]:

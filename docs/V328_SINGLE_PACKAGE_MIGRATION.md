@@ -13,9 +13,9 @@
 
 1. 新建项目 `.venv`；
 2. 补充遗漏的 `lxml` 运行依赖；
-3. 新增 `python_runtime.bat`，依次使用项目 `.venv`、D 盘 Python、Windows `py` 启动器、系统 Python 和 Codex 运行时；
-4. 所有启动脚本改为通过统一运行时启动；
-5. `install.bat` 改为安装完整依赖清单 `requirements_full.txt`。
+3. 新增根目录唯一入口 `QuantDataGateway.exe`，固定使用项目 `.venv`，不依赖系统全局 `python` 命令；
+4. 启动器负责单实例、空闲端口、健康检查、自动打开总控台、状态记录和随窗口停止后台服务；
+5. 清理根目录旧 `run_*.bat`、演示脚本和运行时包装，开发维护仍可直接调用 `.venv\Scripts\python.exe`。
 
 ## 历史数据合并
 

@@ -167,14 +167,16 @@ function renderAudit(js){const rows=js.data||[];$('auditBox').innerHTML=rows.sli
 async function loadAiDecision(btn=null){
   const useLlm=Boolean(btn);
   return withButton(btn,'分析中','近期证据已更新',async()=>{
-    const js=await api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=50&use_llm='+(useLlm?'true':'false'));
+    const js=await api('/api/agent/market-brief?symbols='+encodeURIComponent(symbols().join(','))+'&limit=50&force='+(useLlm?'true':'false')+'&use_llm='+(useLlm?'true':'false'));
     const d=js.data||{},ai=d.ai_analysis||{},aiView=ai.analysis||{};
+    const review=d.multi_role_review||{},committee=review.risk_committee||{},portfolio=review.portfolio_committee||{};
     const decisions=(d.symbol_decisions||[]).filter(x=>selectedSymbol==='all'||String(x.symbol)===String(selectedSymbol)).slice(0,6);
     const themes=(d.theme_trends||[]).slice(0,5);
     const evidence=(d.evidence||[]).slice(0,4);
+    const roleHtml=(review.roles||[]).length?'<hr><b>五角色证据复核</b><br>'+(review.roles||[]).map(x=>`${esc(x.label||x.role)} · ${esc(cnEnum(x.status||'--'))} · ${esc(x.stance||'观察')}（${Math.round(Number(x.confidence||0)*100)}%）：${esc(x.summary||'')}`).join('<br>')+`<br><span class="warn">风险委员会：${esc(committee.verdict_cn||'等待裁决')}；组合裁决：${esc(portfolio.action_cn||'保持观察')}</span>`:'';
     const aiHtml=ai.ok&&aiView.summary?`<hr><b>联网模型复核（仅研究）</b><br>${esc(aiView.market_regime||'市场环境')}：${esc(aiView.summary)}<br>${(aiView.symbol_views||[]).filter(x=>selectedSymbol==='all'||String(x.symbol)===String(selectedSymbol)).map(x=>`${esc(x.symbol)} · ${esc(x.action)}：${esc(x.reason)}［证据 ${esc((x.evidence_refs||[]).join(', ')||'缺失')}］`).join('<br>')}<br><span class="warn">不能据此自动创建、确认或提交订单。</span>`:(ai.status&&ai.status!=='not_requested'?`<hr><span class="mini">模型状态：${esc(ai.reason||ai.status)}；继续使用规则证据结论。</span>`:'');
     const themeHtml=themes.length?'<hr><b>真实板块资金趋势</b><br>'+themes.map(x=>`${esc(x.theme)} · ${esc(x.trend)}（${Math.round(Number(x.confidence||0)*100)}%）：${esc([...(x.support_evidence||[]),...(x.counter_evidence||[])].slice(0,2).join('；')||(x.missing_data||[]).join('；')||'等待快照')}`).join('<br>'):'';
-    $('aiBox').innerHTML=`<b>${esc(d.headline||'近期证据暂无明确方向')}</b><br>建议 ${esc(d.recommended_action||'观察')} · 置信度 ${esc(d.confidence||'--')} · ${esc(d.llm_status||'规则证据代理')}<br>${decisions.map(x=>`${esc(x.symbol)} ${esc(x.name||'')}：${esc(x.action||'观察')}，${esc(x.reason||'')}`).join('<br>')||'当前股票池暂无独立映射'}${themeHtml}${evidence.length?'<hr>'+evidence.map(x=>`${esc(x.published_at||'时间缺失')} · ${esc(x.title||x.reason||'事件')}`).join('<br>'):''}${aiHtml}<br><span class="mini">仅使用近期、可追溯信息和规则映射；未配置外部模型时不生成伪 AI 结论。题材趋势不会直接创建订单。</span>`;
+    $('aiBox').innerHTML=`<b>${esc(d.headline||'近期证据暂无明确方向')}</b><br>建议 ${esc(d.recommended_action||'观察')} · 置信度 ${esc(d.confidence||'--')} · ${esc(d.llm_status||'规则证据代理')}<br>${decisions.map(x=>`${esc(x.symbol)} ${esc(x.name||'')}：${esc(x.action||'观察')}，${esc(x.reason||'')}`).join('<br>')||'当前股票池暂无独立映射'}${roleHtml}${themeHtml}${evidence.length?'<hr>'+evidence.map(x=>`${esc(x.published_at||'时间缺失')} · ${esc(x.title||x.reason||'事件')}`).join('<br>'):''}${aiHtml}<br><span class="mini">仅使用近期、可追溯信息和规则映射；未配置外部模型时不生成伪 AI 结论。角色复核和题材趋势都不能直接创建订单。</span>`;
     return js;
   });
 }

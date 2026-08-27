@@ -36,6 +36,9 @@ def test_info_page_global_mapping_tab_has_evidence_columns():
     assert "影响原因：" in html
     assert "纳入个股评分" in html
     assert "发布时间：" in html
+    assert "官方原文或两个独立高可信来源确认后" in html
+    assert "直接相关但待确认，不计分" in html
+    assert "阶段：" in html
 
 
 def test_info_analyze_maps_cached_global_energy_policy(monkeypatch, tmp_path):

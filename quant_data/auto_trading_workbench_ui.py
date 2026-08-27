@@ -15,7 +15,7 @@ def build_auto_trading_workbench_ui() -> str:
   --shadow:0 22px 60px rgba(0,0,0,.32)
 }
 *{box-sizing:border-box}html,body{min-height:100%;margin:0}body{background:var(--bg);color:var(--text);font-family:"Segoe UI","Microsoft YaHei",Arial,sans-serif;letter-spacing:0}button,input,select,textarea{font:inherit}select{background:#0d1728;border:1px solid #2f4364;border-radius:8px;color:#e5efff;padding:7px 9px;max-width:100%}a{color:inherit;text-decoration:none}
-.app{display:grid;grid-template-columns:268px minmax(0,1fr);min-height:100vh;max-width:100vw;overflow-x:hidden}.app>section{min-width:0;max-width:100%;overflow:hidden}
+.app{display:grid;grid-template-columns:228px minmax(0,1fr);min-height:100vh;max-width:100vw;overflow-x:hidden}.app>section{min-width:0;max-width:100%;overflow:hidden}
 .side{background:#0b1424;border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
 .brand{height:74px;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid var(--line);font-weight:900;color:#bfdbfe}
 .logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--cyan),var(--blue));display:grid;place-items:center;color:#00121f;font-weight:1000}
@@ -42,13 +42,14 @@ def build_auto_trading_workbench_ui() -> str:
 .source-strip a{border:1px solid #2f4364;background:#0b1728;border-radius:999px;padding:5px 8px;color:#93c5fd;font-size:11px;max-width:100%;overflow-wrap:anywhere}.feed-item .impact-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.impact-tag{border:1px solid #315077;background:#10233a;color:#bfdbfe;border-radius:999px;padding:3px 7px;font-size:11px}.source-link{display:inline-flex!important;width:auto!important;margin-top:7px;color:#93c5fd!important;font-size:12px!important}.feed-item .source-note{color:#fcd34d!important;font-size:11px!important}
 .mini-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}.mini-table th,.mini-table td{border-bottom:1px solid #243653;padding:8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}.mini-table th{background:#12213a;color:#9fd4ff}
 .sector-panel{margin-bottom:14px;min-width:0;max-width:100%}.sector-summary{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin-bottom:10px;min-width:0}.sector-rotation{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 10px}.sector-rotation>div{border:1px solid #29405f;background:#0d1a2e;padding:8px 10px;border-radius:7px;min-width:0}.sector-rotation b,.sector-rotation span{display:block;overflow-wrap:anywhere}.sector-rotation span{color:var(--muted);font-size:11px;line-height:1.45;margin-top:3px}.sector-table-wrap{overflow:auto;max-width:100%;max-height:280px;border:1px solid #2f4364;border-radius:8px}.sector-table{width:100%;border-collapse:collapse;min-width:1800px;font-size:12px}.sector-table th,.sector-table td{padding:9px 10px;border-bottom:1px solid #243653;text-align:right;white-space:nowrap}.sector-table th{position:sticky;top:0;background:#12213a;color:#9fd4ff;z-index:1}.sector-table th:first-child,.sector-table td:first-child,.sector-table th:nth-child(2),.sector-table td:nth-child(2){text-align:left}.sector-name{display:grid;gap:2px}.sector-name small{color:var(--muted)}.sector-stage,.flow-state{display:inline-flex;border:1px solid #315077;border-radius:999px;padding:3px 7px;color:#bfdbfe}.sector-stage.main,.flow-state.in{border-color:#166534;background:#0d2b1c;color:#86efac}.sector-stage.weak,.flow-state.out{border-color:#7f1d1d;background:#2a1116;color:#fecaca}.sector-link{color:#93c5fd}.sector-filter.active{background:#2563eb}.sector-method{color:var(--muted);font-size:11px;line-height:1.5;overflow-wrap:anywhere}@media(max-width:1050px){.sector-rotation{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.iframe-shell{position:fixed;top:0;right:0;bottom:0;left:268px;width:calc(100vw - 268px);max-width:none;min-width:0;background:#07111f;z-index:40;display:grid;grid-template-rows:56px minmax(0,1fr);transform:translateX(104%);transition:transform .2s ease;border-left:1px solid var(--line);box-shadow:-20px 0 60px rgba(0,0,0,.45);overflow:hidden}
+.iframe-shell{position:fixed;top:0;right:0;bottom:0;left:228px;width:calc(100vw - 228px);max-width:none;min-width:0;background:#07111f;z-index:40;display:grid;grid-template-rows:56px minmax(0,1fr);transform:translateX(104%);transition:transform .2s ease;border-left:1px solid var(--line);box-shadow:-20px 0 60px rgba(0,0,0,.45);overflow:hidden}
 .iframe-shell.open{transform:translateX(0)}.iframe-head{display:flex;align-items:center;gap:10px;padding:0 14px;background:#0b1424;border-bottom:1px solid var(--line);min-width:0}.iframe-head b{font-size:17px;white-space:nowrap}.iframe-head .grow{flex:1;min-width:0}.iframe-head .pill{max-width:min(52vw,720px)}.workspace-frame{width:100%;height:100%;min-width:0;border:0;background:#07111f;display:block}.iframe-empty{display:grid;place-items:center;color:var(--muted)}
 .agent-box{border:1px solid #315077;background:linear-gradient(135deg,#0d1728,#10233a);border-radius:12px;padding:12px;line-height:1.6;font-size:13px}.agent-box b{display:block;color:#dbeafe;margin-bottom:5px}
 .agent-decision{margin-top:10px;border:1px solid #2f4364;background:#081626;border-radius:12px;padding:10px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;max-height:270px;overflow:auto}.agent-decision b{display:block;color:#dbeafe;margin-bottom:5px}.agent-decision ul{margin:7px 0 0 18px;padding:0}.agent-decision li{margin:3px 0;color:#c8d8ee}.agent-decision .risk{color:#fcd34d;margin-top:7px}
 .agent-evidence-list{display:grid;gap:7px;margin-top:9px}.agent-evidence{border:1px solid #2f4364;background:#0b1728;border-radius:10px;padding:8px}.agent-evidence time{display:block;color:#93c5fd;font-size:11px}.agent-evidence strong{display:block;margin:3px 0;color:#dbeafe}.agent-evidence small{display:block;color:#b7c9e6;line-height:1.45}.agent-evidence a{display:inline-flex;margin-top:6px;color:#93c5fd;font-size:12px}.agent-evidence .impact-row{margin-top:6px}
 .source-meta{display:grid;gap:3px;margin-top:6px;color:#b7c9e6;font-size:12px;line-height:1.45}.source-meta a{color:#93c5fd}.source-policy{border:1px solid #315077;background:#081626;border-radius:10px;padding:8px;margin:8px 0;color:#c8d8ee;font-size:12px;line-height:1.55}.impact-summary{border:1px solid #315077;background:#0b1d30;border-radius:10px;padding:7px;margin-top:7px;color:#dbeafe;font-size:12px;line-height:1.5}.impact-summary b{display:inline;color:#bfdbfe;margin:0}.symbol-impact-card{border-left:3px solid #60a5fa}.symbol-impact-card.none{border-left-color:#64748b}.source-link-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px}.source-link-row a,.source-link-row span{display:inline-flex!important;border:1px solid #2f4364;background:#0d1728;border-radius:999px;padding:4px 8px;font-size:11px!important;color:#93c5fd!important}.feed-item a.source-link{border:1px solid #2f4364;background:#0d1728;border-radius:999px;padding:4px 8px}.feed-item .impact-summary{margin-top:8px}
 .dashboard-fold{margin-top:9px;border:1px solid #2f4364;border-radius:10px;background:#0b1628;overflow:hidden}.dashboard-fold>summary{cursor:pointer;padding:9px 11px;color:#bfdbfe;font-size:12px;font-weight:900;list-style-position:inside}.dashboard-fold>.dashboard-fold-body{padding:0 10px 10px}.dashboard-fold .mini-table{margin-top:8px}.dashboard-fold[open]>summary{border-bottom:1px solid #243653;margin-bottom:9px}
+.home-internal-state{display:none!important}.home-overview-details{margin-top:10px;border:1px solid #2f4364;border-radius:10px;background:#0b1628;overflow:hidden}.home-overview-details>summary{cursor:pointer;padding:9px 11px;color:#bfdbfe;font-size:12px;font-weight:900}.home-overview-details[open]>summary{border-bottom:1px solid #243653}.home-overview-details>.home-overview-body{padding:10px}.home-overview-details .feed{max-height:220px}.home-overview-note{color:var(--muted);font-size:12px;line-height:1.55;overflow-wrap:anywhere}.sector-table-details{margin-top:10px}.sector-table-details>summary{cursor:pointer;color:#93c5fd;font-size:12px;font-weight:900;padding:7px 2px}.grid-main>.stack:empty{display:none}
 .broker-setup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.broker-fields{display:none}.broker-fields.active{display:block}.setup-result{display:grid;gap:7px;margin-top:10px}.setup-result ul{margin:4px 0 0;padding-left:20px;color:var(--muted);line-height:1.55}.broker-capabilities{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:7px;margin-top:8px}.broker-capability{border:1px solid #2f4364;background:#0c1728;border-radius:8px;padding:8px;min-width:0}.broker-capability b{display:block;font-size:11px;color:#8fb5e8;margin-bottom:4px}.broker-capability span{display:block;font-size:12px;line-height:1.4;overflow-wrap:anywhere}.setup-template{max-height:190px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#07111f;border:1px solid #2f4364;border-radius:10px;padding:10px;color:#b9d4f8;font-size:11px;line-height:1.5}.setup-links{display:flex;gap:7px;flex-wrap:wrap}.setup-links a{color:#93c5fd;border:1px solid #315077;border-radius:8px;padding:6px 8px;font-size:11px}
 @media(max-width:1360px){.app{grid-template-columns:84px 1fr}.brand span,.nav span,.side-foot{display:none}.nav button,.nav a{justify-content:center;padding:12px}.iframe-shell{left:84px;width:calc(100vw - 84px);max-width:none}.hero,.grid-main{grid-template-columns:1fr}.hero>.panel:nth-child(2)>.panel-b{max-height:460px}.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:820px){.app{grid-template-columns:1fr}.side{display:none}.iframe-shell{left:0;max-width:100vw}.top{position:static;height:auto;min-height:58px;padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.top h1{flex:1 0 100%;font-size:17px;line-height:1.3}.top .pill.good{display:none}.top #brokerBadge{order:2;max-width:calc(100% - 8px)}.top .grow{display:none}.top .btn{padding:8px 10px}.hero,.grid-main,.flow,.kpis,.split,.check-grid,.module-grid{grid-template-columns:1fr}.main{padding:12px}.iframe-shell{grid-template-rows:58px 1fr}}
@@ -59,7 +60,10 @@ def build_auto_trading_workbench_ui() -> str:
 .sector-link{color:#67e8f9!important;font-weight:800;text-decoration:underline;text-underline-offset:3px}.sector-link:hover{color:#ecfeff!important}
 .global-market-panel{margin-bottom:14px}.global-market-summary{display:grid;grid-template-columns:210px minmax(0,1fr);gap:14px;align-items:center}.global-market-score{border-right:1px solid var(--line);padding-right:14px}.global-market-score b{display:block;font-size:28px;margin:4px 0}.global-market-score span,.global-market-score small{display:block;color:var(--muted);font-size:12px;line-height:1.45;overflow-wrap:anywhere}.global-focus-select{max-width:180px;background:#0d1728;border:1px solid #315077;border-radius:8px;color:#dbeafe;padding:7px 9px;font-size:12px}.global-market-evidence{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.global-market-item{min-width:0;border-left:3px solid #22d3ee;padding:5px 8px;background:#0d1728}.global-market-item.industry{border-left-color:#f59e0b}.global-market-item b,.global-market-item span,.global-market-item small{display:block;overflow-wrap:anywhere}.global-market-item span{font-size:12px;margin:3px 0}.global-market-item small{color:var(--muted);font-size:11px;line-height:1.4}.global-market-role{display:inline-flex!important;width:max-content;padding:2px 6px;border:1px solid #31527d;border-radius:4px;color:#bfdbfe!important;margin-bottom:4px}.global-market-item.industry .global-market-role{border-color:#92400e;color:#fbbf24!important}.global-market-item a{display:inline-flex;color:#67e8f9;font-size:11px;margin-top:4px;text-decoration:underline}.global-market-policy{margin-top:9px;color:var(--muted);font-size:11px;line-height:1.5}.global-market-policy summary{cursor:pointer;color:#bfdbfe;font-weight:800}@media(max-width:1100px){.global-market-summary{grid-template-columns:1fr}.global-market-score{border-right:0;border-bottom:1px solid var(--line);padding:0 0 10px}.global-market-evidence{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.global-market-evidence{grid-template-columns:1fr}.global-focus-select{max-width:100%}}
 .capital-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}.capital-card{border:1px solid #2f4364;background:#0d1728;border-radius:9px;padding:9px;min-width:0}.capital-card b,.capital-card span,.capital-card small{display:block;overflow-wrap:anywhere}.capital-card b{font-size:15px;margin:3px 0}.capital-card span,.capital-card small{font-size:11px;line-height:1.45;color:var(--muted)}.capital-links{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}.capital-links a{color:#93c5fd;text-decoration:underline;font-size:11px}.capital-window{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:7px}.capital-window span{border:1px solid #29405f;border-radius:6px;padding:5px 2px;text-align:center;color:#cfe1ff;font-size:10px}.capital-window b{font-size:10px!important;line-height:1.25;white-space:nowrap;overflow-wrap:normal!important;margin:2px 0 0}@media(max-width:640px){.capital-grid{grid-template-columns:1fr}.capital-window{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.score-trend{border:1px solid #2f4364;background:#091425;border-radius:9px;padding:8px;margin-bottom:10px}.score-trend-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}.score-trend-head b{font-size:12px}.score-trend-head span{color:var(--muted);font-size:11px;overflow-wrap:anywhere}.score-trend canvas{display:block;width:100%;height:118px}.score-legend{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:10px}.score-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px}
+.score-trend{border:1px solid #2f4364;background:#091425;border-radius:9px;padding:8px;margin-bottom:0}.score-trend-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}.score-trend-head b{font-size:12px}.score-trend-head span{color:var(--muted);font-size:11px;overflow-wrap:anywhere}.score-trend canvas{display:block;width:100%;height:84px}.score-legend{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:10px}.score-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px}.grid-main>.stack{display:contents}.home-score-layout{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(0,1.1fr);gap:14px;align-items:start}.home-score-primary,.home-score-secondary{display:grid;gap:8px;align-content:start;min-width:0}#homeScorePanel{grid-column:1/-1;grid-row:1}#homeStatusPanel{grid-column:1;grid-row:2}#homePaperPanel{grid-column:2;grid-row:2}#homePortfolioPanel{grid-column:3;grid-row:2}#homeScorePanel .bars{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}#homeScorePanel .bars>div{min-width:0;border:1px solid #243653;background:#0b1628;border-radius:8px;padding:6px}#homeScorePanel .bars .row{font-size:11px;gap:4px}#homeScorePanel .barline{height:5px;margin-top:4px}#homeScorePanel .score-explain{margin-top:0}
+@media(max-width:1360px) and (min-width:1051px){#homeScorePanel{grid-column:1/-1;grid-row:1}#homeStatusPanel{grid-column:1;grid-row:2}#homePaperPanel{grid-column:2;grid-row:2}#homePortfolioPanel{grid-column:1/-1;grid-row:3}}
+@media(max-width:1050px){.home-score-layout{grid-template-columns:1fr}#homeScorePanel,#homeStatusPanel,#homePaperPanel,#homePortfolioPanel{grid-column:1;grid-row:auto}}
+@media(max-width:720px){#homeScorePanel .bars{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
@@ -98,7 +102,7 @@ def build_auto_trading_workbench_ui() -> str:
         <div class="panel">
           <div class="panel-h"><span>交易工作流</span><span class="muted">筛选 → 配置 → 回测 → 模拟 → 实盘确认</span></div>
           <div class="panel-b">
-            <div class="notice">这个首页只做总览和关键动作。左侧列表点击后，会在右侧覆盖打开原来的页面 iframe；关闭或切换模块时会释放旧 iframe，避免页面越开越慢。所有旧页面入口仍保留。</div>
+            <div class="notice">这个首页只做总览和关键动作。点击左侧模块后，会在右侧打开完整功能页；关闭或切换模块时会释放旧页面，避免越用越慢。原有功能和独立页面入口全部保留。</div>
             <div class="flow" style="margin-top:12px">
               <div class="step"><strong><i>1</i>先筛选</strong><p>股票池、四面评分、风险标签和策略适配是自动交易方向的来源。</p><div class="row"><button class="btn" onclick="openModule('screener')">打开筛选</button></div></div>
               <div class="step"><strong><i>2</i>一键配置</strong><p>从筛选结果生成策略组合、仓位、止损止盈、最大回撤和事件监控。</p><div class="row"><button class="btn green" onclick="oneClickConfig(this)">一键配置</button></div></div>
@@ -108,16 +112,22 @@ def build_auto_trading_workbench_ui() -> str:
           </div>
         </div>
         <div class="panel">
-          <div class="panel-h"><span>联网智能辅助</span><button class="btn" onclick="loadAgentBrief(true)">联网AI研判</button></div>
+          <div class="panel-h"><span>联网智能辅助 · 多角色证据复核</span><button class="btn" onclick="loadAgentBrief(true)">联网复核</button></div>
           <div class="panel-b">
             <div class="agent-box"><b>用途边界</b>只读取真实可追溯数据源和缓存；没有数据时显示缺失/过期，不生成假新闻。当前用于解释宏观、全球商品、非农/CPI/FOMC 等客观因素可能带来的风险，不直接等于买卖建议。</div>
-            <div class="agent-decision" id="agentDecision"><b>智能体结论加载中...</b><span>正在聚合金十快讯、全球宏观事件、评分溯源和实盘安全门控。</span></div>
-            <div class="ticker-wrap" id="globalTicker"><div class="ticker-label">7x24 快讯</div><div class="ticker-rail"><div class="ticker-track" id="globalTickerTrack"><span class="ticker-item"><b>等待</b><span>正在读取金十/全球要闻缓存...</span></span></div></div></div>
-            <div class="stream-head"><b>全球实时要闻流</b><span class="row"><span class="pill" id="globalStreamStatus">等待加载</span><button class="btn" onclick="loadGlobalStream(true)">联网刷新</button><button class="btn" id="tickerPauseBtn" onclick="toggleGlobalTicker()">暂停轮播</button></span></div>
-            <div class="source-strip" id="globalStreamSources"><span>金十直连状态等待中</span></div>
-            <div class="feed compact stream-list" id="globalStream"><div class="feed-item"><b>等待加载全球快讯...</b><span>优先使用金十/金十期货、东方财富、华尔街见闻、财联社等真实来源；不可用时显示缺失原因。</span></div></div>
-            <div class="stream-head"><b>宏观事件观察</b><span class="muted">非农 / CPI / FOMC / 商品 / 地缘</span></div>
-            <div class="feed compact" id="macroFeed"><div class="feed-item"><b>等待加载全球信息面...</b><span>会优先使用缓存，手动联网刷新可能更慢。</span></div></div>
+            <div class="agent-decision" id="agentDecision"><b>多角色复核加载中...</b><span>正在分别核验评分技术、基本面、信息面、资金主线和大盘环境，再交给独立风控裁决。</span></div>
+            <details class="home-overview-details">
+              <summary>展开全球快讯、来源与宏观证据</summary>
+              <div class="home-overview-body">
+                <div class="home-overview-note">首页只显示智能摘要；这里展开后可核对原始快讯、来源链接、影响对象和事件时效。</div>
+                <div class="ticker-wrap" id="globalTicker"><div class="ticker-label">7x24 快讯</div><div class="ticker-rail"><div class="ticker-track" id="globalTickerTrack"><span class="ticker-item"><b>等待</b><span>正在读取金十/全球要闻缓存...</span></span></div></div></div>
+                <div class="stream-head"><b>全球实时要闻流</b><span class="row"><span class="pill" id="globalStreamStatus">等待加载</span><button class="btn" onclick="loadGlobalStream(true)">联网刷新</button><button class="btn" id="tickerPauseBtn" onclick="toggleGlobalTicker()">暂停轮播</button></span></div>
+                <div class="source-strip" id="globalStreamSources"><span>金十直连状态等待中</span></div>
+                <div class="feed compact stream-list" id="globalStream"><div class="feed-item"><b>等待加载全球快讯...</b><span>优先使用金十/金十期货、东方财富、华尔街见闻、财联社等真实来源；不可用时显示缺失原因。</span></div></div>
+                <div class="stream-head"><b>宏观事件观察</b><span class="muted">非农 / CPI / FOMC / 商品 / 地缘</span></div>
+                <div class="feed compact" id="macroFeed"><div class="feed-item"><b>等待加载全球信息面...</b><span>会优先使用缓存，手动联网刷新可能更慢。</span></div></div>
+              </div>
+            </details>
           </div>
         </div>
       </section>
@@ -141,7 +151,7 @@ def build_auto_trading_workbench_ui() -> str:
         <div class="panel-b">
           <div class="sector-summary"><div><b id="sectorHeadline">板块数据加载中...</b><div class="sector-method" id="sectorMethod">强度综合涨跌幅、公开资金净流、上涨宽度和换手参与度；不是 Level-2 主力账户识别。</div></div><span class="pill" id="sectorStatus">等待来源</span></div>
           <div class="sector-rotation" id="sectorRotation"><div><b>等待日内快照</b><span>至少两个真实快照后计算区间流入流出。</span></div></div>
-          <div class="sector-table-wrap"><table class="sector-table"><thead><tr><th>板块</th><th>阶段</th><th>强度</th><th>主线分</th><th>涨跌幅</th><th>当日累计净流</th><th>近5分</th><th>近15分</th><th>近30分</th><th>近60分</th><th>上午变化</th><th>下午变化</th><th>近5日净流</th><th>资金阶段</th><th>流向状态</th><th>资金占比</th><th>上涨/下跌</th><th>上涨宽度</th><th>近期持续</th><th>来源</th></tr></thead><tbody id="sectorRows"><tr><td colspan="20">正在读取真实板块数据...</td></tr></tbody></table></div>
+          <details class="sector-table-details"><summary>展开完整板块资金表（20列）</summary><div class="sector-table-wrap"><table class="sector-table"><thead><tr><th>板块</th><th>阶段</th><th>强度</th><th>主线分</th><th>涨跌幅</th><th>当日累计净流</th><th>近5分</th><th>近15分</th><th>近30分</th><th>近60分</th><th>上午变化</th><th>下午变化</th><th>近5日净流</th><th>资金阶段</th><th>流向状态</th><th>资金占比</th><th>上涨/下跌</th><th>上涨宽度</th><th>近期持续</th><th>来源</th></tr></thead><tbody id="sectorRows"><tr><td colspan="20">正在读取真实板块数据...</td></tr></tbody></table></div></details>
         </div>
       </section>
 
@@ -156,11 +166,11 @@ def build_auto_trading_workbench_ui() -> str:
 
       <section class="grid-main">
         <div class="stack">
-          <div class="panel">
+          <div class="panel home-internal-state" aria-hidden="true">
             <div class="panel-h"><span>模块入口</span><span class="muted">右侧覆盖 iframe</span></div>
             <div class="panel-b module-grid" id="moduleCards"></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="homeStatusPanel">
             <div class="panel-h"><span>关键状态</span><button class="btn" onclick="refreshAll(this)">刷新状态</button></div>
             <div class="panel-b">
               <table class="mini-table"><tbody id="workflowBody"><tr><td>加载中...</td></tr></tbody></table>
@@ -168,8 +178,8 @@ def build_auto_trading_workbench_ui() -> str:
           </div>
         </div>
 
-        <div class="stack">
-          <div class="panel" id="paperControl">
+        <div class="stack home-internal-state" aria-hidden="true">
+          <div class="panel home-internal-state" id="paperControl" aria-hidden="true">
             <div class="panel-h"><span>一键配置与组合策略</span><span class="muted">策略数量与模拟/回测共用</span></div>
             <div class="panel-b">
               <div class="quick-config">
@@ -258,43 +268,49 @@ def build_auto_trading_workbench_ui() -> str:
         </div>
 
         <div class="stack">
-          <div class="panel">
+          <div class="panel" id="homeScorePanel">
             <div class="panel-h"><span>当前个股评分与风险</span><span class="muted" id="scoreTime">--</span></div>
             <div class="panel-b">
-              <div class="row" style="justify-content:space-between;margin-bottom:10px"><b id="decisionAction" style="font-size:24px">等待评分</b><span class="pill" id="decisionScore">评分 --</span></div>
-              <div id="scorePolicyWeights" class="score-policy" aria-label="默认执行分目标权重（实际按策略与大盘自适应）"><span><b>30%</b>技术面</span><span><b>22%</b>基本面</span><span><b>20%</b>信息面</span><span><b>16%</b>资金面</span><span><b>12%</b>大盘情绪</span></div>
-              <div id="scorePolicySummary" class="muted" style="font-size:11px;line-height:1.5;margin:-4px 0 10px">按策略族和大盘环境选择有边界的权重、阈值与仓位；缺失项不补 50 分，剩余有效权重自动归一化。</div>
-              <div class="score-trend"><div class="score-trend-head"><b>评分走势</b><span id="dailyScoreStatus">正在读取每日交易池评分...</span><div class="grow"></div><button class="btn" onclick="runDailyScore(this)">保存今日评分</button></div><canvas id="scoreTrendCanvas" aria-label="每日与盘中评分走势"></canvas><div class="score-legend"><span><i style="background:#22c55e"></i>每日自动评分</span><span><i style="background:#60a5fa"></i>盘中评分</span><span><i style="background:#f59e0b"></i>手工筛选</span></div></div>
-              <div class="bars">
+              <div class="home-score-layout">
+                <div class="home-score-primary">
+                  <div class="row" style="justify-content:space-between"><b id="decisionAction" style="font-size:22px">等待评分</b><span class="pill" id="decisionScore">评分 --</span></div>
+                  <div id="scorePolicyWeights" class="score-policy" aria-label="默认执行分目标权重（实际按策略与大盘自适应）"><span><b>30%</b>技术面</span><span><b>22%</b>基本面</span><span><b>20%</b>信息面</span><span><b>16%</b>资金面</span><span><b>12%</b>大盘情绪</span></div>
+                  <div id="scorePolicySummary" class="muted" style="font-size:11px;line-height:1.5">按策略族和大盘环境选择有边界的权重、阈值与仓位；缺失项不补 50 分，剩余有效权重自动归一化。</div>
+                  <div class="score-trend"><div class="score-trend-head"><b>评分走势</b><span id="dailyScoreStatus">正在读取每日交易池评分...</span><div class="grow"></div><button class="btn" onclick="runDailyScore(this)">保存今日评分</button></div><canvas id="scoreTrendCanvas" aria-label="每日与盘中评分走势"></canvas><div class="score-legend"><span><i style="background:#22c55e"></i>每日自动评分</span><span><i style="background:#60a5fa"></i>盘中评分</span><span><i style="background:#f59e0b"></i>手工筛选</span></div></div>
+                </div>
+                <div class="home-score-secondary">
+                  <div class="bars">
                 <div><div class="row" style="justify-content:space-between"><span>技术面</span><b id="techScore">--</b></div><div class="barline"><i id="techBar"></i></div></div>
                 <div><div class="row" style="justify-content:space-between"><span>基本面</span><b id="fundScore">--</b></div><div class="barline"><i id="fundBar"></i></div></div>
                 <div><div class="row" style="justify-content:space-between"><span>信息面</span><b id="infoScore">--</b></div><div class="barline"><i id="infoBar"></i></div></div>
                 <div><div class="row" style="justify-content:space-between"><span>资金面</span><b id="flowScore">--</b></div><div class="barline"><i id="flowBar"></i></div></div>
                 <div><div class="row" style="justify-content:space-between"><span>大盘情绪</span><b id="marketScore">--</b></div><div class="barline"><i id="marketBar"></i></div></div>
-              </div>
-              <div id="globalScoreContribution" class="mini">当前个股的全球行业走势参照：等待策略与行情快照。</div>
-              <details class="score-explain">
+                  </div>
+                  <div id="globalScoreContribution" class="mini">当前个股的全球行业走势参照：等待策略与行情快照。</div>
+                  <details class="score-explain">
                 <summary>这个分数怎么来的</summary>
                 <div id="scoreExplain" class="score-explain-body"><span class="muted">等待最新实时模拟信号；尚无信号时显示最近一次评分溯源。</span></div>
-              </details>
-              <details class="score-explain">
+                  </details>
+                  <details class="score-explain">
                 <summary>基本/技术/信息/资金、大盘与自动入场门禁</summary>
                 <div id="dimensionReadiness" class="score-explain-body"><span class="muted">正在核对本轮技术面、信息面、资金面和大盘证据。</span></div>
-              </details>
-              <details class="score-explain">
+                  </details>
+                  <details class="score-explain">
                 <summary>个股资金流与机构持仓披露</summary>
                 <div class="score-explain-body"><div class="row" style="justify-content:space-between"><span class="pill" id="capitalEvidenceStatus">等待资金证据</span><button class="btn" onclick="loadCapitalEvidence(true,this)">刷新真实来源</button></div><div id="capitalEvidence"><span class="muted">正在读取公开日资金流、当日分时量价、5/15/30/60分钟窗口和基金持仓披露。</span></div></div>
-              </details>
+                  </details>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="panel">
+          <div class="panel" id="homePaperPanel">
             <div class="panel-h"><span>模拟账户/持仓</span><div class="row"><button class="btn" onclick="runDuePositionReviews(this)">检查每日复核</button><button class="btn" onclick="reviewPaperPositions(this)">复核全部持仓</button><button class="btn" onclick="openModule('realtime')">详情</button></div></div>
             <div class="panel-b">
               <div id="sessionSnapshot" class="notice">暂无 active session</div>
               <details class="dashboard-fold"><summary>展开自动复评、持仓复核和会话计数</summary><div class="dashboard-fold-body"><div id="paperSchedulerStatus" class="notice">正在读取服务端自动复评状态...</div><div id="reviewScheduleStatus" class="notice" style="margin-top:8px">正在读取每日持仓复核计划...</div><div id="paperPositionReviews" class="position-review-list"><span class="muted">有持仓后可执行每日复核；复核不会绕过实时模拟内核创建订单。</span></div><table class="mini-table"><tbody id="sessionRows"><tr><td>等待 session...</td></tr></tbody></table></div></details>
             </div>
           </div>
-          <div class="panel">
+          <div class="panel home-internal-state" id="homeLiveSafetyPanel" aria-hidden="true">
             <div class="panel-h"><span>实盘安全</span><div class="row"><button class="btn" onclick="reviewLivePositions(this)">只读持仓复核</button><button class="btn red" onclick="killLive(this)">Kill</button></div></div>
             <div class="panel-b">
               <div class="notice" id="liveSafety">真实交易默认关闭。未配置券商 SDK、环境变量、账号授权时只显示“已关闭/不支持”。</div>
@@ -351,7 +367,7 @@ MOBILE_ALERT_COOLDOWN_SECONDS=60</pre></details>
               </div></details>
             </div>
           </div>
-          <div class="panel">
+          <div class="panel" id="homePortfolioPanel">
             <div class="panel-h"><span>资金/持仓/流水总览</span><button class="btn" onclick="openModule('records')">完整记录</button></div>
             <div class="panel-b">
               <div id="portfolioOverview" class="notice">正在读取实盘安全账户、模拟账户和统一交易流水...</div>
@@ -361,7 +377,7 @@ MOBILE_ALERT_COOLDOWN_SECONDS=60</pre></details>
               </table></div></details>
             </div>
           </div>
-          <div class="panel">
+          <div class="panel home-internal-state" id="homeAuditPanel" aria-hidden="true">
             <div class="panel-h"><span>审计日志</span><span class="muted">最近动作</span></div>
             <div class="panel-b"><details class="dashboard-fold" style="margin-top:0"><summary>展开最近动作与原始响应</summary><div class="dashboard-fold-body"><div class="log" id="auditLog">Ready.</div></div></details></div>
           </div>
@@ -375,29 +391,32 @@ MOBILE_ALERT_COOLDOWN_SECONDS=60</pre></details>
     <b id="workspaceTitle">模块页面</b>
     <span class="pill" id="workspaceStatus">未打开</span>
     <div class="grow"></div>
-    <button class="btn" onclick="reloadWorkspaceFrame()">刷新 iframe</button>
+    <button class="btn" onclick="reloadWorkspaceFrame()">刷新页面</button>
     <button class="btn" onclick="openWorkspaceInNewWindow()">新窗口</button>
     <button class="btn red" onclick="closeWorkspace()">关闭</button>
   </header>
-  <iframe id="workspaceFrame" class="workspace-frame" title="V3.27 自动交易右侧模块 iframe" src="about:blank"></iframe>
+  <iframe id="workspaceFrame" class="workspace-frame" title="V3.28 自动交易右侧模块 iframe" src="about:blank"></iframe>
 </section>
 <div class="action-toast" id="actionToast" role="status" aria-live="polite"></div>
 <script>
 const $=id=>document.getElementById(id);
 const MODULES={
-  screener:{label:'股票筛选',icon:'筛',url:()=>'/screener',desc:'股票池、四面评分、风险标签、一键加入回测/模拟/实盘观察。'},
-  quote:{label:'分时盘口',icon:'时',url:()=>'/ui?symbol='+encodeURIComponent(primarySymbol())+'&frame=time',desc:'分时、五档盘口、盘口观察、资金行为和当日状态。'},
-  detail:{label:'K线详情',icon:'K',url:()=>'/detail/'+encodeURIComponent(primarySymbol())+'?frame=1d',desc:'日K/周K/月K、技术因子、异常标注、信息面与资金面。'},
-  backtest:{label:'历史回测',icon:'测',url:()=>'/backtest?symbol='+encodeURIComponent(primarySymbol()),desc:'用同一套配置验证收益、回撤、买卖流水和策略跑输原因。'},
-  realtime:{label:'实时模拟',icon:'模',url:()=>'/realtime-paper',desc:'真实行情驱动 paper trading，记录订单、成交、持仓、审计和图表 marker。'},
-  live:{label:'真实交易',icon:'实',url:()=>'/live-trading',desc:'QMT、PTrade、本地 HTTP 券商桥、确认队列和紧急停止。'},
-  broker:{label:'券商接入向导',icon:'接',url:()=>'/broker-setup',desc:'分步配置 QMT、PTrade、同花顺桌面伴随或券商授权执行桥，并只读检查安全开关。'},
-  records:{label:'交易记录',icon:'录',url:()=>'/trading-records',desc:'回测、模拟、真实交易统一流水。'},
-  data:{label:'数据中心',icon:'数',url:()=>'/data-center',desc:'缓存、缺失字段、数据源错误、券商状态。'},
-  docs:{label:'中文 API',icon:'?',url:()=>'/docs-cn',desc:'中文接口说明和调试入口。'}
+  screener:{label:'股票筛选',icon:'筛',url:()=>'/screener?embedded=1',desc:'股票池、四面评分、风险标签、一键加入回测/模拟/实盘观察。'},
+  quote:{label:'分时盘口',icon:'时',url:()=>'/ui?symbol='+encodeURIComponent(primarySymbol())+'&frame=time&embedded=1',desc:'分时、五档盘口、盘口观察、资金行为和当日状态。'},
+  detail:{label:'K线详情',icon:'K',url:()=>'/detail/'+encodeURIComponent(primarySymbol())+'?frame=1d&embedded=1',desc:'日K/周K/月K、技术因子、异常标注、信息面与资金面。'},
+  backtest:{label:'历史回测',icon:'测',url:()=>'/backtest?symbol='+encodeURIComponent(primarySymbol())+'&embedded=1',desc:'用同一套配置验证收益、回撤、买卖流水和策略跑输原因。'},
+  realtime:{label:'实时模拟',icon:'模',url:()=>'/realtime-paper?embedded=1',desc:'真实行情驱动 paper trading，记录订单、成交、持仓、审计和图表 marker。'},
+  live:{label:'真实交易',icon:'实',url:()=>'/live-trading?embedded=1',desc:'QMT、PTrade、本地 HTTP 券商桥、确认队列和紧急停止。'},
+  broker:{label:'券商接入向导',icon:'接',url:()=>'/broker-setup?embedded=1',desc:'分步配置 QMT、PTrade、同花顺桌面伴随或券商授权执行桥，并只读检查安全开关。'},
+  records:{label:'交易记录',icon:'录',url:()=>'/trading-records?embedded=1',desc:'回测、模拟、真实交易统一流水。'},
+  data:{label:'数据中心',icon:'数',url:()=>'/data-center?embedded=1',desc:'缓存、缺失字段、数据源错误、券商状态。'},
+  docs:{label:'中文 API',icon:'?',url:()=>'/docs-cn?embedded=1',desc:'中文接口说明和调试入口。'}
 };
-MODULES.quote.url=()=>'/ui?symbol='+encodeURIComponent(primarySymbol())+'&frame=time&embedded=1';
-MODULES.detail.url=()=>'/detail/'+encodeURIComponent(primarySymbol())+'?frame=1d&embedded=1';
+const MODULE_PATHS={
+  '/screener':'screener','/ui':'quote','/backtest':'backtest','/realtime-paper':'realtime',
+  '/live-trading':'live','/broker-setup':'broker','/trading-records':'records',
+  '/data-center':'data','/docs-cn':'docs','/info':'detail'
+};
 let lastAutoConfig=null;
 let activeSessionId='';
 let currentModule='';
@@ -425,7 +444,8 @@ function arrangeDashboardPanels(){
   const width=window.innerWidth;
   const layoutKey=width>1360?'wide':width>1050?'medium':'narrow';
   if(layoutKey===dashboardLayoutKey)return;
-  const plan=layoutKey==='wide'?[[6,0],[3,1,2],[4,5,7]]:layoutKey==='medium'?[[3,0,6],[4,1,2,5,7]]:[[0,3,2,4,5,6,1,7]];
+  // V3.27 旧布局参考：layoutKey==='medium'?[[3,0,6],[4,1,2,5,7]]；V3.28 只排列首页总览，隐藏状态节点仍保留在 DOM 供模块共用。
+  const plan=layoutKey==='wide'?[[6,1,0,2,5,7],[3],[4]]:layoutKey==='medium'?[[6,1,0,2,5,7],[3,4]]:[[6,3,4,1,0,2,5,7]];
   const columns=plan.map(indexes=>{
     const column=document.createElement('div');
     column.className='stack';
@@ -495,12 +515,26 @@ arrangeDashboardPanels();
 function markNav(key){
   document.querySelectorAll('#moduleNav button').forEach(btn=>btn.classList.toggle('active',btn.dataset.module===key || (!key && !btn.dataset.module)));
 }
+function embeddedModuleUrl(raw){
+  const parsed=new URL(raw||'/',location.origin);
+  if(parsed.origin!==location.origin)return raw;
+  if(parsed.pathname==='/auto-trading')return '/auto-trading';
+  parsed.searchParams.set('embedded','1');
+  return parsed.pathname+parsed.search+parsed.hash;
+}
+function moduleKeyFromUrl(raw){
+  try{
+    const parsed=new URL(raw,location.origin);
+    if(parsed.pathname.startsWith('/detail/'))return 'detail';
+    if(parsed.pathname==='/backtest/trades')return 'backtest';
+    return MODULE_PATHS[parsed.pathname]||'';
+  }catch(_error){return ''}
+}
 function openModule(key,urlOverride){
   const mod=MODULES[key]||MODULES.screener;
   let url=urlOverride||mod.url();
-  if((key==='quote'||key==='detail')&&!/[?&]embedded=1\\b/.test(url)){
-    url+=url.includes('?')?'&embedded=1':'?embedded=1';
-  }
+  if(!/[?&]embedded=1\\b/.test(url))url=embeddedModuleUrl(url);
+  if(url==='/auto-trading'){closeWorkspace();return}
   const frame=$('workspaceFrame');
   if(currentModule && currentModule!==key)frame.src='about:blank';
   currentModule=key;
@@ -512,6 +546,41 @@ function openModule(key,urlOverride){
   markNav(key);
   setTimeout(()=>{frame.src=url},20);
 }
+function handleWorkspaceFrameLoad(){
+  const frame=$('workspaceFrame');
+  if(!frame||frame.src==='about:blank')return;
+  let win,doc,href;
+  try{win=frame.contentWindow;doc=frame.contentDocument;href=win.location.href}catch(_error){return}
+  if(!doc||!href)return;
+  const parsed=new URL(href,location.origin);
+  if(parsed.pathname==='/auto-trading'){
+    frame.src='about:blank';
+    closeWorkspace();
+    showActionToast('已返回总控台首页，未在 iframe 内重复嵌套','good');
+    return;
+  }
+  const detected=moduleKeyFromUrl(href);
+  if(detected&&detected!==currentModule){currentModule=detected;markNav(detected)}
+  doc.documentElement.dataset.workbenchEmbedded='1';
+  doc.addEventListener('click',event=>{
+    const anchor=event.target?.closest?.('a[href]');
+    if(!anchor||anchor.target==='_blank'||event.ctrlKey||event.metaKey||event.shiftKey)return;
+    let target;
+    try{target=new URL(anchor.href,location.origin)}catch(_error){return}
+    if(target.origin!==location.origin)return;
+    if(target.pathname==='/auto-trading'){
+      event.preventDefault();
+      closeWorkspace();
+      return;
+    }
+    const targetKey=moduleKeyFromUrl(target.href);
+    if(!targetKey)return;
+    event.preventDefault();
+    openModule(targetKey,embeddedModuleUrl(target.pathname+target.search+target.hash));
+  },true);
+  $('workspaceStatus').textContent=parsed.pathname+parsed.search;
+}
+$('workspaceFrame').addEventListener('load',handleWorkspaceFrameLoad);
 function closeWorkspace(){
   $('workspaceFrame').src='about:blank';
   currentModule='';
@@ -522,7 +591,11 @@ function closeWorkspace(){
   markNav('');
 }
 function reloadWorkspaceFrame(){if(currentWorkspaceUrl&&currentWorkspaceUrl!=='about:blank')$('workspaceFrame').src=currentWorkspaceUrl}
-function openWorkspaceInNewWindow(){if(currentWorkspaceUrl&&currentWorkspaceUrl!=='about:blank')window.open(currentWorkspaceUrl,'_blank','noopener')}
+function openWorkspaceInNewWindow(){
+  if(!currentWorkspaceUrl||currentWorkspaceUrl==='about:blank')return;
+  const parsed=new URL(currentWorkspaceUrl,location.origin);parsed.searchParams.delete('embedded');
+  window.open(parsed.pathname+parsed.search+parsed.hash,'_blank','noopener');
+}
 function strategyNameMap(cfg){const out={};(cfg?.strategy_catalog||[]).forEach(x=>{if(x?.key)out[String(x.key)]=String(x.name||x.key)});return out}
 function strategyLabel(key,cfg){
   const builtins={score_driven:'日常评分驱动',low_position:'低位修复',avoid_chasing_high:'高位追高过滤',source_reliability:'数据源可靠性',ma_repair:'均线修复',macd_cross:'MACD 金叉/多头',macd_hist_turn:'MACD 柱改善',volume_breakout:'温和放量',mfi_obv_resonance:'MFI/OBV 共振',rsi_kdj_resonance:'RSI/KDJ 共振',atr_risk:'ATR 风险过滤',position_risk:'仓位与止损',risk_control:'风险扣分',event_driven:'事件驱动',finance_quality:'财务质量',fundamental_quality:'基本面质量',cashflow_quality:'现金流质量',announcement_risk:'公告风险',policy_tailwind:'政策顺风',macro_liquidity:'宏观流动性',main_money_est:'主力资金估算',market_regime:'大盘情绪过滤',global_sector_reference:'全球行业走势参照',etf_liquidity:'ETF 流动性',adx_trend:'ADX 趋势'};
@@ -661,7 +734,7 @@ function renderWorkflow(state={}){
   setText('wfCombo',combo.length?combo.slice(0,3).map(k=>strategyLabel(k,cfg)).join(' / '):'未选择策略');
   $('workflowBody').innerHTML=[
     ['股票池',syms.length?syms.join(', '):'--'],
-    ['策略组合',combo.length?combo.map(k=>strategyLabel(k,cfg)).join('、'):'--'],
+    ['策略组合',combo.length?combo.slice(0,5).map(k=>strategyLabel(k,cfg)).join('、')+(combo.length>5?` 等 ${combo.length} 项`:''):'--'],
     ['仓位/风控',`${sizingLabel(cfg.position_sizing)}；止损 ${risk.stop_loss_pct??'--'}%；止盈 ${risk.take_profit_pct??'--'}%；最大回撤 ${risk.max_drawdown_pct??'--'}%`],
     ['事件监控','财报、半年报、公告、重大负面、政策/宏观事件'],
     ['实盘安全','默认关闭；需要券商授权、风控、确认队列和 kill switch']
@@ -927,6 +1000,9 @@ function impactTagsOf(x){
   return uniqueList([
     ...textList(x?.affected_companies),
     ...textList(x?.mapped_symbols).map(s=>`证券代码 ${s}`),
+    ...textList(x?.affected_products_cn),
+    ...textList(x?.affected_industries_cn),
+    ...textList(x?.affected_regions_cn),
     ...textList(x?.impact_targets),
     ...textList(x?.affected_sectors),
     ...textList(x?.affected_assets),
@@ -938,6 +1014,20 @@ function impactTagsOf(x){
 }
 function impactNoteOf(x){
   return x?.impact_note||x?.reason||x?.impact_scope||x?.sentiment_label||'仅作宏观、商品、政策或信息面风险观察，不直接等于买卖信号。';
+}
+function eventStatusHtml(x){
+  if(!x?.confirmation_level&&!x?.event_type)return '';
+  const confirmed=['official_confirmed','multi_source_confirmed'].includes(String(x.confirmation_level||''));
+  const isEvent=String(x.event_type||'')!=='general_information';
+  const eventType=x.event_type_cn||cnEnum(x.event_type||'一般信息');
+  const stage=x.event_stage_cn||cnEnum(x.event_stage||'阶段未知');
+  const confirmation=x.confirmation_level_cn||cnEnum(x.confirmation_level||'待复核');
+  const gate=x.trade_gate_cn||cnEnum(x.trade_gate||'仅观察');
+  const use=x.decision_use_cn||(!isEvent?'仅展示，不进入评分':confirmed?'确认后可进入映射评分':'提前预警，暂不计分');
+  const scope=x.decision_scope_cn||'尚无可验证传导对象';
+  const merged=Math.max(Number(x.event_cluster_size||0),Number(x.duplicate_count||0));
+  const directionReason=x.event_direction_reason_cn?`<div class="impact-summary"><b>方向依据：</b>${esc(x.event_direction_reason_cn)}</div>`:'';
+  return `<div class="impact-row"><span class="impact-tag">${!isEvent?'普通快讯':confirmed?'已确认':'早期线索'}</span><span class="impact-tag">${esc(eventType)}</span><span class="impact-tag">${esc(stage)}</span><span class="impact-tag">${esc(confirmation)}</span>${merged>1?`<span class="impact-tag">已合并 ${merged} 条同事件信息</span>`:''}</div><div class="impact-summary"><b>决策范围：</b>${esc(scope)}；<b>评分用途：</b>${esc(use)}；<b>交易用途：</b>${esc(gate)}</div>${directionReason}`;
 }
 function impactTagsHtml(x,prefix='影响对象'){
   const tags=impactTagsOf(x);
@@ -966,13 +1056,18 @@ function renderGlobalFeed(js){
     const latest=x.latest_title?`<div class="impact-summary"><b>最近命中：</b>${esc(x.latest_title)}${x.latest_source?` · ${esc(x.latest_source)}`:''}</div>`:'';
     return `<div class="feed-item"><time>${esc(cnEnum(x.status||'观察'))}</time><b>${esc(x.label||x.key)}</b><span>${esc(x.reason||x.missing_reason||'等待真实数据源命中')}</span>${impactTagsHtml(x,'影响维度')}${latest}${sourceMetaHtml(x)}${sourceLinksHtml(x,'打开命中来源')}</div>`;
   });
-  const itemRows=items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b><span><b>影响说明：</b>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`);
+  const itemRows=items.map(x=>`<div class="feed-item"><time>${esc(x.published_at||x.date||x.time||'时间缺失')}</time><b>${esc(x.title||x.summary||'未命名事件')}</b>${eventStatusHtml(x)}<span><b>影响说明：</b>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x)}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`);
   $('macroFeed').innerHTML=[...watchRows,...itemRows].join('');
 }
 function renderAgentDecision(js){
   const d=js.data||{};
   const ai=d.ai_analysis||{};
   const aiView=ai.analysis||{};
+  const review=d.multi_role_review||{};
+  const reviewRoles=(review.roles||[]).slice(0,8);
+  const debate=review.debate||{};
+  const riskCommittee=review.risk_committee||{};
+  const portfolioCommittee=review.portfolio_committee||{};
   const decisions=(d.symbol_decisions||[]).slice(0,6);
   const themeTrends=(d.theme_trends||[]).slice(0,10);
   const risks=(d.risk_flags||[]).slice(0,5);
@@ -983,6 +1078,16 @@ function renderAgentDecision(js){
     `<span>建议动作：${esc(cnAction(d.recommended_action||'--'))} · 置信度：${esc(cnEnum(d.confidence||'--'))} · 全球快讯 ${esc(d.global_flash_count??0)} 条 · 可跳转来源 ${esc(d.source_link_count??0)} 个 · ${esc(d.llm_status||'联网证据代理')}</span>`,
     '<div class="source-policy">来源说明：只读取金十/全球快讯、东方财富等真实来源与本地缓存；没有来源链接时会明确显示“无公开跳转链接”。宏观事件只进入信息面和风控解释，不会单独触发自动买入。</div>'
   ];
+  if(review.review_id){
+    const persisted=review.checkpoint?.persisted?'已写入审计':'本轮只读预览';
+    chunks.push(`<div class="impact-summary"><b>多角色复核 ${esc(review.review_id)}</b> · ${esc(riskCommittee.verdict_cn||'等待风险裁决')}<br>${esc(portfolioCommittee.action_cn||'保持观察')} · ${esc(persisted)} · 不能直接创建订单</div>`);
+    chunks.push(`<details class="dashboard-fold"><summary>展开五角色观点、正反辩论与复盘检查点</summary><div class="dashboard-fold-body"><div class="agent-evidence-list">${reviewRoles.map(role=>{
+      const support=(role.supporting_evidence||[]).slice(0,4).join('；');
+      const counter=(role.counter_evidence||[]).slice(0,4).join('；');
+      const missing=(role.missing_data||[]).slice(0,4).join('；');
+      return `<div class="agent-evidence"><time>${esc(role.label||role.role)} · ${esc(cnEnum(role.status||'--'))} · 置信度 ${esc(Math.round(Number(role.confidence||0)*100))}%</time><strong>${esc(role.stance||'观察')}</strong><small>${esc(role.summary||'暂无角色摘要')}</small>${support?`<div class="factor-up">支持：${esc(support)}</div>`:''}${counter?`<div class="factor-down">反证：${esc(counter)}</div>`:''}${missing?`<div class="source-note">缺失：${esc(missing)}</div>`:''}</div>`;
+    }).join('')}</div><div class="split" style="margin-top:8px"><div class="notice"><b>支持观点</b><br>${esc((debate.bull_case||[]).slice(0,6).join('；')||'没有足够支持证据')}</div><div class="notice"><b>反对观点</b><br>${esc((debate.bear_case||[]).slice(0,6).join('；')||'未发现额外反证')}</div></div><div class="notice" style="margin-top:8px"><b>风险委员会：</b>${esc(riskCommittee.verdict_cn||'等待裁决')}<br>${esc((riskCommittee.blocking_reasons||[]).slice(0,8).join('；')||'没有新增阻断项')}<br><b>复盘：</b>${esc(review.retrospective?.status||'等待结果')}，对照 ${esc((review.retrospective?.compare_with||[]).join('、')||'买入持有与宽基指数')}。</div></div></details>`);
+  }
   if(ai.ok&&aiView.summary){
     chunks.push(`<div class="agent-evidence"><time>外部模型 · 仅研究解释</time><strong>${esc(cnEnum(aiView.market_regime||'市场环境复核'))}</strong><small>${esc(aiView.summary)}</small>${(aiView.symbol_views||[]).slice(0,6).map(x=>`<div>${esc(x.symbol)} · ${esc(cnAction(x.action))}：${esc(x.reason)} <span class="muted">证据 ${esc((x.evidence_refs||[]).join(', ')||'缺失')}</span></div>`).join('')}<div class="risk">${esc((aiView.risks||[]).join('；')||'模型未补充额外风险')}；该结果不能创建、确认或提交订单。</div></div>`);
   }else if(ai.status&&ai.status!=='not_requested'){
@@ -1043,10 +1148,10 @@ function renderGlobalStream(js){
     $('globalStream').innerHTML=`<div class="feed-item"><time>${esc(data.updated_at||'')}</time><b>暂无可展示全球快讯</b><span>${esc(reason)}</span></div>`;
     return;
   }
-  const tickerItems=items.slice(0,24).map(x=>`<span class="ticker-item"><b>${esc(sourceLabelOf(x))}</b><span>${esc(x.title||'未命名快讯')}</span></span>`).join('');
+  const tickerItems=items.slice(0,24).map(x=>`<span class="ticker-item"><b>${esc(['official_confirmed','multi_source_confirmed'].includes(String(x.confirmation_level||''))?'已确认':'快讯')}</b><span>${esc(x.title||'未命名快讯')}</span></span>`).join('');
   $('globalTickerTrack').innerHTML=tickerItems+tickerItems;
   $('globalStream').innerHTML=items.slice(0,18).map(x=>{
-    return `<div class="feed-item ${x.is_jin10?'jin10':''}"><div class="stream-meta"><time>${esc(x.published_at||'时间缺失')}</time><i>${esc(sourceLabelOf(x))}</i><span>${esc(cnEnum(x.category||x.message_dimension||'全球快讯'))}</span></div><b>${esc(x.title||'未命名快讯')}</b><span>${esc(x.summary||'')}</span><span>来源：${esc(sourceLabelOf(x))}</span><span><b>影响说明：</b>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x,'影响对象')}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`;
+    return `<div class="feed-item ${x.is_jin10?'jin10':''}"><div class="stream-meta"><time>${esc(x.published_at||'时间缺失')}</time><i>${esc(sourceLabelOf(x))}</i><span>${esc(cnEnum(x.category||x.message_dimension||'全球快讯'))}</span></div><b>${esc(x.title||'未命名快讯')}</b>${eventStatusHtml(x)}<span>${esc(x.summary||'')}</span><span>来源：${esc(sourceLabelOf(x))}</span><span><b>影响说明：</b>${esc(impactNoteOf(x))}</span>${impactTagsHtml(x,'影响对象')}${sourceMetaHtml(x)}${sourceLinksHtml(x)}</div>`;
   }).join('');
 }
 
@@ -1192,7 +1297,7 @@ function renderGlobalMarketSentiment(js){
   $('globalMarketFocus').textContent=`${d.requested_symbol||primarySymbol()} · ${d.focus_label||'全球宽基背景'} · ${d.selection_mode||'等待映射'}`;
   $('globalMarketLabel').textContent=(d.label||'数据不足')+' · '+(valid?'可供环境策略使用，是否计分由“全球行业走势参照”开关决定，权重上限15%':'证据不足，不进入自动交易分');
   const status=$('globalMarketStatus');const cache=d.cache_status||{};status.textContent=`${d.focus_label||'宽基'} · ${cnEnum(d.quality_status||'missing')} · ${selected.length}组 · ${cnEnum(cache.status||'--')}`;status.className='pill '+(valid?'good':'warn');
-  $('globalMarketEvidence').innerHTML=selected.length?selected.map(x=>{
+  $('globalMarketEvidence').innerHTML=selected.length?selected.slice(0,4).map(x=>{
     const change=Number(x.change_pct);const href=x.source_ref||'';const phase=x.session_phase||'时段未知';const weight=Number(x.normalized_weight);
     const role=x.benchmark_role||'全球背景';
     return `<div class="global-market-item ${role==='行业基准'?'industry':''}"><small class="global-market-role">${esc(role)}</small><b>${esc(x.name||x.key||'全球市场')}</b><span class="${pnlClass(change)}">${Number.isFinite(change)?(change>0?'+':'')+change.toFixed(2)+'%':'涨跌缺失'} · ${esc(phase)}</span><small>${esc(x.observed_at||'行情时间缺失')}｜实际权重 ${Number.isFinite(weight)?(weight*100).toFixed(0)+'%':'--'}</small><small>${esc(x.phase_reason||'')}</small>${href?`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">查看行情来源</a>`:''}</div>`;
@@ -1235,7 +1340,7 @@ function renderScoreTrend(payload,status){
   const canvas=$('scoreTrendCanvas');if(!canvas)return;
   const rows=(payload?.data||[]).filter(x=>finiteNumber(x.final_score)!==null);
   const box=canvas.getBoundingClientRect();const dpr=Math.max(1,window.devicePixelRatio||1);
-  const width=Math.max(320,Math.round(box.width||canvas.clientWidth||640));const height=Math.max(132,Math.round(box.height||158));
+  const width=Math.max(320,Math.round(box.width||canvas.clientWidth||640));const height=Math.max(84,Math.round(box.height||96));
   canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
   const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
   const pad={left:34,right:12,top:12,bottom:24};const plotW=width-pad.left-pad.right;const plotH=height-pad.top-pad.bottom;

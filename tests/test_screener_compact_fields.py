@@ -30,8 +30,9 @@ def test_long_text_uses_clipping_classes():
 
     assert "cell-clip" in html
     assert "cell-wrap-2" in html
-    assert 'title="${htmlEsc(r.technical_signal_summary' in html
-    assert 'title="${htmlEsc(r.comprehensive_diagnosis' in html
+    assert "technical_signal_summary||'--'" in html
+    assert "r.comprehensive_diagnosis||r.reason||'--'" in html
+    assert "更多字段在右侧详情卡展示" in html
 
 
 def test_label_explain_uses_selected_row_snapshot_context():

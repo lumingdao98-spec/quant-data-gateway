@@ -10,6 +10,7 @@ def test_auto_trading_workbench_page_visible():
     assert "首页总览 + 右侧覆盖模块" in html
     assert "交易工作流" in html
     assert "联网智能辅助" in html
+    assert "多角色证据复核" in html
     assert "主线板块 · 日内资金轮动与近期强度" in html
     assert "近15分" in html
     assert "近5分钟" in html
@@ -65,6 +66,12 @@ def test_auto_trading_workbench_page_visible():
     assert "sourceLinksHtml" in html
     assert "impactTagsOf" in html
     assert "impactNoteOf" in html
+    assert "eventStatusHtml" in html
+    assert "早期线索" in html
+    assert "交易用途" in html
+    assert "decision_scope_cn" in html
+    assert "decision_use_cn" in html
+    assert "已合并 ${merged} 条同事件信息" in html
     assert "renderGlobalFeed" in html
     assert "renderGlobalStreamSources" in html
     assert "source-link" in html
@@ -93,6 +100,9 @@ def test_auto_trading_workbench_page_visible():
     assert "livePreviewSummary" in html
     assert "agentDecision" in html
     assert "renderAgentDecision" in html
+    assert "multi_role_review" in html
+    assert "展开五角色观点、正反辩论与复盘检查点" in html
+    assert "风险委员会" in html
     assert "symbol_global_impacts" in html
     assert "source_link_count" in html
     assert "个股影响映射" in html
@@ -144,6 +154,13 @@ def test_auto_trading_workbench_page_visible():
     assert ".hero>.panel:nth-child(2)>.panel-b{max-height:248px" in html
     assert ".grid-main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))" in html
     assert ".grid-main>.stack{display:grid;gap:14px;align-content:start" in html
+    assert ".grid-main>.stack{display:contents}" in html
+    assert 'id="homeScorePanel"' in html
+    assert 'class="home-score-layout"' in html
+    assert 'id="homeStatusPanel"' in html
+    assert 'id="homePaperPanel"' in html
+    assert 'id="homePortfolioPanel"' in html
+    assert "#homeScorePanel{grid-column:1/-1;grid-row:1}" in html
     assert "function arrangeDashboardPanels" in html
     assert "layoutKey==='medium'?[[3,0,6],[4,1,2,5,7]]" in html
     assert "dashboard-fold" in html
@@ -156,9 +173,53 @@ def test_auto_trading_workbench_uses_single_right_overlay_iframe():
     html = TestClient(api.app).get("/auto-trading").text
 
     assert "iframe-shell" in html
-    assert "width:calc(100vw - 268px)" in html
+    assert "width:calc(100vw - 228px)" in html
     assert 'id="workspaceFrame"' in html
     assert html.count('class="workspace-frame"') == 1
+    assert "addEventListener('load',handleWorkspaceFrameLoad)" in html
+    assert "function embeddedModuleUrl" in html
+    assert "function moduleKeyFromUrl" in html
+    assert "if(parsed.pathname==='/auto-trading')" in html
+
+
+def test_every_workbench_module_uses_embedded_shell():
+    client = TestClient(api.app)
+    workbench = client.get("/auto-trading").text
+
+    for path in (
+        "/screener?embedded=1",
+        "/realtime-paper?embedded=1",
+        "/live-trading?embedded=1",
+        "/broker-setup?embedded=1",
+        "/trading-records?embedded=1",
+        "/data-center?embedded=1",
+        "/docs-cn?embedded=1",
+    ):
+        assert path in workbench
+
+    for path in (
+        "/screener?embedded=1",
+        "/backtest?embedded=1",
+        "/realtime-paper?embedded=1",
+        "/live-trading?embedded=1",
+        "/broker-setup?embedded=1",
+        "/trading-records?embedded=1",
+        "/data-center?embedded=1",
+        "/info?embedded=1",
+        "/docs-cn?embedded=1",
+    ):
+        html = client.get(path).text
+        assert "qd-v328-embedded-module-shell" in html
+        assert "qd-embedded-module" in html
+        assert 'a[href="/auto-trading"]{display:none!important}' in html
+
+
+def test_embedded_realtime_keeps_three_readable_columns_in_workbench():
+    html = TestClient(api.app).get("/realtime-paper?embedded=1").text
+
+    assert "grid-template-columns:240px minmax(0,1fr) 260px!important" in html
+    assert "@media(max-width:960px)" in html
+    assert 'grid-template-areas:"side" "main" "right" "log"' in html
 
 
 def test_workbench_shows_exact_score_snapshot_freshness_and_fundamental_gate():

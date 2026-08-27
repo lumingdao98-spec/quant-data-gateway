@@ -120,7 +120,7 @@ class MarketDataService:
                     "name", "last", "pre_close", "open", "high", "low", "volume", "amount",
                     "change", "change_pct", "turnover", "amplitude", "pe_dynamic", "pb",
                     "volume_ratio", "total_market_cap", "float_market_cap", "asset_type",
-                    "market", "source",
+                    "market", "source", "industry",
                 ]:
                     value = getattr(fresh, field, None)
                     current = getattr(q, field, None)
@@ -164,7 +164,7 @@ class MarketDataService:
                 for field in [
                     "pe_dynamic", "pb", "total_market_cap", "float_market_cap",
                     "circulating_market_cap", "total_share", "float_share",
-                    "turnover", "volume_ratio", "amount",
+                    "turnover", "volume_ratio", "amount", "industry",
                 ]:
                     current = getattr(q, field, None)
                     value = getattr(fresh, field, None)

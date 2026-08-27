@@ -202,6 +202,34 @@ def test_global_stream_normalizer_preserves_traceable_source_fields():
     assert rows[0]["source_ref"] == "https://www.jin10.com/flash/123"
     assert rows[0]["source_api"] == "https://flash-api.jin10.com/get_flash_list"
     assert rows[0]["source_page"] == "https://www.jin10.com/"
+    assert rows[0]["event_type"] == "economic_data_release"
+    assert rows[0]["confirmation_level"] == "early_warning"
+    assert rows[0]["trade_gate"] == "observe"
+    assert rows[0]["decision_scope"] == "market"
+    assert rows[0]["decision_use"] == "early_warning"
+
+
+def test_global_stream_draft_negative_is_visible_but_never_promoted_to_trade_block():
+    rows = api._global_stream_items_from_rows(
+        [
+            {
+                "标题": "消息人士称某国正考虑限制中国芯片设备进口",
+                "内容": "sources say officials are considering an import ban on Chinese semiconductor equipment",
+                "_source_name": "金十数据7x24",
+                "_source_page": "https://flash.jin10.com/detail/v328-warning",
+                "发布时间": "2026-08-27 10:20:00",
+                "_content_quality_status": "structured_excerpt",
+            }
+        ]
+    )
+
+    assert rows[0]["event_type"] == "export_or_import_restriction"
+    assert rows[0]["event_stage"] == "draft"
+    assert rows[0]["confirmation_level"] == "early_warning"
+    assert rows[0]["event_direction"] == "negative"
+    assert rows[0]["trade_gate"] == "manual_review"
+    assert rows[0]["decision_scope"] == "industry"
+    assert rows[0]["decision_use"] == "early_warning"
 
 
 def test_generic_global_news_link_parser_keeps_href_available(monkeypatch):

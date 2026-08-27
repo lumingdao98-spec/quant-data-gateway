@@ -229,16 +229,15 @@ let strategyLibrary=[];let currentStrategyCategory='全部';let selectedStrategy
 function selectedStrategies(){return Array.from(selectedStrategyKeys)}
 function strategyCategories(){const order=['低位/价值','K线趋势','趋势跟随','动量/反转','量价/盘口','技术形态','支撑阻力','时间周期','能量/情绪','新闻/基本面','基本面/财务','消息面/事件驱动','宏观/大势','ETF/基金','均值回归','回测/风控/执行','风控过滤'];const cats=Array.from(new Set(strategyLibrary.map(x=>x.category||'其他')));return order.filter(x=>cats.includes(x)).concat(cats.filter(x=>!order.includes(x)).sort())}
 function renderStrategyTabs(){const cats=['全部',...strategyCategories()];$('strategyTabs').innerHTML=cats.map(c=>`<button class="${c===currentStrategyCategory?'active':''}" onclick="setStrategyCategory('${htmlEsc(c)}')">${htmlEsc(c)}</button>`).join('')}
-function syncStrategySelection(key,checked){if(checked)selectedStrategyKeys.add(key);else selectedStrategyKeys.delete(key);updateStrategySummary()}
-function renderStrategyLibrary(){const cats={};strategyLibrary.forEach(x=>{if(currentStrategyCategory!=='全部'&&x.category!==currentStrategyCategory)return;(cats[x.category]||(cats[x.category]=[])).push(x)});$('strategyBox').innerHTML=Object.entries(cats).map(([cat,items])=>`<div class="strategy-card"><div class="cat-title">${htmlEsc(cat)} <span class="small">${items.length}项</span></div>${items.map(it=>`<label><input class="strategy-check" type="checkbox" value="${htmlEsc(it.key)}" ${selectedStrategyKeys.has(it.key)?'checked':''} onchange="syncStrategySelection('${htmlEsc(it.key)}',this.checked)"><span><b>${htmlEsc(it.name)}</b><p>${htmlEsc(it.description)}</p><div class="meta">权重 ${fmt(it.default_weight??1,1)} · ${(it.tags||[]).map(htmlEsc).join(' / ')}</div></span></label>`).join('')}</div>`).join('')||'<div class="small">该分类暂无策略</div>';updateStrategySummary()}
+function syncStrategySelection(key,checked){if(checked)selectedStrategyKeys.add(key);else selectedStrategyKeys.delete(key);normalizeStrategySelection();updateStrategySummary()}
+function renderStrategyLibrary(){normalizeStrategySelection();const cats={};strategyLibrary.forEach(x=>{if(currentStrategyCategory!=='全部'&&x.category!==currentStrategyCategory)return;(cats[x.category]||(cats[x.category]=[])).push(x)});$('strategyBox').innerHTML=Object.entries(cats).map(([cat,items])=>`<div class="strategy-card"><div class="cat-title">${htmlEsc(cat)} <span class="small">${items.length}项</span></div>${items.map(it=>`<label><input class="strategy-check" type="checkbox" value="${htmlEsc(it.key)}" ${selectedStrategyKeys.has(it.key)?'checked':''} onchange="syncStrategySelection('${htmlEsc(it.key)}',this.checked)"><span><b>${htmlEsc(it.name)}</b><p>${htmlEsc(it.description)}</p><div class="meta">权重 ${fmt(it.default_weight??1,1)} · ${(it.tags||[]).map(htmlEsc).join(' / ')}</div></span></label>`).join('')}</div>`).join('')||'<div class="small">该分类暂无策略</div>';syncStrategyCheckboxes();updateStrategySummary()}
 function setStrategyCategory(cat){currentStrategyCategory=cat;renderStrategyTabs();renderStrategyLibrary()}
-async function loadStrategyLibrary(){try{const r=await fetch('/api/strategy/library',{cache:'no-store'});const js=await r.json();strategyLibrary=js.data||[];defaultStrategyKeys=new Set(strategyLibrary.filter(x=>x.enabled).map(x=>x.key));const saved=localStorage.getItem(LS_STRATEGIES);selectedStrategyKeys=saved?new Set(saved.split(',').map(x=>x.trim()).filter(Boolean)):new Set(defaultStrategyKeys);currentStrategyCategory='全部';renderStrategyTabs();renderStrategyLibrary()}catch(e){$('strategyBox').innerHTML='<div class="err">策略库加载失败：'+e+'</div>';if($('strategySummary'))$('strategySummary').innerHTML='<span class="err">策略库加载失败</span>'}}
-function updateStrategySummary(){const sel=selectedStrategies();if($('strategyCount'))$('strategyCount').textContent=`已选 ${sel.length} 项`;if($('strategySummary')){const map=Object.fromEntries(strategyLibrary.map(x=>[x.key,x]));$('strategySummary').innerHTML=sel.length?sel.slice(0,12).map(k=>`<span class="tag">${htmlEsc(map[k]?.name||k)}</span>`).join('')+(sel.length>12?`<span class="small"> 等${sel.length}项</span>`:''):'<span class="small">未选择策略，仍按筛选模式基础评分运行</span>'}renderStrategyInline()}
+function updateStrategySummary(){normalizeStrategySelection();const sel=selectedStrategies();if($('strategyCount'))$('strategyCount').textContent=`已选 ${sel.length} 项`;if($('strategySummary')){const map=Object.fromEntries(strategyLibrary.map(x=>[x.key,x]));$('strategySummary').innerHTML=sel.length?sel.slice(0,12).map(k=>`<span class="tag">${htmlEsc(map[k]?.name||k)}</span>`).join('')+(sel.length>12?`<span class="small"> 等${sel.length}项</span>`:''):'<span class="small">未选择策略，仍按筛选模式基础评分运行</span>'}renderStrategyInline();syncStrategyCheckboxes()}
 function renderStrategyInline(){const box=$('strategyInlineBox');if(!box)return;const list=(strategyLibrary.length?strategyLibrary:FALLBACK_STRATEGIES).slice(0,12);box.innerHTML=list.map(it=>`<label><input class="strategy-inline-check" type="checkbox" value="${htmlEsc(it.key)}" ${selectedStrategyKeys.has(it.key)?'checked':''} onchange="syncStrategySelection('${htmlEsc(it.key)}',this.checked)"><span><b>${htmlEsc(it.name)}</b><p>${htmlEsc(it.description||'')}</p></span></label>`).join('')||'<div class="small">暂无策略，仍可按筛选模式基础评分运行</div>'}
-function openStrategyModal(){document.getElementById('strategyModal').classList.add('show');renderStrategyTabs();renderStrategyLibrary()}
+function openStrategyModal(){if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');normalizeStrategySelection();document.getElementById('strategyModal').classList.add('show');renderStrategyTabs();renderStrategyLibrary()}
 function closeStrategyModal(){document.getElementById('strategyModal').classList.remove('show');updateStrategySummary()}
-function selectAllStrategies(flag){selectedStrategyKeys=flag?new Set(strategyLibrary.map(x=>x.key)):new Set();renderStrategyLibrary();updateStrategySummary()}
-function selectDefaultStrategies(){selectedStrategyKeys=new Set(defaultStrategyKeys);renderStrategyLibrary();updateStrategySummary()}
+function selectAllStrategies(flag){if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');selectedStrategyKeys=flag?new Set(strategyLibrary.map(x=>x.key)):new Set();localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));renderStrategyLibrary()}
+function selectDefaultStrategies(){if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');selectedStrategyKeys=new Set(defaultStrategyKeys&&defaultStrategyKeys.size?Array.from(defaultStrategyKeys):strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));renderStrategyLibrary()}
 async function validateCustomCode(){try{const r=await fetch('/api/strategy/custom/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:$('customCode').value})});const js=await r.json();$('codeStatus').textContent=js.message+(js.warnings&&js.warnings.length?'；'+js.warnings.join('；'):'');$('codeStatus').className=js.ok?'small ok':'small err'}catch(e){$('codeStatus').textContent='检查失败：'+e;$('codeStatus').className='small err'}}
 
 function log(msg,level='INFO'){const t=new Date().toLocaleTimeString();$('log').innerHTML+=`<div><span class="muted">${t}</span> <b>${level}</b> ${String(msg).replace(/[<>&]/g,s=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</div>`;$('log').scrollTop=$('log').scrollHeight}
@@ -259,17 +258,8 @@ function applySnapshotState(js){const p=js.params||js.snapshot?.params||{};if(js
 function snapshotRows(js){return js.data||js.results||js.snapshot?.results||[]}
 function restoreSelection(preferred){if(!rows.length){selected=null;render();renderDetail(null);return}const sym=preferred||localStorage.getItem(LS_SELECTED);const hit=sym&&rows.some(x=>x.symbol===sym);selectRow(hit?sym:rows[0].symbol)}
 function buildQuery(){const p=new URLSearchParams();p.set('universe',$('universe').value);p.set('symbols',parseSymbols());p.set('mode',$('mode').value);p.set('strategies',selectedStrategies().join(','));p.set('enable_news',$('enableNews')?.checked?'true':'false');p.set('info_limit',$('infoLimit')?.value||'180');p.set('max_items',$('maxItems').value||'30');p.set('max_pages',$('maxPages').value||'1');p.set('page_size',$('pageSize').value||'100');p.set('kline_limit',$('klineLimit').value||'260');p.set('kline_adjust',$('klineAdjust')?.value||'qfq');p.set('min_score',$('minScore').value||'0');p.set('min_amount',String((Number($('minAmountWan').value)||0)*10000));p.set('include_stocks',$('includeStocks').checked?'true':'false');p.set('include_etf',$('includeEtf').checked?'true':'false');p.set('force_quotes',$('forceQuotes').checked?'true':'false');p.set('force_kline',$('forceKline').checked?'true':'false');p.set('selected_symbol',selected?.symbol||localStorage.getItem(LS_SELECTED)||'');p.set('view_mode',tableMode);p.set('scroll_position',String(document.querySelector('.table-wrap')?.scrollTop||0));p.set('show_excluded',tableMode==='debug'?'true':'false');persistLocalInputs(p);return p}
-async function runScreener(){const btn=$('runBtn');const oldRows=rows.slice();const oldSelected=selected;btn.disabled=true;btn.textContent='筛选中...';$('cacheHint').textContent='正在筛选；如本次失败，上一批结果仍会保留。';try{const query=buildQuery();log('开始筛选；耗时取决于公开数据源响应和本地 K 线缓存。');const resp=await fetch('/api/screener/run?'+query.toString(),{cache:'no-store'});if(!resp.ok)throw new Error('HTTP '+resp.status);const js=await resp.json();if(!js.ok)throw new Error(js.message||'筛选失败');rows=snapshotRows(js);selected=null;if(js.screener_snapshot_id||js.snapshot_id){const sid=js.screener_snapshot_id||js.snapshot_id;localStorage.setItem(LS_SNAPSHOT,sid);localStorage.setItem(LS_SNAPSHOT_LEGACY,sid)}const stableNote=js.score_stability_note?` · ${js.score_stability_note}`:'';if(!rows.length){render();renderDetail(null);$('cacheHint').textContent='本次快照没有结果；可切换调试视图查看候选是否被排除。'+stableNote;}else{$('cacheHint').textContent=`缓存=${js.cache_status?.status||'已刷新'} · 快照=${js.screener_snapshot_id||js.snapshot_id||'--'} · 已启用页面恢复${stableNote}`;}
-log(`筛选完成：结果 ${js.result_count}，已分析 ${js.analyzed_count??'--'}，股票池 ${js.pool_count??js.universe_count}，排除 ${js.filtered_out_count??0}，耗时 ${js.elapsed_seconds} 秒，错误 ${js.error_count}，信息面=${js.news_enabled?'开启':'关闭'}`);if(js.errors&&js.errors.length)log('部分数据源失败：'+js.errors.slice(0,5).map(e=>e.symbol+':'+e.error).join('; '),'WARN');updateMetrics(js);sortRows(false);render();restoreSelection(js.selected_symbol);setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(localStorage.getItem(LS_SCROLL)||0)},50)}catch(e){rows=oldRows;selected=oldSelected;render();renderDetail(selected);$('cacheHint').textContent='筛选失败，已保留上一批结果：'+e;log(e,'ERROR')}finally{btn.disabled=false;btn.textContent='开始筛选'}}
 function updateMetrics(js){$('mCount').textContent=js.result_count??rows.length;$('mUniverse').textContent=(js.analyzed_count??'--')+'/'+(js.pool_count??js.universe_count??'--');const elapsed=js.elapsed_seconds??'--';$('mTime').textContent=(typeof elapsed==='number'?elapsed+'s':String(elapsed));$('mErr').textContent=js.error_count??'--';const scores=rows.map(x=>Number(x.total_score||0));$('mTop').textContent=scores.length?Math.max(...scores).toFixed(1):'--';$('mAvg').textContent=scores.length?(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1):'--'}
 function clearResults(){rows=[];selected=null;render();renderDetail(null);['mCount','mUniverse','mTop','mAvg','mTime','mErr'].forEach(id=>$(id).textContent='--')}
-function clearLocalState(){[LS_SNAPSHOT,LS_SNAPSHOT_LEGACY,LS_SELECTED,LS_SCROLL,LS_PARAMS,'qdg_screener_view',LS_CUSTOM,LS_STRATEGIES,LS_MODE,LS_ENABLE_NEWS,LS_VIEW,LS_SHOW_EXCLUDED,LS_MIN_SCORE,LS_MAX_ITEMS].forEach(k=>localStorage.removeItem(k));clearResults();$('cacheHint').textContent='本地筛选状态已清空；后端缓存仍可在 /cache 查看。'}
-async function restoreLastScreener(){try{restoreLocalInputs();let sid=localStorage.getItem(LS_SNAPSHOT)||localStorage.getItem(LS_SNAPSHOT_LEGACY)||'';let js=null;if(sid){const resp=await fetch('/api/screener/snapshot/'+encodeURIComponent(sid),{cache:'no-store'});js=await resp.json();}if(!js||!js.ok){const resp=await fetch('/api/cache/screener/latest',{cache:'no-store'});js=await resp.json();}
-if(!js.ok){rows=[];selected=null;render();renderDetail(null);$('cacheHint').textContent='没有可恢复的筛选快照。';return}
-rows=snapshotRows(js);selected=null;if(js.snapshot_id){localStorage.setItem(LS_SNAPSHOT,js.snapshot_id);localStorage.setItem(LS_SNAPSHOT_LEGACY,js.snapshot_id)}applySnapshotState(js);updateMetrics({result_count:rows.length,analyzed_count:js.summary?.analyzed_count,universe_count:js.summary?.result_count,error_count:js.summary?.error_count,elapsed_seconds:'缓存'});if(!rows.length){render();renderDetail(null);$('cacheHint').textContent='快照没有结果，请重新运行筛选。';return}
-const stale=js.cache_status?.stale?' · 缓存已过期，稍后可刷新':'';$('cacheHint').textContent=`已恢复快照 ${js.snapshot_id||sid||'最近一次'} · 缓存=${js.cache_status?.status||'--'}${stale}`;render();restoreSelection(js.selected_symbol||js.selected_row?.symbol);setTimeout(()=>{const tw=document.querySelector('.table-wrap');if(tw)tw.scrollTop=Number(js.scroll_position??(localStorage.getItem(LS_SCROLL)||0))},80);log('已恢复上一批筛选快照，无需重新运行')}catch(e){rows=[];selected=null;render();renderDetail(null);log('恢复失败：'+e,'ERROR')}}
-function sortRows(toggle=true){if(toggle)sortDir*=-1;rows.sort((a,b)=>{let av=a[sortKey],bv=b[sortKey];if(typeof av==='string')return String(av).localeCompare(String(bv),'zh')*sortDir;return ((Number(av)||0)-(Number(bv)||0))*sortDir})}
-function render(){const tb=document.querySelector('#resultTable tbody');tb.innerHTML=rows.map(r=>{const sr=r.support_resistance_distance||{};const up=uniq([...(r.upgrade_reasons||[]),...(r.downgrade_reasons||[])]).slice(0,3).join('；');const miss=uniq(r.missing_data_hints||[]).slice(0,4).join('；');return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')"><td>${htmlEsc(r.symbol)}</td><td>${htmlEsc(r.name)}</td><td title="${htmlEsc(r.candidate_channel_reason||'')}">${htmlEsc((r.candidate_channels||[]).join('/')||'--')}</td><td>${pct(r.turnover)}</td><td>${fmt(r.volume_ratio,2)}</td><td>${money(r.amount)}</td><td>${fmt(r.pe_dynamic,2)}</td><td>${fmt(r.pb,2)}</td><td>${money(r.total_market_cap)}</td><td>${money(r.float_market_cap)}</td><td>${pct(r.ma20_deviation_pct)}</td><td>${pct(r.amplitude_5d_pct)}</td><td>${pct(r.pos20)}</td><td title="${htmlEsc(r.technical_signal_summary||'')}">${htmlEsc(String(r.technical_signal_summary||'--').slice(0,34))}</td><td>${htmlEsc(r.capital_signal||'--')}</td><td title="${htmlEsc((r.theme_labels||[]).join('、'))}">${htmlEsc(r.theme_stage||'--')}</td><td>${htmlEsc(r.market_cap_style||'--')}</td><td>${pct(sr.support_dist_pct??r.support_dist_pct)}</td><td>${pct(sr.resistance_dist_pct??r.resistance_dist_pct)}</td><td>${htmlEsc(r.chase_high_risk||'--')}</td><td title="${htmlEsc(r.comprehensive_diagnosis||'')}"><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span> ${htmlEsc(String(r.comprehensive_diagnosis||'').slice(0,28))}</td><td>${fmt(r.script_score,1)}</td><td>${fmt(r.manual_review_score,1)}</td><td title="${htmlEsc(up)}">${htmlEsc(up.slice(0,28)||'--')}</td><td title="${htmlEsc(miss)}">${htmlEsc(miss.slice(0,28)||'--')}</td><td>${htmlEsc(r.grade)}</td><td>${(r.tags||[]).slice(0,6).map(t=>`<span class="tag" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')}</td></tr>`}).join('')||'<tr><td colspan="27" class="muted">暂无结果，请设置参数后点击“开始筛选”</td></tr>'}
 
 function setTableMode(mode){tableMode=mode==='debug'?'debug':mode==='full'?'full':'compact';localStorage.setItem('qdg_screener_view',tableMode);localStorage.setItem(LS_VIEW,tableMode);localStorage.setItem(LS_SHOW_EXCLUDED,tableMode==='debug'?'true':'false');if($('compactBtn'))$('compactBtn').classList.toggle('active',tableMode==='compact');if($('fullBtn'))$('fullBtn').classList.toggle('active',tableMode==='full');if($('debugBtn'))$('debugBtn').classList.toggle('active',tableMode==='debug');render()}
 function missingCell(r){const miss=uniq([...(r.metric_missing_reasons||[]),...(r.missing_data_hints||[])]).slice(0,5).join('；');return miss||'--'}
@@ -283,14 +273,8 @@ function marketMoodCell(r){const reg=r.market_regime||{};const label=r.market_se
 function technicalSummaryCell(r){const base=r.technical_signal_summary||'--';const score=fmt(r.technical_factor_score,1),risk=fmt(r.technical_factor_risk,1);return `${base}（因子 ${score}/${risk}）`}
 function themeStageCell(r){const labels=uniq(r.theme_labels||[]).slice(0,4).join('、');const score=numOrNull(r.theme_strength);return `${r.theme_stage||'--'}${score===null?'':` · 热度${fmt(score,1)}`}${labels?' · '+labels:''}`}
 function missingDisplay(r){const miss=uniq([...(r.metric_missing_reasons||[]),...(r.missing_data_hints||[])]);return miss.length?`${miss.slice(0,4).join('；')}（只影响对应卡片/维度，不等于整行无数据）`:'无关键缺失'}
-function renderHeader(){const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;table.className=tableMode==='compact'?'compact-table':'full-table';const compact=['代码','名称','等级','综合分','复核分','最新价','涨跌幅','候选通道','成交额','换手率','量比','PE/PB','市值风格','行为风险','操作'];const full=['代码','名称','候选来源通道','换手率','量比','成交额','PE','PB','总市值','流通市值','MA20偏离','近5日振幅','近20日位置','技术信号摘要','资金面信号','板块/题材阶段','市值风格','支撑距离','压力距离','追高风险','行为风险','信息面快照','缺失提示','等级','核心标签'];const debug=['代码','名称','等级','综合分','原始字段','缺失原因','source logs','cache_status','操作'];head.innerHTML='<tr>'+(tableMode==='compact'?compact:tableMode==='debug'?debug:full).map(x=>`<th>${x}</th>`).join('')+'</tr>'}
-function compactRow(r){const behavior=uniq(r.behavior_tags||[]).slice(0,3).join('、')||r.manipulation_risk_label||'--';return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')"><td>${htmlEsc(r.symbol)}</td><td>${htmlEsc(r.name)}</td><td>${htmlEsc(r.grade||'--')}</td><td><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span></td><td>${fmt(r.manual_review_score,1)}</td><td>${fmt(r.last,2)}</td><td class="${clsPct(r.change_pct)}">${pct(r.change_pct)}</td><td class="cell-clip" title="${htmlEsc(r.candidate_channel_reason||'')}">${htmlEsc((r.candidate_channels||[]).join('/')||'--')}</td><td>${money(r.amount)}</td><td>${pct(r.turnover)}</td><td>${fmt(r.volume_ratio,2)}</td><td title="${htmlEsc(missingCell(r))}">${htmlEsc(pePbCell(r))}</td><td>${htmlEsc(r.market_cap_style||'--')}</td><td class="cell-wrap-2" title="${htmlEsc(behavior)}">${htmlEsc(behavior)}</td><td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td></tr>`}
-function fullRow(r){const sr=r.support_resistance_distance||{};const up=uniq([...(r.upgrade_reasons||[]),...(r.downgrade_reasons||[])]).join('；');const miss=missingCell(r);const behavior=uniq(r.behavior_tags||[]).slice(0,4).join('、')||r.manipulation_risk_label||'--';return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')"><td>${htmlEsc(r.symbol)}</td><td>${htmlEsc(r.name)}</td><td title="${htmlEsc(r.candidate_channel_reason||'')}">${htmlEsc((r.candidate_channels||[]).join('/')||'--')}</td><td>${pct(r.turnover)}</td><td>${fmt(r.volume_ratio,2)}</td><td>${money(r.amount)}</td><td title="${htmlEsc(miss)}">${htmlEsc(metricOrReason(r,'pe_dynamic',v=>fmt(v,2),'PE'))}</td><td title="${htmlEsc(miss)}">${htmlEsc(metricOrReason(r,'pb',v=>fmt(v,2),'PB'))}</td><td title="${htmlEsc(miss)}">${htmlEsc(metricOrReason(r,'total_market_cap',money,'总市值'))}</td><td title="${htmlEsc(miss)}">${htmlEsc(metricOrReason(r,'float_market_cap',money,'流通市值'))}</td><td>${pct(r.ma20_deviation_pct)}</td><td>${pct(r.amplitude_5d_pct)}</td><td>${pct(r.pos20)}</td><td class="cell-wrap-2" title="${htmlEsc(r.technical_signal_summary||'')}">${htmlEsc(r.technical_signal_summary||'--')}</td><td>${htmlEsc(r.capital_signal||'--')}</td><td title="${htmlEsc((r.theme_labels||[]).join('、'))}">${htmlEsc(r.theme_stage||'--')}</td><td>${htmlEsc(r.market_cap_style||'--')}</td><td>${pct(sr.support_dist_pct??r.support_dist_pct)}</td><td>${pct(sr.resistance_dist_pct??r.resistance_dist_pct)}</td><td>${htmlEsc(r.chase_high_risk||'--')}</td><td class="cell-wrap-2" title="${htmlEsc(behavior)}">${htmlEsc(behavior)}</td><td class="cell-wrap-2" title="${htmlEsc(r.comprehensive_diagnosis||'')}"><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span> ${htmlEsc(r.comprehensive_diagnosis||'--')}</td><td>${fmt(r.script_score,1)}</td><td>${fmt(r.manual_review_score,1)}</td><td class="cell-wrap-2" title="${htmlEsc(up)}">${htmlEsc(up||'--')}</td><td class="cell-wrap-2" title="${htmlEsc(miss)}">${htmlEsc(miss)}</td><td>${htmlEsc(r.grade)}</td><td>${(r.tags||[]).slice(0,8).map(t=>`<span class="tag" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')}</td></tr>`}
-function debugRow(r){return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')"><td>${htmlEsc(r.symbol)}</td><td>${htmlEsc(r.name)}</td><td>${htmlEsc(r.grade||'--')}</td><td>${fmt(r.total_score,1)}</td><td class="cell-wrap-2" title="${htmlEsc(JSON.stringify(r))}">${htmlEsc(JSON.stringify(r).slice(0,260))}</td><td class="cell-wrap-2">${htmlEsc(missingCell(r))}</td><td class="cell-wrap-2">${htmlEsc((r.source_logs||r.news?.sources_status||[]).map(x=>x.source+':'+x.status).join('；')||'--')}</td><td class="cell-wrap-2">${htmlEsc(JSON.stringify(r.cache_status||r.info?.cache_status||{}))}</td><td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td></tr>`}
 function isExcludedRow(r){return String(r.grade||'').startsWith('D')||String(r.grade||'').includes('\u5254\u9664')||!!r.excluded}
-function render(){renderHeader();const tb=document.querySelector('#resultTable tbody');if(!tb)return;const hidden=rows.filter(isExcludedRow).length;const visible=tableMode==='debug'?rows:rows.filter(r=>!isExcludedRow(r));if(!rows.length){selected=null;tb.innerHTML=`<tr><td colspan="${tableMode==='compact'?15:tableMode==='debug'?9:25}" class="muted">No rows. Use restore or run screener; stale cache will not clear the table.</td></tr>`;renderDetail(null);return}if(!visible.length){selected=null;tb.innerHTML=`<tr><td colspan="${tableMode==='compact'?15:tableMode==='debug'?9:25}" class="muted">No eligible rows. Hidden excluded rows: ${hidden}. <button class="btn2" onclick="setTableMode('debug')">Show debug/excluded</button></td></tr>`;renderDetail(null);return}if(selected&&!visible.some(x=>x.symbol===selected.symbol)&&tableMode!=='debug'){selected=null;renderDetail(null)}tb.innerHTML=visible.map(r=>tableMode==='compact'?compactRow(r):tableMode==='debug'?debugRow(r):fullRow(r)).join('')}
-function selectRow(symbol){selected=rows.find(x=>x.symbol===symbol)||null;if(selected){localStorage.setItem(LS_SELECTED,selected.symbol)}render();renderDetail(selected)}
-function renderDetail(r){if(!r){$('dTitle').textContent='未选择标的';$('dSub').textContent='运行筛选后点击结果行';$('scoreBar').style.width='0';$('detailKv').innerHTML='';$('detailTags').innerHTML='';$('detailRisks').textContent='--';$('detailReason').textContent='--';$('infoPanel').innerHTML='';$('infoCategories').innerHTML='';$('infoNewsList').innerHTML='<button class="btn2" onclick="openInfoDetailPage()">打开信息面分析详情页</button><div class="small" style="margin-top:8px">选择标的后将携带代码和名称打开详情页。</div>';clearTrend();return}$('dTitle').textContent=`${r.name} ${r.symbol}`;$('dSub').textContent=`${r.asset_type} · ${r.grade} · 综合评分 ${fmt(r.total_score,1)}`;$('scoreBar').style.width=Math.max(0,Math.min(100,Number(r.total_score||0)))+'%';const sr=r.support_resistance_distance||{};const items=[['最新价',fmt(r.last)],['涨跌幅',pct(r.change_pct)],['候选通道',htmlEsc((r.candidate_channels||[]).join('/')||'--')],['候选原因',htmlEsc(r.candidate_channel_reason||'--')],['成交额',money(r.amount)],['换手率',pct(r.turnover)],['量比',fmt(r.volume_ratio,2)],['PE/PB',`${fmt(r.pe_dynamic,2)} / ${fmt(r.pb,2)}`],['总/流通市值',`${money(r.total_market_cap)} / ${money(r.float_market_cap)}`],['MA20偏离',pct(r.ma20_deviation_pct)],['近5日振幅',pct(r.amplitude_5d_pct)],['20/250日位置',`${pct(r.pos20)} / ${pct(r.pos250)}`],['高位回撤',pct(r.drawdown250)],['复权口径',htmlEsc(r.kline_adjust||'qfq')],['技术摘要',htmlEsc(r.technical_signal_summary||'--')],['资金面信号',htmlEsc(r.capital_signal||'--')],['题材阶段',htmlEsc(r.theme_stage||'--')],['题材标签',htmlEsc((r.theme_labels||[]).join('、')||'--')],['市值风格',htmlEsc(r.market_cap_style||'--')],['支撑/压力距离',`${pct(sr.support_dist_pct??r.support_dist_pct)} / ${pct(sr.resistance_dist_pct??r.resistance_dist_pct)}`],['追高风险',htmlEsc(r.chase_high_risk||'--')],['脚本/复核分',`${fmt(r.script_score,1)} / ${fmt(r.manual_review_score,1)}`],['缺失提示',htmlEsc((r.missing_data_hints||[]).slice(0,4).join('；')||'--')],['MA5/10/20',`${fmt(r.ma5)} / ${fmt(r.ma10)} / ${fmt(r.ma20)}`],['RSI14/KDJ-J',`${fmt(r.rsi14,1)} / ${fmt(r.kdj_j,1)}`],['MACD柱/ROC12',`${fmt(r.macd_hist,4)} / ${fmt(r.roc12,1)}%`],['ATR%/BOLL宽',`${fmt(r.atr_pct,1)}% / ${fmt(r.boll_width,1)}%`],['VWAP20/MFI',`${fmt(r.vwap20)} / ${fmt(r.mfi14,1)}`],['ADX/+DI/-DI',`${fmt(r.adx14,1)} / ${fmt(r.plus_di,1)} / ${fmt(r.minus_di,1)}`],['支撑/压力',`${fmt(r.support60)} / ${fmt(r.resistance60)}`],['低位/趋势/动量',`${fmt(r.low_score,0)} / ${fmt(r.trend_score,0)} / ${fmt(r.momentum_score,0)}`],['量能/资金/风险',`${fmt(r.volume_score,0)} / ${fmt(r.strength_score,0)} / ${fmt(r.risk_penalty,0)}`]];$('detailKv').innerHTML=items.map(x=>`<div class="item"><span>${x[0]}</span><b>${x[1]}</b></div>`).join('');$('detailTags').innerHTML=(r.tags||[]).map(t=>`<span class="tag" onclick="event.stopPropagation();showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')||'<span class="small">--</span>';$('detailRisks').innerHTML=uniq(r.risk_flags||[]).map(t=>`<span class="tag risk" onclick="event.stopPropagation();showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')||'<span class="ok">暂无明显风险标签</span>';let infoTxt='';if(r.info){infoTxt=`；信息面评分 ${fmt(r.info.info_score,1)}，${r.info.summary||''}`}else if(r.news){infoTxt=`；新闻评分 ${fmt(r.news.news_score,1)}，情绪 ${sentCN(r.news.sentiment)}，${r.news.summary||''}`}$('detailReason').textContent=(r.comprehensive_diagnosis||r.reason||'--')+infoTxt;renderInfoPanel(r);loadScoreTrend(r.symbol)}
+function renderDetailBase(r){if(!r){$('dTitle').textContent='未选择标的';$('dSub').textContent='运行筛选后点击结果行';$('scoreBar').style.width='0';$('detailKv').innerHTML='';$('detailTags').innerHTML='';$('detailRisks').textContent='--';$('detailReason').textContent='--';$('infoPanel').innerHTML='';$('infoCategories').innerHTML='';$('infoNewsList').innerHTML='<button class="btn2" onclick="openInfoDetailPage()">打开信息面分析详情页</button><div class="small" style="margin-top:8px">选择标的后将携带代码和名称打开详情页。</div>';clearTrend();return}$('dTitle').textContent=`${r.name} ${r.symbol}`;$('dSub').textContent=`${r.asset_type} · ${r.grade} · 综合评分 ${fmt(r.total_score,1)}`;$('scoreBar').style.width=Math.max(0,Math.min(100,Number(r.total_score||0)))+'%';const sr=r.support_resistance_distance||{};const items=[['最新价',fmt(r.last)],['涨跌幅',pct(r.change_pct)],['候选通道',htmlEsc((r.candidate_channels||[]).join('/')||'--')],['候选原因',htmlEsc(r.candidate_channel_reason||'--')],['成交额',money(r.amount)],['换手率',pct(r.turnover)],['量比',fmt(r.volume_ratio,2)],['PE/PB',`${fmt(r.pe_dynamic,2)} / ${fmt(r.pb,2)}`],['总/流通市值',`${money(r.total_market_cap)} / ${money(r.float_market_cap)}`],['MA20偏离',pct(r.ma20_deviation_pct)],['近5日振幅',pct(r.amplitude_5d_pct)],['20/250日位置',`${pct(r.pos20)} / ${pct(r.pos250)}`],['高位回撤',pct(r.drawdown250)],['复权口径',htmlEsc(r.kline_adjust||'qfq')],['技术摘要',htmlEsc(r.technical_signal_summary||'--')],['资金面信号',htmlEsc(r.capital_signal||'--')],['题材阶段',htmlEsc(r.theme_stage||'--')],['题材标签',htmlEsc((r.theme_labels||[]).join('、')||'--')],['市值风格',htmlEsc(r.market_cap_style||'--')],['支撑/压力距离',`${pct(sr.support_dist_pct??r.support_dist_pct)} / ${pct(sr.resistance_dist_pct??r.resistance_dist_pct)}`],['追高风险',htmlEsc(r.chase_high_risk||'--')],['脚本/复核分',`${fmt(r.script_score,1)} / ${fmt(r.manual_review_score,1)}`],['缺失提示',htmlEsc((r.missing_data_hints||[]).slice(0,4).join('；')||'--')],['MA5/10/20',`${fmt(r.ma5)} / ${fmt(r.ma10)} / ${fmt(r.ma20)}`],['RSI14/KDJ-J',`${fmt(r.rsi14,1)} / ${fmt(r.kdj_j,1)}`],['MACD柱/ROC12',`${fmt(r.macd_hist,4)} / ${fmt(r.roc12,1)}%`],['ATR%/BOLL宽',`${fmt(r.atr_pct,1)}% / ${fmt(r.boll_width,1)}%`],['VWAP20/MFI',`${fmt(r.vwap20)} / ${fmt(r.mfi14,1)}`],['ADX/+DI/-DI',`${fmt(r.adx14,1)} / ${fmt(r.plus_di,1)} / ${fmt(r.minus_di,1)}`],['支撑/压力',`${fmt(r.support60)} / ${fmt(r.resistance60)}`],['低位/趋势/动量',`${fmt(r.low_score,0)} / ${fmt(r.trend_score,0)} / ${fmt(r.momentum_score,0)}`],['量能/资金/风险',`${fmt(r.volume_score,0)} / ${fmt(r.strength_score,0)} / ${fmt(r.risk_penalty,0)}`]];$('detailKv').innerHTML=items.map(x=>`<div class="item"><span>${x[0]}</span><b>${x[1]}</b></div>`).join('');$('detailTags').innerHTML=(r.tags||[]).map(t=>`<span class="tag" onclick="event.stopPropagation();showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')||'<span class="small">--</span>';$('detailRisks').innerHTML=uniq(r.risk_flags||[]).map(t=>`<span class="tag risk" onclick="event.stopPropagation();showTagExplain('${encodeURIComponent(t)}')">${htmlEsc(t)}</span>`).join('')||'<span class="ok">暂无明显风险标签</span>';let infoTxt='';if(r.info){infoTxt=`；信息面评分 ${fmt(r.info.info_score,1)}，${r.info.summary||''}`}else if(r.news){infoTxt=`；新闻评分 ${fmt(r.news.news_score,1)}，情绪 ${sentCN(r.news.sentiment)}，${r.news.summary||''}`}$('detailReason').textContent=(r.comprehensive_diagnosis||r.reason||'--')+infoTxt;renderInfoPanel(r);loadScoreTrend(r.symbol)}
 
 
 function renderProfileBox(profile){
@@ -505,16 +489,6 @@ function applySortMode(mode){
   sortKey=pair[0];sortDir=pair[1];sortRows(false);render();persistScreenerState();
 }
 function th(label,key){return key?`<th data-k="${key}" onclick="setSort('${key}')" title="点击排序">${label}${sortKey===key?(sortDir>0?' ↑':' ↓'):''}</th>`:`<th>${label}</th>`}
-function renderHeader(){
-  const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;
-  table.className=tableMode==='compact'?'compact-table':'full-table';
-  const compact=['代码','名称','等级','综合分','复核分','最新价','涨跌幅','候选通道','成交额','换手率','量比','PE/PB','市值风格','行为风险','操作'];
-  const compactCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['市值风格','market_cap_style'],['行为风险','behavior'],['操作','']];
-  const fullCols=[['代码','symbol'],['名称','name'],['候选来源通道',''],['换手率','turnover'],['量比','volume_ratio'],['成交额','amount'],['PE','pe'],['PB','pb'],['总市值','market_cap'],['流通市值','market_cap'],['MA20偏离','ma20_deviation'],['近5日振幅','amplitude_5d_pct'],['近20日位置','low_position'],['技术信号摘要',''],['资金面信号','capital'],['板块/题材阶段',''],['市值风格','market_cap_style'],['支撑距离',''],['压力距离',''],['追高风险','risk_penalty'],['行为风险','behavior'],['信息面快照','info'],['缺失提示',''],['等级','grade'],['核心标签','']];
-  const debugCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['原始字段',''],['缺失原因',''],['source logs',''],['cache_status',''],['操作','']];
-  const cols=tableMode==='compact'?compactCols:tableMode==='debug'?debugCols:fullCols;
-  head.innerHTML='<tr>'+cols.map(x=>th(x[0],x[1])).join('')+'</tr>';
-}
 function selectRow(symbol){selected=rows.find(x=>x.symbol===symbol)||null;if(selected){localStorage.setItem(LS_SELECTED,selected.symbol);localStorage.setItem(LS_Q_SELECTED,selected.symbol)}render();renderDetail(selected);persistScreenerState()}
 async function restoreLastScreener(){
   restoreScreenerState();render();if(selected)renderDetail(selected);
@@ -581,71 +555,35 @@ function compactRow(r){
   </tr>`;
 }
 
-const renderDetailBase=renderDetail;
-renderDetail=function(r){renderDetailBase(r);if(!r)return;const assetRaw=String(r.asset_type_cn||r.asset_type||'').toLowerCase(),assetLabel=assetRaw==='stock'||assetRaw==='equity'?'股票':assetRaw==='etf'||assetRaw==='fund'?'ETF/基金':assetRaw||'类型缺失',gradeLabel=r.grade||'等级缺失';$('dSub').textContent=`${assetLabel} · ${gradeLabel} · 综合评分 ${fmt(r.total_score,1)}`;const kv=$('detailKv');const cards=[...document.querySelectorAll('#detailKv .item')];const setCard=(labelText,val,title)=>{const el=cards.find(x=>(x.querySelector('span')?.textContent||'').trim()===labelText);const value=el?.querySelector('b');if(value){value.textContent=val;if(title||val)value.title=title||val;}};setCard('PE/PB',pePbCell(r));setCard('总/流通市值',capCell(r));setCard('20/250日位置',positionCell(r),'0%表示贴近该周期低点，不是缺失；100%表示贴近周期高点。');setCard('技术摘要',technicalSummaryCell(r));setCard('题材阶段',themeStageCell(r));setCard('缺失提示',missingDisplay(r));if(kv&&!cards.some(x=>(x.querySelector('span')?.textContent||'').trim()==='大盘情绪')){const el=document.createElement('div');el.className='item';el.innerHTML=`<span>大盘情绪</span><b title="${htmlEsc((r.market_regime||{}).basis||'基于快照涨跌家数估算')}">${htmlEsc(marketMoodCell(r))}</b>`;kv.insertBefore(el,kv.firstChild);}};
+function renderDetail(r){renderDetailBase(r);if(!r)return;const assetRaw=String(r.asset_type_cn||r.asset_type||'').toLowerCase(),assetLabel=assetRaw==='stock'||assetRaw==='equity'?'股票':assetRaw==='etf'||assetRaw==='fund'?'ETF/基金':assetRaw||'类型缺失',gradeLabel=r.grade||'等级缺失';$('dSub').textContent=`${assetLabel} · ${gradeLabel} · 综合评分 ${fmt(r.total_score,1)}`;const kv=$('detailKv');const cards=[...document.querySelectorAll('#detailKv .item')];const setCard=(labelText,val,title)=>{const el=cards.find(x=>(x.querySelector('span')?.textContent||'').trim()===labelText);const value=el?.querySelector('b');if(value){value.textContent=val;if(title||val)value.title=title||val;}};setCard('PE/PB',pePbCell(r));setCard('总/流通市值',capCell(r));setCard('20/250日位置',positionCell(r),'0%表示贴近该周期低点，不是缺失；100%表示贴近周期高点。');setCard('技术摘要',technicalSummaryCell(r));setCard('题材阶段',themeStageCell(r));setCard('缺失提示',missingDisplay(r));if(kv&&!cards.some(x=>(x.querySelector('span')?.textContent||'').trim()==='大盘情绪')){const el=document.createElement('div');el.className='item';el.innerHTML=`<span>大盘情绪</span><b title="${htmlEsc((r.market_regime||{}).basis||'基于快照涨跌家数估算')}">${htmlEsc(marketMoodCell(r))}</b>`;kv.insertBefore(el,kv.firstChild);}}
 
-function resultColspan(){return tableMode==='compact'?15:tableMode==='debug'?9:18}
-renderHeader=function(){
-  const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;
-  table.className=tableMode==='compact'?'compact-table':'full-table';
-  const compactCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['市值风格','market_cap_style'],['行为风险','behavior'],['操作','']];
-  const fullCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['总/流通市值','market_cap'],['市值风格','market_cap_style'],['题材/阶段',''],['技术摘要',''],['行为风险','behavior'],['操作','']];
-  const debugCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['原始字段',''],['缺失原因',''],['source logs',''],['cache_status',''],['操作','']];
-  const cols=tableMode==='compact'?compactCols:tableMode==='debug'?debugCols:fullCols;
-  head.innerHTML='<tr>'+cols.map(x=>th(x[0],x[1])).join('')+'</tr>';
-};
-fullRow=function(r){
-  const behavior=uniq(r.behavior_tags||[]).slice(0,3).join('、')||r.manipulation_risk_label||'--';
-  const channel=(r.candidate_channels||[]).join('/')||'--';
-  const theme=uniq([...(r.theme_labels||[]),(r.theme_stage||'')].filter(x=>x&&x!=='未知'&&x!=='--')).slice(0,5).join('、')||r.theme_stage||'--';
-  const summary=r.technical_signal_summary||r.comprehensive_diagnosis||'--';
-  return `<tr class="${selected&&selected.symbol===r.symbol?'selected':''}" onclick="selectRow('${htmlEsc(r.symbol)}')">
-    <td title="${htmlEsc(r.symbol)}">${htmlEsc(r.symbol)}</td>
-    <td class="cell-clip cell-name" title="${htmlEsc(r.name)}">${htmlEsc(r.name)}</td>
-    <td>${htmlEsc(r.grade||'--')}</td>
-    <td><span class="score ${scoreClass(r.total_score)}">${fmt(r.total_score,1)}</span></td>
-    <td>${fmt(r.manual_review_score,1)}</td>
-    <td>${fmt(r.last,2)}</td>
-    <td class="${clsPct(r.change_pct)}">${pct(r.change_pct)}</td>
-    <td class="cell-clip cell-channel" title="${htmlEsc(r.candidate_channel_reason||channel)}">${htmlEsc(channel)}</td>
-    <td title="${money(r.amount)}">${money(r.amount)}</td>
-    <td>${pct(r.turnover)}</td>
-    <td>${fmt(r.volume_ratio,2)}</td>
-    <td class="cell-clip cell-pepb" title="${htmlEsc(missingCell(r))}">${htmlEsc(pePbCell(r))}</td>
-    <td class="cell-clip cell-caps" title="${htmlEsc(capCell(r))}">${htmlEsc(capCell(r))}</td>
-    <td class="cell-clip cell-style" title="${htmlEsc(r.market_cap_style||'--')}">${htmlEsc(r.market_cap_style||'--')}</td>
-    <td class="cell-wrap-2 cell-theme" title="${htmlEsc(theme)}">${htmlEsc(theme)}</td>
-    <td class="cell-wrap-2 cell-summary" title="${htmlEsc(summary)}">${htmlEsc(summary)}</td>
-    <td class="cell-wrap-2 cell-behavior" title="${htmlEsc(behavior)}">${htmlEsc(behavior)}</td>
-    <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
-  </tr>`;
-};
-render=function(){
+function render(){
   renderHeader();
   const tb=document.querySelector('#resultTable tbody');if(!tb)return;
   const hidden=rows.filter(isExcludedRow).length;
-  const visible=tableMode==='compact'?rows.filter(r=>!isExcludedRow(r)):rows;
+  const visible=tableMode==='debug'?rows:rows.filter(r=>!isExcludedRow(r));
   if(!rows.length){selected=null;tb.innerHTML=`<tr><td colspan="${resultColspan()}" class="muted">暂无结果。可以恢复上次筛选或重新筛选；过期缓存不会清空表格。</td></tr>`;renderDetail(null);return}
-  if(!visible.length){selected=null;tb.innerHTML=`<tr><td colspan="${resultColspan()}" class="muted">精简视图无符合条件候选，已隐藏剔除项 ${hidden} 个。<button class="btn2" onclick="setTableMode('full')">完整视图显示全部</button> <button class="btn2" onclick="setTableMode('debug')">调试视图</button></td></tr>`;renderDetail(null);return}
+  if(!visible.length){selected=null;tb.innerHTML=`<tr><td colspan="${resultColspan()}" class="muted">当前没有符合条件的候选，已隐藏剔除项 ${hidden} 个。<button class="btn2" onclick="setTableMode('debug')">在调试视图查看剔除原因</button></td></tr>`;renderDetail(null);return}
   if(selected&&!visible.some(x=>x.symbol===selected.symbol)){selected=null;renderDetail(null)}
   tb.innerHTML=visible.map(r=>tableMode==='compact'?compactRow(r):tableMode==='debug'?debugRow(r):fullRow(r)).join('');
   if($('cacheHint')){
-    const suffix=hidden&&tableMode==='compact'?`；精简视图隐藏 ${hidden} 个剔除项，完整/调试视图显示全部 ${rows.length} 只`:`；当前显示 ${visible.length}/${rows.length} 只`;
+    const suffix=hidden&&tableMode!=='debug'?`；当前视图隐藏 ${hidden} 个剔除项，调试视图可查看全部 ${rows.length} 只`:`；当前显示 ${visible.length}/${rows.length} 只`;
     $('cacheHint').textContent=($('cacheHint').textContent||'cache ready').split('；')[0]+suffix;
   }
-};
+}
 
-resultColspan=function(){return tableMode==='compact'?15:tableMode==='debug'?7:16}
-renderHeader=function(){
+function resultColspan(){return tableMode==='compact'?15:tableMode==='debug'?7:16}
+function renderHeader(){
   const head=document.querySelector('#resultTable thead');const table=$('resultTable');if(!head||!table)return;
   table.className=tableMode==='compact'?'compact-table':'full-table';
+  const compact=['代码','名称','等级','综合分','复核分','最新价','涨跌幅','候选通道','成交额','换手率','量比','PE/PB','市值风格','行为风险','操作'];
   const compactCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['复核分','manual_review_score'],['最新价','last'],['涨跌幅','change_pct'],['候选通道',''],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['市值风格','market_cap_style'],['行为风险','behavior'],['操作','']];
   const fullCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['最新价','last'],['涨跌幅','change_pct'],['成交额','amount'],['换手率','turnover'],['量比','volume_ratio'],['PE/PB','pe'],['总/流通市值','market_cap'],['市值风格','market_cap_style'],['题材/阶段',''],['技术摘要',''],['行为风险','behavior'],['操作','']];
   const debugCols=[['代码','symbol'],['名称','name'],['等级','grade'],['综合分','total_score'],['缺失原因',''],['缓存/来源摘要',''],['操作','']];
   const cols=tableMode==='compact'?compactCols:tableMode==='debug'?debugCols:fullCols;
   head.innerHTML='<tr>'+cols.map(x=>th(x[0],x[1])).join('')+'</tr>';
-};
-fullRow=function(r){
+}
+function fullRow(r){
   const behavior=uniq(r.behavior_tags||[]).slice(0,3).join('、')||r.manipulation_risk_label||'--';
   const theme=uniq([...(r.theme_labels||[]),(r.theme_stage||'')].filter(x=>x&&x!=='未知'&&x!=='--')).slice(0,5).join('、')||r.theme_stage||'--';
   const summary=r.technical_signal_summary||r.comprehensive_diagnosis||'--';
@@ -667,8 +605,8 @@ fullRow=function(r){
     <td title="${htmlEsc(behavior)}"><span class="line2">${htmlEsc(behavior)}</span></td>
     <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
   </tr>`;
-};
-debugRow=function(r){
+}
+function debugRow(r){
   const logs=(r.source_logs||r.news?.sources_status||[]).map(x=>`${x.source||'source'}:${x.status||'--'}`).join('；')||'--';
   const cache=JSON.stringify(r.cache_status||r.info?.cache_status||r.quote_cache_status||{});
   const miss=missingCell(r);
@@ -678,7 +616,7 @@ debugRow=function(r){
     <td title="${htmlEsc(logs+' '+cache)}"><span class="debug-cell">${htmlEsc(logs||cache||'--')}</span></td>
     <td><button class="btn2" onclick="event.stopPropagation();selectRow('${htmlEsc(r.symbol)}');openInfoDetailPage()">详情</button></td>
   </tr>`;
-};
+}
 
 function restoreSavedQueryParams(){
   try{
@@ -709,13 +647,13 @@ function showNoCacheState(reason){
   if(tb)tb.innerHTML=`<tr><td colspan="${resultColspan()}" class="muted"><div class="hint">${msg}</div><div class="row wrap" style="margin-top:8px"><button class="btn-green" onclick="runScreener()">开始筛选</button><button class="btn2" onclick="setPool('300750,600519,000001,159915,510300,600438')">载入常用验证池</button><button class="btn2" onclick="setTableMode('debug')">调试视图</button></div></td></tr>`;
 }
 
-clearLocalState=function(){
+function clearLocalState(){
   [LS_SNAPSHOT,LS_SNAPSHOT_LEGACY,LS_SELECTED,LS_SCROLL,LS_PARAMS,'qdg_screener_view',LS_CUSTOM,LS_STRATEGIES,LS_MODE,LS_ENABLE_NEWS,LS_VIEW,LS_SHOW_EXCLUDED,LS_MIN_SCORE,LS_MAX_ITEMS,LS_Q_SNAPSHOT,LS_Q_ROWS,LS_Q_PARAMS,LS_Q_SELECTED,LS_Q_VIEW,LS_Q_SCROLL,LS_Q_STRATEGIES,LS_Q_CUSTOM,'quant_screener_sort_mode'].forEach(k=>localStorage.removeItem(k));
   clearResults();
   showNoCacheState('本地缓存已清空，后端缓存仍可在 /cache 查看或之后重新生成');
 }
 
-runScreener=async function(){
+async function runScreener(){
   const btn=$('runBtn');const oldRows=rows.slice();const oldSelected=selected;
   btn.disabled=true;btn.textContent='筛选中...';
   showActionToast('筛选任务已提交，正在复用行情和K线缓存…');
@@ -778,48 +716,6 @@ function normalizeStrategySelection(){
 function syncStrategyCheckboxes(){
   document.querySelectorAll('.strategy-check,.strategy-inline-check').forEach(el=>{el.checked=selectedStrategyKeys.has(el.value)});
 }
-const renderStrategyLibraryStable=renderStrategyLibrary;
-renderStrategyLibrary=function(){
-  normalizeStrategySelection();
-  renderStrategyLibraryStable();
-  syncStrategyCheckboxes();
-}
-const updateStrategySummaryStable=updateStrategySummary;
-updateStrategySummary=function(){
-  normalizeStrategySelection();
-  updateStrategySummaryStable();
-  syncStrategyCheckboxes();
-}
-syncStrategySelection=function(key,checked){
-  if(checked)selectedStrategyKeys.add(key);
-  else selectedStrategyKeys.delete(key);
-  normalizeStrategySelection();
-  updateStrategySummary();
-}
-openStrategyModal=function(){
-  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
-  normalizeStrategySelection();
-  document.getElementById('strategyModal').classList.add('show');
-  renderStrategyTabs();
-  renderStrategyLibrary();
-}
-selectAllStrategies=function(flag){
-  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
-  selectedStrategyKeys=flag?new Set(strategyLibrary.map(x=>x.key)):new Set();
-  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
-  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
-  renderStrategyLibrary();
-  updateStrategySummary();
-}
-selectDefaultStrategies=function(){
-  if(!strategyLibrary.length)useFallbackStrategyLibrary('本地内置策略');
-  selectedStrategyKeys=new Set(defaultStrategyKeys&&defaultStrategyKeys.size?Array.from(defaultStrategyKeys):strategyLibrary.filter(x=>x.enabled!==false).map(x=>x.key));
-  localStorage.setItem(LS_STRATEGIES,selectedStrategies().join(','));
-  localStorage.setItem(LS_Q_STRATEGIES,selectedStrategies().join(','));
-  renderStrategyLibrary();
-  updateStrategySummary();
-}
-
 ;(function init(){restoreLocalInputs();restoreScreenerState();ensureSortControl();setTableMode(tableMode);render();if(selected)renderDetail(selected);else renderDetail(null);useFallbackStrategyLibrary('本地启动兜底');loadStrategyLibrary();const tw=document.querySelector('.table-wrap');if(tw)tw.addEventListener('scroll',()=>{localStorage.setItem(LS_SCROLL,String(tw.scrollTop));localStorage.setItem(LS_Q_SCROLL,String(tw.scrollTop));persistScreenerState()});restoreLastScreener();log('V3.26 筛选器已初始化：评分证据、缺失维度和本地状态持久化已启用')})();
 </script>
 </body>

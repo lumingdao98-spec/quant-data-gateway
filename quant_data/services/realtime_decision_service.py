@@ -942,8 +942,19 @@ class RealtimeDecisionService:
                 "content_quality_status": quality_status,
                 "event_time": event_time.isoformat(timespec="seconds") if event_time else None,
                 "future_event": is_future_event,
-                "score_included": not is_future_event,
+                "score_included": bool(item.get("score_included", item.get("included_in_score", True))) and not is_future_event,
                 "duplicate_count": int(_number(item.get("duplicate_count")) or 1),
+                "age_days": age_days,
+                "event_label": str(item.get("event_label") or ""),
+                "risk_tag": str(item.get("risk_tag") or ""),
+                "event_stage": str(item.get("event_stage") or ""),
+                "event_stage_cn": str(item.get("event_stage_cn") or ""),
+                "event_severity": str(item.get("event_severity") or ""),
+                "confirmation_level": str(item.get("confirmation_level") or ""),
+                "confirmation_level_cn": str(item.get("confirmation_level_cn") or ""),
+                "mapped_trade_gate": str(item.get("mapped_trade_gate") or item.get("trade_gate") or ""),
+                "mapped_trade_gate_cn": str(item.get("mapped_trade_gate_cn") or item.get("trade_gate_cn") or ""),
+                "is_related_to_symbol": bool(item.get("is_related_to_symbol")),
             }
             unique[key] = normalized
             recent.append(normalized)
@@ -995,7 +1006,27 @@ class RealtimeDecisionService:
         auto_buy_eligible = bool(scoreable_count and quality_coverage >= 0.35 and not cache_stale)
         high_conf_negative = [
             item for item in scored
-            if float(item.get("sentiment_score") or 50) <= 32 and float(item.get("credibility_score") or 0) >= 80
+            if 0 <= int(item.get("age_days") or 0) <= 7
+            and float(item.get("sentiment_score") or 50) <= 32
+            and float(item.get("credibility_score") or 0) >= 80
+            and str(item.get("content_quality_status") or "") in {"full_text", "structured_excerpt"}
+            and (
+                str(item.get("source_type") or "") != "macro"
+                or (
+                    item.get("is_related_to_symbol")
+                    and item.get("confirmation_level") in {"official_confirmed", "multi_source_confirmed"}
+                    and item.get("mapped_trade_gate") == "block_new_position"
+                )
+            )
+        ]
+        early_warnings = [
+            item for item in recent
+            if item.get("is_related_to_symbol")
+            and (
+                item.get("confirmation_level") in {"early_warning", "single_source"}
+                or item.get("event_stage") in {"rumor", "draft"}
+                or item.get("mapped_trade_gate") == "manual_confirmation"
+            )
         ]
         latest = recent[0]["published_at"] if recent else None
         return {
@@ -1013,6 +1044,10 @@ class RealtimeDecisionService:
             "stale": cache_stale,
             "source": "近期可核验信息快照" if scoreable_count else "近期可核验信息缺失/不进入交易分",
             "negative_veto": bool(high_conf_negative),
+            "negative_veto_evidence": high_conf_negative[:3],
+            "negative_veto_rule": "公司事件需满足7日内、高可信且有正文；全球行业事件还必须直接映射当前股票，并由官方原文或多源交叉确认。单一快讯只预警。",
+            "early_warning_count": len(early_warnings),
+            "early_warnings": early_warnings[:5],
             "quality_counts": quality_counts,
             "quality_coverage": round(quality_coverage, 4),
             "quality_status": "可用于自动交易" if auto_buy_eligible else "仅观察/需刷新",

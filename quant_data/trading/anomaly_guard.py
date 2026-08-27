@@ -56,7 +56,7 @@ class AnomalyGuard:
         if f.get("large_order_no_price_up"):
             add("大单异动但价格不涨", 10, "公开盘口/成交额仅提示需人工核验")
         if f.get("negative_news") or f.get("info_negative_veto"):
-            add("信息面突发负面", 28, "重大负面信息触发买入 veto")
+            add("近期重大负面", 28, "近7日高可信且有正文/结构化摘要的重大负面触发买入阻断")
         if self._num(f.get("gap_open_pct")) <= -3:
             add("跳空低开", 14, "跳空低开超过 3%")
         if f.get("sector_cooling") or self._num(f.get("sector_score")) < 35:
@@ -68,7 +68,7 @@ class AnomalyGuard:
 
         score = min(100.0, score)
         severity = 0 if score < 15 else 1 if score < 30 else 2 if score < 55 else 3 if score < 80 else 4
-        if any(x in tags for x in ["信息面突发负面", "行情过期"]):
+        if any(x in tags for x in ["近期重大负面", "行情过期"]):
             action = "block_buy"
         elif severity >= 4:
             action = "force_exit"

@@ -30,6 +30,10 @@ def test_realtime_paper_page_passes_strategy_parameters():
     assert "reset_account:false" in html
     assert "AI 证据辅助" in html
     assert "/api/agent/market-brief" in html
+    assert "multi_role_review" in html
+    assert "五角色证据复核" in html
+    assert "风险委员会" in html
+    assert "&force=" in html
     assert "较上轮" in html
     assert "价差缺失" in html
     assert "条件已自动应用" in html

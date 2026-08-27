@@ -103,6 +103,7 @@ class Quote:
     market: str = "CN"
     asset_type: AssetType = AssetType.STOCK
     source: str = "unknown"
+    industry: str | None = None             # 行业名称；仅保存行情源明确返回的值
 
     def to_dict(self) -> dict:
         data = asdict(self)

@@ -99,3 +99,34 @@ def test_global_stream_pit_sync_keeps_traceable_sources_and_deduplicates(monkeyp
     assert published[0].dataset == "news"
     assert published[0].source_id == "jin10"
     assert published[0].symbols == ["688146"]
+
+
+def test_global_stream_pit_sync_preserves_event_provenance(monkeypatch):
+    published = []
+    monkeypatch.setattr(api.event_bus_v324, "publish", lambda event: published.append(event))
+    api._pit_news_sync_seen.clear()
+    item = api.news_service.event_intelligence.enrich_items(
+        [
+            {
+                "title": "美国正式宣布限制外国生产的并网逆变器",
+                "summary": "官方命令对外国生产的电网逆变器和储能设备实施采购和进口限制。",
+                "published_at": "2026-08-27T12:00:00",
+                "source": "美国白宫总统行动",
+                "source_ref": "https://www.whitehouse.gov/presidential-actions/2026/08/test/",
+                "content_quality_status": "structured_excerpt",
+                "mapped_symbols": ["300274"],
+            }
+        ]
+    )[0]
+
+    result = api._sync_global_news_items_to_pit([item])
+
+    assert result["stored"] == 1
+    assert published[0].source_id == "whitehouse_actions"
+    assert published[0].impact_direction == "negative"
+    assert published[0].payload["confirmation_level"] == "official_confirmed"
+    assert published[0].payload["event_stage"] == "official"
+    assert published[0].payload["trade_gate"] == "candidate_block"
+    assert published[0].payload["decision_scope"] == "industry"
+    assert published[0].payload["decision_use"] == "score_candidate"
+    assert published[0].payload["score_candidate"] is True
