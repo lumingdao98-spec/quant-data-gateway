@@ -17,6 +17,32 @@ BOILERPLATE_TERMS = {
 
 SEARCH_ENGINE_HOSTS = ("baidu.com", "so.com", "sogou.com", "m.sm.cn", "toutiao.com/search")
 
+OFFICIAL_HOST_SUFFIXES = (
+    ".gov", ".gov.cn", ".gov.uk", ".go.jp", ".go.kr", ".europa.eu",
+    "government.ru", "cbr.ru", "federalregister.gov", "whitehouse.gov",
+    "federalreserve.gov", "sec.gov", "bls.gov", "bea.gov", "ecb.europa.eu",
+    "sse.com.cn", "szse.cn", "bse.cn", "cninfo.com.cn", "csrc.gov.cn",
+    "pbc.gov.cn", "stats.gov.cn", "ndrc.gov.cn", "miit.gov.cn", "mofcom.gov.cn",
+    "customs.gov.cn", "imf.org", "worldbank.org", "wto.org", "bis.org",
+    "iea.org", "opec.org", "oecd.org", "unctad.org", "fao.org",
+    "rbi.org.in", "pib.gov.in", "mas.gov.sg", "bankofcanada.ca", "statcan.gc.ca",
+    "rba.gov.au", "abs.gov.au", "bcb.gov.br", "banxico.org.mx", "resbank.co.za",
+)
+OFFICIAL_SOURCE_TERMS = (
+    "政府", "国务院", "交易所", "巨潮", "证监会", "央行", "统计局", "发改委", "工信部", "商务部",
+    "海关", "白宫", "联邦公报", "Federal Reserve", "European Commission", "European Central Bank",
+    "Bank of England", "Bank of Japan", "Reserve Bank of India", "Monetary Authority of Singapore",
+    "Bank of Canada", "Reserve Bank of Australia", "Banco Central do Brasil", "South African Reserve Bank",
+    "International Monetary Fund", "World Bank", "WTO", "OECD", "UNCTAD", "FAO", "OPEC", "IEA",
+)
+ENGLISH_EVENT_TERMS = (
+    "interest rate", "inflation", "employment", "payroll", "gdp", "tariff", "trade", "sanction",
+    "export control", "import", "customs", "semiconductor", "artificial intelligence", "technology",
+    "energy", "oil", "gas", "critical mineral", "battery", "solar", "electric vehicle", "financial market",
+    "final rule", "proposed rule", "regulation", "investigation", "earnings", "revenue", "guidance",
+    "effective date", "meeting", "press release", "economic outlook", "supply chain", "cybersecurity",
+)
+
 # 股票专页/F10页常见栏目词。单独作为标题时不是新闻；
 # 若这些词只出现在一整串菜单/导航里，也应在入库前丢弃。
 SECTION_ONLY_TITLES = {
@@ -155,6 +181,19 @@ def is_search_engine_url(url: str) -> bool:
     return any(h in host or h in u for h in SEARCH_ENGINE_HOSTS)
 
 
+def is_official_source(url: str = "", source: str = "") -> bool:
+    host = urlparse(str(url or "")).netloc.lower().split(":", 1)[0]
+    if any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in OFFICIAL_HOST_SUFFIXES):
+        return True
+    source_text = str(source or "").lower()
+    return any(term.lower() in source_text for term in OFFICIAL_SOURCE_TERMS)
+
+
+def has_english_event_terms(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(term in lowered for term in ENGLISH_EVENT_TERMS)
+
+
 def _norm_title_token(title: str) -> str:
     return re.sub(r"[\s　:：|｜/\\\-—_]+", "", title or "")
 
@@ -234,14 +273,20 @@ def valid_news_item(
         return False, "html_js_fragment"
     if len(raw_summary) > 20 and HTML_JS_RE.search(raw_summary) and (chinese_ratio(raw_summary) < 0.55 or is_menu_or_table_fragment(raw_title, raw_summary)):
         return False, "html_js_fragment"
-    if chinese_count(body) < 6:
+    st = (source_type or "news").lower()
+    official_english = (
+        is_official_source(url, source)
+        and (allow_macro or st in {"macro", "policy", "global", "market", "announcement"})
+        and len(re.findall(r"[A-Za-z]", body)) >= 24
+        and has_english_event_terms(body)
+    )
+    if chinese_count(body) < 6 and not official_english:
         return False, "too_few_chinese_chars"
-    if len(cleaned_summary) >= 40 and chinese_ratio(cleaned_summary) < 0.32:
+    if len(cleaned_summary) >= 40 and chinese_ratio(cleaned_summary) < 0.32 and not official_english:
         return False, "low_chinese_ratio"
 
-    st = (source_type or "news").lower()
     if allow_macro or st in {"macro", "policy", "global", "market"}:
-        if any(term in body for term in RELATION_TERMS):
+        if any(term in body for term in RELATION_TERMS) or official_english:
             return True, "ok_macro"
         return False, "macro_without_finance_terms"
 

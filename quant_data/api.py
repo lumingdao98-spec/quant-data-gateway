@@ -908,7 +908,7 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
     raw_count = _safe_float(news.get("raw_count") or news.get("count") or data.get("raw_count") or len(items))
     errors = list(errors or data.get("errors") or [])
     if not items and raw_count:
-        errors.append("raw news existed but normalized items are empty; check dedup/date/category filters")
+        errors.append("抓取层曾返回候选信息，但经真实性、去重、日期和类别规则清洗后没有可展示条目")
     stats = data.get("stats") or {
         "item_count": len(items),
         "raw_item_count": int(raw_count or len(items)),
@@ -918,14 +918,15 @@ def _normalize_info_payload(data: dict, symbol: str, name: str | None, snapshot_
         "unknown_date_count": len([x for x in items if not (x.get("publish_time") or x.get("published_at_norm") or x.get("published_at") or x.get("date"))]),
     }
     diagnostics = data.get("diagnostics") or {
-        "summary": data.get("summary") or ("items empty; source logs/errors are still returned" if not items else "info snapshot normalized"),
+        "summary": data.get("summary") or ("当前没有通过清洗的有效信息；来源日志和缺失原因仍保留" if not items else "信息快照已按当前规则标准化"),
         "data_quality": data.get("data_quality") or {},
         "cache_status": cache_status,
-        "filter_empty_reason": "items empty after normalization or filtering" if not items else "",
+        "filter_empty_reason": "标准化、真实性校验或去重后没有有效条目" if not items else "",
+        "filter_empty_reason_code": "filtered_empty" if not items else "",
     }
     score_model = data.get("score_model") or data.get("scoring_model") or {
-        "formula": "company/events + source credibility + finance + global/industry mapping - rumor risk",
-        "screener_formula": "technical/fundamental/capital/info/style with risk penalties",
+        "formula": "公司与事件证据 + 来源可信度 + 财务证据 + 全球/行业映射 - 传闻风险",
+        "screener_formula": "技术面 + 基本面 + 资金面 + 信息面 + 风格适配，并扣除风险项",
     }
     quality = data.get("data_quality") or news.get("data_quality") or diagnostics.get("data_quality") or {}
     dated_items = [
@@ -4024,11 +4025,30 @@ def market_sector_intraday(session_date: str = "", limit: int = 120) -> dict:
 
 
 @app.get("/api/market-rules/profiles")
-def market_rule_profiles(symbol: str = "", asof: str = "") -> dict:
+def market_rule_profiles(
+    symbol: str = "",
+    asof: str = "",
+    exchange: str = "",
+    security_type: str = "",
+    settlement_cycle: str = "",
+) -> dict:
     profiles = {key: value.to_dict() for key, value in market_rule_engine_v322.profiles.items()}
     resolved = None
     if symbol:
-        resolved = market_rule_engine_v322.resolve_profile(symbol, asof=asof or None).to_dict()
+        security_master = {
+            key: value
+            for key, value in {
+                "exchange": exchange,
+                "security_type": security_type,
+                "settlement_cycle": settlement_cycle,
+            }.items()
+            if value
+        }
+        resolved = market_rule_engine_v322.resolve_profile(
+            symbol,
+            asof=asof or None,
+            security_master=security_master,
+        ).to_dict()
     return {
         "ok": True,
         "version": market_rule_engine_v322.version,
@@ -4036,7 +4056,7 @@ def market_rule_profiles(symbol: str = "", asof: str = "") -> dict:
         "count": len(profiles),
         "profiles": profiles,
         "resolved": resolved,
-        "note": "交易规则来自 config/market_rules/a_share_rules.yaml，执行撮合不再在 execution.py 里硬编码前缀。",
+        "note": "交易规则来自版本化配置；A股默认 T+1，只有证券主数据明确确认 T+0 ETF、港股或美股时才允许当日卖出。",
     }
 
 
@@ -7841,6 +7861,52 @@ def screener_session_latest_v323() -> dict:
     latest = cache_state_service.latest("screener_snapshot")
     data = _reconcile_screener_snapshot_payload(latest.data) if latest.data else None
     return {"ok": bool(data), "data": data, "cache_status": latest.cache_status, "missing_reason": "" if data else "暂无筛选快照缓存"}
+
+
+@app.get("/api/screener/pools/recommended")
+def screener_recommended_pools_v328(limit: int = 16) -> dict:
+    """Build reusable pools from persisted user state and the latest screen.
+
+    No symbol is injected as a demo fallback. Empty upstream state remains an
+    explicit empty pool so the UI cannot present a fixed list as a live idea.
+    """
+    limit = max(1, min(int(limit or 16), 50))
+    watchlist = watchlist_service.list() or {}
+    latest = cache_state_service.latest("screener_snapshot")
+    snapshot = _reconcile_screener_snapshot_payload(latest.data) if latest.data else {}
+    rows = snapshot.get("results") or snapshot.get("data") or snapshot.get("rows") or []
+    rows = [row for row in rows if isinstance(row, dict) and str(row.get("symbol") or "").strip()]
+    rows.sort(key=lambda row: _safe_float(row.get("total_score") or row.get("final_score") or row.get("score")), reverse=True)
+
+    def symbols_from(items: list[dict]) -> list[str]:
+        output: list[str] = []
+        for row in items:
+            symbol = str(row.get("symbol") or "").strip()
+            if symbol and symbol not in output:
+                output.append(symbol)
+        return output[:limit]
+
+    watch_symbols = watchlist.get("symbols") if isinstance(watchlist, dict) else watchlist
+    watch_symbols = [str(symbol).strip() for symbol in (watch_symbols or []) if str(symbol).strip()][:limit]
+    etf_rows = [row for row in rows if "etf" in str(row.get("asset_type") or row.get("type") or "").lower()]
+    theme_rows = [
+        row for row in rows
+        if (row.get("theme_labels") or row.get("theme_stage") or row.get("industry") or row.get("concepts"))
+        and _safe_float(row.get("total_score") or row.get("final_score") or row.get("score")) >= 50
+    ]
+    pools = [
+        {"key": "watchlist", "name": "当前自选", "symbols": watch_symbols, "source": "服务端自选池"},
+        {"key": "latest_high_score", "name": "最近筛选高分", "symbols": symbols_from(rows), "source": "最近筛选快照"},
+        {"key": "latest_etf", "name": "最近筛选 ETF", "symbols": symbols_from(etf_rows), "source": "最近筛选快照"},
+        {"key": "theme_candidates", "name": "题材/主线候选", "symbols": symbols_from(theme_rows), "source": "最近筛选快照的题材与行业标签"},
+    ]
+    return {
+        "ok": True,
+        "data": pools,
+        "snapshot_id": snapshot.get("snapshot_id") or latest.cache_status.get("key") or "",
+        "updated_at": snapshot.get("created_at") or snapshot.get("updated_at") or latest.cache_status.get("updated_at"),
+        "missing_reasons": [] if rows or watch_symbols else ["暂无自选池和筛选快照，请先搜索股票或执行一次筛选"],
+    }
 
 
 @app.get("/api/screener/session/{session_id}")

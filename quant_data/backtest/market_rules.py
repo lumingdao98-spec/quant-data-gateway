@@ -88,8 +88,19 @@ class MarketRuleEngine:
         board = str(security_master.get("board") or "").upper()
         exchange = str(security_master.get("exchange") or "").upper()
         risk = bool(security_master.get("risk_warning_status") or security_master.get("is_st"))
+        settlement = str(
+            security_master.get("sellable_cycle")
+            or security_master.get("settlement_cycle")
+            or security_master.get("trading_cycle")
+            or ""
+        ).upper().replace(" ", "")
+        same_day_sellable = security_master.get("t_plus_one") is False or settlement in {"T+0", "T0", "0"}
+        if exchange in {"HKEX", "SEHK", "HK"}:
+            return "HK_EQUITY_T0"
+        if exchange in {"NYSE", "NASDAQ", "AMEX", "US"}:
+            return "US_EQUITY_T0"
         if security_type in {"etf", "fund"}:
-            return "ETF_GENERIC"
+            return "ETF_T0" if same_day_sellable else "ETF_GENERIC"
         if board in {"STAR", "SSE_STAR"}:
             return "SSE_STAR"
         if board in {"CHINEXT", "SZSE_CHINEXT"}:

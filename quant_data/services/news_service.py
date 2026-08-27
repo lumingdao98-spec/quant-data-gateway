@@ -187,6 +187,7 @@ class NewsAnalysisService:
         self._round_budget_seconds: float | None = None
         self._current_mode: str = "light"
         self._budget_exhausted_recorded: bool = False
+        self._last_cleaning_funnel: dict[str, Any] = {}
 
     def analyze(self, symbol: str, name: str | None = None, limit: int = 120, force: bool = False, mode: str = "light", budget_seconds: float | None = None, allow_network: bool = True) -> dict[str, Any]:
         symbol = normalize_symbol(symbol)
@@ -275,6 +276,7 @@ class NewsAnalysisService:
             "stored_items_saved": saved_items,
             "sources_used": sorted(list({x.source for x in deduped})),
             "sources_status": self._source_status,
+            "cleaning_funnel": dict(self._last_cleaning_funnel),
             "source_policy": self.message_source_policy(),
             "cache_info": {"hit": False, "store": "sqlite+json", "ttl_seconds": self.cache_ttl_seconds, "reuse_policy": "分析结果默认缓存约30分钟；新闻条目长期写入 data/news_store.sqlite 复用；force=true 将重新抓取并重算标签。"},
             "crawl_mode": mode,
@@ -318,6 +320,7 @@ class NewsAnalysisService:
             "items": [x.to_dict() for x in deduped[:limit]],
             "sources_used": sorted(list({x.source for x in deduped})),
             "sources_status": self._source_status,
+            "cleaning_funnel": dict(self._last_cleaning_funnel),
         }
         self._write_cache(key, result)
         return result
@@ -327,11 +330,12 @@ class NewsAnalysisService:
         return {
             "核心事实源": ["交易所公告", "巨潮资讯", "上市公司公告", "证监会/交易所监管信息"],
             "高频快讯源": ["财联社", "华尔街见闻", "金十/金十期货", "东方财富/新浪/同花顺财经"],
-            "宏观政策源": ["央行", "国家统计局", "发改委", "财政部", "工信部", "地方政府政策"],
+            "宏观政策源": ["中国政府网/央行/统计局/部委", "各主要经济体政府、央行、统计和监管机构", "IMF/世界银行/WTO/BIS/IEA/OPEC 等国际组织"],
             "行业信息源": ["行业协会", "产业政策", "券商/第三方研报摘要", "行业媒体"],
             "舆情源": ["股吧", "雪球", "微博/论坛等社区讨论"],
             "禁用为证据": ["百度/360/搜狗等搜索引擎关键词结果页", "广告页", "登录页", "导航页"],
             "原则": "官方公告和监管披露优先；快讯用于宏观/行业映射；社区只用于舆情热度和传闻风险；搜索引擎页不进入评分。",
+            "国际确认规则": "不限定某几个国家。快讯负责尽早发现，官方原文负责确认；只有明确映射到行业、产品或公司并通过时效与可信度门槛，才参与个股信息分。",
         }
 
     def source_health(self) -> dict[str, Any]:
@@ -659,6 +663,15 @@ class NewsAnalysisService:
             "market_category_counts": self._counts([str(x.get("category") or "") for x in enriched_items]),
             "sources_used": sorted({source for item in enriched_items for source in (item.get("duplicate_sources") or [item.get("source")]) if source}),
             "sources_status": status,
+            "cleaning_funnel": {
+                "raw_candidates": len(raw_rows),
+                "accepted_after_truth_rules": len(items),
+                "deduplicated_events": len(deduped),
+                "final_event_clusters": len(enriched_items),
+                "rejected_count": max(0, len(raw_rows) - len(items)),
+                "duplicate_or_clustered_count": max(0, len(items) - len(enriched_items)),
+                "rule": "先校验真实来源和正文，再按事件去重；快讯用于早期发现，官方或多源证据用于确认。",
+            },
             "event_radar": {
                 "confirmed_count": sum(
                     1 for item in enriched_items
@@ -1421,6 +1434,7 @@ class NewsAnalysisService:
         out: list[NewsItem] = []
         rejects: dict[tuple[str, str], int] = {}
         seen_keys: set[str] = set()
+        duplicate_count = 0
         for item in items:
             ok, reason = self.valid_news_item(
                 item.title, item.summary, source=item.source, url=item.url, symbol=symbol, name=name,
@@ -1431,6 +1445,7 @@ class NewsAnalysisService:
                 # 详情页/缓存合并前先做一次硬去重，防止旧库里同一 event_key 以不同 duplicate_group 重复展示。
                 k = item.event_key or item.duplicate_group or self._dedup_fingerprint(f"{item.title} {item.url}")
                 if k in seen_keys:
+                    duplicate_count += 1
                     continue
                 seen_keys.add(k)
                 out.append(item)
@@ -1439,6 +1454,17 @@ class NewsAnalysisService:
                 rejects[key] = rejects.get(key, 0) + 1
         for (source, reason), count in sorted(rejects.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:40]:
             self._record_source(f"清洗丢弃:{source}", count, reason)
+        rejection_reasons: dict[str, int] = {}
+        for (_source, reason), count in rejects.items():
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + count
+        self._last_cleaning_funnel = {
+            "raw_candidates": len(items),
+            "accepted_after_truth_rules": len(out),
+            "rejected_count": sum(rejects.values()),
+            "duplicate_count": duplicate_count,
+            "rejection_reasons": dict(sorted(rejection_reasons.items(), key=lambda row: (-row[1], row[0]))),
+            "rule": "搜索结果页、页面导航、脚本残片和无关内容先丢弃；同一事件只保留一组可追溯证据。",
+        }
         return out
 
     def _log_progress(self, message: str) -> None:
@@ -3032,6 +3058,7 @@ class NewsAnalysisService:
         data.update(aggregate)
         data["items"] = [item.to_dict() for item in normalized[:min(limit, 80)]]
         data["count"] = len(normalized)
+        data["cleaning_funnel"] = dict(self._last_cleaning_funnel)
         data.setdefault("cache_info", {})
         data["cache_info"].update({"hit": True, "normalized_with_current_rules": True})
         return data

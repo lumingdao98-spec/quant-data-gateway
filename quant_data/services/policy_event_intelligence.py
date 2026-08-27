@@ -314,15 +314,34 @@ class PolicyEventIntelligence:
     OFFICIAL_HOST_SUFFIXES = (
         ".gov",
         ".gov.cn",
+        ".gov.uk",
+        ".go.jp",
+        ".go.kr",
+        ".europa.eu",
         "federalregister.gov",
         "whitehouse.gov",
+        "federalreserve.gov",
+        "sec.gov",
+        "bls.gov",
+        "bea.gov",
+        "government.ru",
+        "cbr.ru",
+        "imf.org",
+        "worldbank.org",
+        "wto.org",
+        "bis.org",
+        "iea.org",
+        "opec.org",
         "sse.com.cn",
         "szse.cn",
         "cninfo.com.cn",
     )
     OFFICIAL_SOURCE_TERMS = (
         "白宫", "联邦公报", "交易所", "巨潮", "国务院", "财政部", "商务部",
-        "发改委", "工信部", "证监会", "央行", "官方公告",
+        "发改委", "工信部", "证监会", "央行", "统计局", "商务部", "海关", "官方公告",
+        "美联储", "欧洲央行", "欧盟委员会", "英格兰银行", "日本银行", "韩国银行", "俄罗斯政府",
+        "Federal Reserve", "European Commission", "European Central Bank", "Bank of England", "Bank of Japan",
+        "International Monetary Fund", "World Bank", "World Trade Organization", "OPEC", "IEA",
     )
     FAST_SOURCE_TERMS = ("金十", "财联社", "华尔街见闻", "7x24", "快讯", "电报")
     TRUSTED_MEDIA_TERMS = ("路透", "Reuters", "新华社", "证券时报", "中国证券报", "上海证券报")

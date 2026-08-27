@@ -21,11 +21,12 @@ def build_backtest_ui() -> str:
 .marker-controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.marker-controls button{padding:5px 8px;border-radius:8px;font-size:12px;background:#253149}.marker-controls button.active{background:#1d4ed8}
 .action-toast{position:fixed;right:22px;bottom:104px;z-index:80;max-width:min(420px,calc(100vw - 44px));padding:11px 14px;border:1px solid #166534;border-radius:10px;background:#10233a;color:#bbf7d0;box-shadow:0 18px 55px rgba(0,0,0,.45);opacity:0;transform:translateY(10px);pointer-events:none;transition:.18s}.action-toast.show{opacity:1;transform:none}.action-toast.bad{border-color:#991b1b;color:#fecaca}
 .work{grid-template-columns:minmax(0,1fr) minmax(300px,380px);min-width:0}
+.work{grid-template-columns:minmax(0,1fr)}.work>.panel:nth-child(2){max-width:none}.work>.panel:nth-child(2) .panel-b{display:grid;grid-template-columns:minmax(260px,.72fr) minmax(0,1.28fr);gap:10px}.work>.panel:nth-child(2) #assumptions{margin-top:0!important;max-height:360px;overflow:auto}@media(max-width:900px){.work>.panel:nth-child(2) .panel-b{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="app">
-  <div class="top"><span class="dot"></span><div class="brand">交易回测系统</div><span class="pill">legacy 快速验证 · 科学组合回测走 V3.20 API</span><div class="grow"></div><button class="btn2" onclick="location.href='/auto-trading'">自动交易总控台</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></div>
+  <div class="top"><span class="dot"></span><div class="brand">V3.28 交易回测系统</div><span class="pill">单票快速验证 · 组合策略共用统一回测内核</span><div class="grow"></div><button class="btn2" onclick="location.href='/auto-trading'">自动交易总控台</button><button class="btn2" onclick="location.href='/screener'">筛选系统</button><button class="btn2" onclick="location.href='/ui'">行情监控</button></div>
   <aside class="side">
     <div class="section">标的代码</div>
     <input id="symbol" value="300750" />
@@ -59,7 +60,7 @@ def build_backtest_ui() -> str:
       <div><div class="section">复权口径</div><select id="adjust"><option value="qfq" selected>前复权</option><option value="none">不复权</option><option value="hfq">后复权</option></select></div>
     </div>
     <div class="v321-box">
-      <div class="row"><b>V3.21 资金/周期</b><span class="muted">仓位、复利、止损止盈与评分一起进回测</span></div>
+      <div class="row"><b>资金与交易周期</b><span class="muted">仓位、复利、止损止盈与评分一起进回测</span></div>
       <div class="mini">
         <div><div class="section">仓位模式</div><select id="sizingMode"><option value="score_weighted" selected>评分加权</option><option value="fixed_percent">固定仓位</option><option value="equal_weight">等权</option><option value="volatility_target">波动率目标</option><option value="atr_risk">ATR风险仓位</option><option value="fractional_kelly">分数凯利</option><option value="pyramid">金字塔加仓</option><option value="dca">定投</option><option value="core_satellite">核心卫星</option></select></div>
         <div><div class="section">交易周期</div><select id="horizonMode"><option value="short_term">短线</option><option value="swing" selected>中线/波段</option><option value="position">长线</option><option value="dca">定投</option><option value="hybrid">组合</option></select></div>

@@ -9,9 +9,12 @@ def test_ui_exposes_auto_trading_workbench_entry():
 
     assert "/auto-trading" in html
     assert "auto-trading" in html
-    assert "主线板块" in html
-    assert "/api/market/sectors/mainline" in html
-    assert "config/one-click" in client.get("/auto-trading").text
+    assert "主线板块" not in html
+    workbench_html = client.get("/auto-trading").text
+    assert "主线板块" in workbench_html
+    assert "/api/market/sectors/mainline" not in html
+    assert "/api/market/sectors/mainline" in workbench_html
+    assert "config/one-click" in workbench_html
 
 
 def test_ui_embedded_mode_for_auto_trading_iframe():

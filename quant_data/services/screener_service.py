@@ -832,7 +832,7 @@ class ScreenerService:
         capped_strategy_delta = max(-8.0, min(6.0, raw_strategy_delta))
         if abs(raw_strategy_delta - capped_strategy_delta) > 0.001:
             strategy_risks.append(
-                f"strategy adjustment capped from {raw_strategy_delta:+.1f} to {capped_strategy_delta:+.1f}"
+                f"策略净调分由 {raw_strategy_delta:+.1f} 限制为 {capped_strategy_delta:+.1f}，避免多选策略堆叠抬分"
             )
         market_sentiment = self._market_sentiment_adjustment(market_regime, q)
         market_sentiment_score = (

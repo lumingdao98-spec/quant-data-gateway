@@ -9,6 +9,14 @@ def test_market_rule_engine_resolves_effective_profiles_from_config():
     assert engine.resolve_profile("300750").profile_id == "SZSE_CHINEXT"
     assert engine.resolve_profile("600438").profile_id == "SSE_MAIN"
     assert engine.resolve_profile("510300").profile_id == "ETF_GENERIC"
+    assert engine.resolve_profile(
+        "513100",
+        security_master={"security_type": "etf", "settlement_cycle": "T+0"},
+    ).profile_id == "ETF_T0"
+    assert engine.resolve_profile(
+        "00700",
+        security_master={"security_type": "stock", "exchange": "HKEX"},
+    ).profile_id == "HK_EQUITY_T0"
     assert engine.resolve_profile("688599").price_limit_pct >= 0.19
 
 

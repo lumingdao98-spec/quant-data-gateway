@@ -113,3 +113,45 @@ profiles:
     price_tick: 0.001
     order_types_allowed: "next_open,next_close,vwap,limit"
     same_day_roundtrip_rule: "instrument_master"
+
+  ETF_T0:
+    effective_from: "2026-01-01"
+    exchange: "AUTO"
+    board: "ETF_T0"
+    security_type: "etf"
+    t_plus_one: false
+    lot_size_buy: 100
+    odd_lot_sell_once: true
+    price_limit_pct: 0.10
+    ipo_first_n_days_no_limit: 0
+    price_tick: 0.001
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "allowed_when_instrument_master_confirms"
+
+  HK_EQUITY_T0:
+    effective_from: "2026-01-01"
+    exchange: "HKEX"
+    board: "MAIN"
+    security_type: "stock"
+    t_plus_one: false
+    lot_size_buy: 1
+    odd_lot_sell_once: true
+    price_limit_pct: 1.00
+    ipo_first_n_days_no_limit: 0
+    price_tick: 0.001
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "allowed"
+
+  US_EQUITY_T0:
+    effective_from: "2026-01-01"
+    exchange: "US"
+    board: "MAIN"
+    security_type: "stock"
+    t_plus_one: false
+    lot_size_buy: 1
+    odd_lot_sell_once: true
+    price_limit_pct: 1.00
+    ipo_first_n_days_no_limit: 0
+    price_tick: 0.01
+    order_types_allowed: "next_open,next_close,vwap,limit"
+    same_day_roundtrip_rule: "allowed"

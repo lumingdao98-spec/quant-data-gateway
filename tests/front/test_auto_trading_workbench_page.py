@@ -151,7 +151,9 @@ def test_auto_trading_workbench_page_visible():
     assert "暂无直接映射" in html
     assert "首页只保留快速配置" in html
     assert "展开完整配置与逐项参数" in html
-    assert ".hero>.panel:nth-child(2)>.panel-b{max-height:248px" in html
+    assert ".home-internal-state{display:none!important}" in html
+    assert "sectorFlowTrend" in html
+    assert "sectorFlowShare" in html
     assert ".grid-main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))" in html
     assert ".grid-main>.stack{display:grid;gap:14px;align-content:start" in html
     assert ".grid-main>.stack{display:contents}" in html

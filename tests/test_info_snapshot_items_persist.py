@@ -32,7 +32,8 @@ def test_info_snapshot_persists_items_and_items_api_falls_back(monkeypatch, tmp_
 def test_empty_items_with_raw_count_reports_reason():
     payload = api._normalize_info_payload({"news": {"count": 3, "items": []}}, "600438", "TW", "sid", {"status": "refreshed"}, used_snapshot=False, mode="light")
     assert payload["errors"]
-    assert "filtered" in payload["diagnostics"]["filter_empty_reason"] or "empty" in payload["diagnostics"]["filter_empty_reason"]
+    assert payload["diagnostics"]["filter_empty_reason_code"] == "filtered_empty"
+    assert "有效条目" in payload["diagnostics"]["filter_empty_reason"]
 
 
 def test_normalized_info_exposes_current_scoring_scope():
