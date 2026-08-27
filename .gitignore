@@ -15,6 +15,7 @@ data/*.sqlite-*
 data/news_cache.json
 data/backtest_runs/*.json
 data/backtest_runs/*.csv
+data/migration_backups/
 
 *.log
 server_*.log

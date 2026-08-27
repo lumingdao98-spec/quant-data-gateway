@@ -2926,7 +2926,9 @@ class NewsAnalysisService:
         text = re.sub(r"\s+", " ", text).strip()
         if _ftfy_fix_text is not None:
             try:
-                text = _ftfy_fix_text(text)
+                # Repair mojibake without converting Chinese full-width punctuation.
+                # Punctuation is part of titles and event fingerprints in the news pipeline.
+                text = _ftfy_fix_text(text, fix_character_width=False)
             except Exception:
                 pass
         if self._looks_garbled(text):

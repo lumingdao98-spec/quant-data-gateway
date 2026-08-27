@@ -19,9 +19,11 @@
 
 ## 启动
 
+首次使用双击 `install.bat`，之后直接双击 `run_api_8001.bat`。启动脚本会依次寻找项目 `.venv`、Windows Python 3.11、`D:\software\python\python.exe`、其他 `py` 启动器和系统 Python，因此不要求全局存在 `python` 命令。QMT 用户推荐 Python 3.11。
+
 ```powershell
-pip install -r requirements.txt
-python -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
+py -3 -m pip install -r requirements_full.txt
+py -3 -m uvicorn quant_data.api:app --host 127.0.0.1 --port 8001
 ```
 
 浏览器打开 `http://127.0.0.1:8001/auto-trading`。主页面通过右侧 iframe 打开并释放各模块，原页面和 API 仍可独立使用。
@@ -129,8 +131,8 @@ POST /api/notifications/mobile/test
 ## 测试
 
 ```powershell
-python -m compileall -q quant_data
-python -m pytest -q
+python_runtime.bat -m compileall -q quant_data
+python_runtime.bat -m pytest -q
 ```
 
 测试覆盖数据真实性、新鲜度、评分溯源、自适应策略、仓位、风控、订单生命周期、模拟会话恢复、实盘默认禁用、确认队列、QMT/PTrade import guard、同花顺能力边界、移动提醒、交易记录和主要页面。
@@ -138,6 +140,7 @@ python -m pytest -q
 ## 文档
 
 - 当前配置、安全和评分说明：`docs/V328_BROKER_AND_ADAPTIVE_SCORING.md`
+- 单包迁移、历史数据合并和完整性校验：`docs/V328_SINGLE_PACKAGE_MIGRATION.md`
 - WordSource 实现追溯：`docs/WORD_SOURCE_TRACE.md`
 - 回测 WordSource 追溯：`docs/BACKTEST_WORDSOURCE_TRACE.md`
 - 历史版本和发布笔记：`docs/archive/README.md`
